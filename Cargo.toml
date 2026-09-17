@@ -19,6 +19,10 @@ calib = { path = "crates/calib" }
 server = { path = "crates/server" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+thiserror = "2"
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-decode", "safe-encode"] }
+ruzstd = "0.8"
+crc32fast = "1"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

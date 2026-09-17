@@ -21,15 +21,15 @@ pub fn ls(
     let stdout = io::stdout();
     let mut out = stdout.lock();
     for entry in archive.entries() {
-        if let Some(f) = filter {
-            if !entry.path.contains(f) {
-                continue;
-            }
+        if let Some(f) = filter
+            && !entry.path.contains(f)
+        {
+            continue;
         }
-        if let Some(e) = ext {
-            if entry.extension() != e {
-                continue;
-            }
+        if let Some(e) = ext
+            && entry.extension() != e
+        {
+            continue;
         }
         if long {
             writeln!(
@@ -57,11 +57,11 @@ pub fn cat(vpk: &str, game: Option<&Path>, entry_path: &str, out: &Path) -> anyh
     let data = archive
         .read_verified(entry)
         .with_context(|| format!("failed to read {entry_path:?}"))?;
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
+    if let Some(parent) = out.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     std::fs::write(out, &data).with_context(|| format!("failed to write {}", out.display()))?;
     writeln!(

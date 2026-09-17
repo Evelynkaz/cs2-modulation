@@ -188,10 +188,12 @@ struct Parser<'a> {
 }
 
 /// Maximum array/object nesting depth. See `RECURSION_LIMIT` in `binary.rs` for why this isn't a
-/// larger round number: a 1 MiB thread stack in a debug build overflows well before very deep
-/// nesting, so the limit is set (with a safety margin) below the empirically observed ceiling
-/// rather than at an arbitrary "big enough" value. See
-/// `tests::depth_at_limit_does_not_overflow_a_1mib_stack`.
+/// larger round number: debug builds use several KiB of stack per nesting level, so the limit is
+/// set (with a safety margin) below the empirically observed ceiling rather than at an arbitrary
+/// "big enough" value. See `tests::depth_at_limit_does_not_overflow_a_4mib_stack`.
+///
+/// Callers must parse on a thread with at least 4 MiB of stack (the CLI uses 16 MiB; the
+/// server configures its worker threads likewise).
 const TEXT_RECURSION_LIMIT: u32 = 128;
 
 impl<'a> Parser<'a> {
@@ -508,11 +510,13 @@ impl<'a> Parser<'a> {
                 .ok_or_else(|| self.err("invalid hex digit in blob"))?;
             nibbles.push(digit as u8);
         }
-        if nibbles.len() % 2 != 0 {
+        if !nibbles.len().is_multiple_of(2) {
             return Err(self.err("blob hex string has odd length"));
         }
         let bytes = nibbles
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| (pair[0] << 4) | pair[1])
             .collect();
         Ok(Value::Blob(bytes))
@@ -651,11 +655,11 @@ mod tests {
     }
 
     #[test]
-    fn depth_at_limit_does_not_overflow_a_1mib_stack() {
+    fn depth_at_limit_does_not_overflow_a_4mib_stack() {
         let n = TEXT_RECURSION_LIMIT as usize;
         let src = format!("{HEADER}{}{}", "[".repeat(n), "]".repeat(n));
         let handle = std::thread::Builder::new()
-            .stack_size(1 << 20)
+            .stack_size(4 << 20)
             .spawn(move || parse_text(&src).map(|_| ()))
             .expect("spawn probe thread");
         let result = handle
@@ -672,7 +676,7 @@ mod tests {
         let n = TEXT_RECURSION_LIMIT as usize + 50;
         let src = format!("{HEADER}{}{}", "[".repeat(n), "]".repeat(n));
         let handle = std::thread::Builder::new()
-            .stack_size(1 << 20)
+            .stack_size(4 << 20)
             .spawn(move || parse_text(&src).err().map(|e| e.to_string()))
             .expect("spawn probe thread");
         let err = handle
@@ -687,9 +691,16 @@ mod tests {
     #[test]
     fn very_deep_input_errors_without_overflow() {
         // A much larger nesting count than the limit (matching the review's original 100k-`[`
-        // reproducer) must still bail out quickly with an error, not overflow the main stack.
+        // reproducer) must still bail out quickly with an error, not overflow the stack.
         let src = format!("{HEADER}{}", "[".repeat(100_000));
-        assert!(parse_text(&src).is_err());
+        let handle = std::thread::Builder::new()
+            .stack_size(4 << 20)
+            .spawn(move || parse_text(&src).is_err())
+            .expect("spawn probe thread");
+        let result = handle
+            .join()
+            .expect("parser thread must not overflow the stack");
+        assert!(result);
     }
 
     const HEADER: &str = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n";

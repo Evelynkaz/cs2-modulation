@@ -259,7 +259,6 @@ pub fn block_compress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError>
             if offset > position {
                 return Err(DecompressError::BlockCompressOffsetUnderflow { position, offset });
             }
-            let mut src = position - offset;
             for _ in 0..len {
                 if position >= size {
                     return Err(DecompressError::BlockCompressOverrun { position, size });
@@ -267,9 +266,8 @@ pub fn block_compress(input: &[u8]) -> Result<(Vec<u8>, usize), DecompressError>
                 // Overlapping copies are intentional (run-length style back-references); src
                 // trails position by `offset` even as both advance, matching VRF's byte-by-byte
                 // copy loop (Compression/BlockCompress.cs).
-                out[position] = out[src];
+                out[position] = out[position - offset];
                 position += 1;
-                src += 1;
             }
         } else {
             if pos_in >= input.len() {

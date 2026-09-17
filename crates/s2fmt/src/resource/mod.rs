@@ -320,25 +320,25 @@ impl Resource {
         let filtered_block = usize::try_from(index)
             .ok()
             .and_then(|i| self.block_by_filtered_index(i));
-        if let Some(b) = filtered_block {
-            if b.fourcc == FourCC::PHYS {
-                return Ok(Some(EmbeddedPhys {
-                    block: b,
-                    index_scheme: IndexScheme::Filtered,
-                }));
-            }
+        if let Some(b) = filtered_block
+            && b.fourcc == FourCC::PHYS
+        {
+            return Ok(Some(EmbeddedPhys {
+                block: b,
+                index_scheme: IndexScheme::Filtered,
+            }));
         }
 
         let raw_block = usize::try_from(index)
             .ok()
             .and_then(|i| self.block_by_raw_index(i));
-        if let Some(b) = raw_block {
-            if b.fourcc == FourCC::PHYS {
-                return Ok(Some(EmbeddedPhys {
-                    block: b,
-                    index_scheme: IndexScheme::Raw,
-                }));
-            }
+        if let Some(b) = raw_block
+            && b.fourcc == FourCC::PHYS
+        {
+            return Ok(Some(EmbeddedPhys {
+                block: b,
+                index_scheme: IndexScheme::Raw,
+            }));
         }
 
         Err(ResourceError::EmbeddedPhysIndex {

@@ -167,7 +167,7 @@ fn enum_flag(flag: Flag) -> u8 {
 }
 
 fn align_to(buf: &mut Vec<u8>, n: usize) {
-    while buf.len() % n != 0 {
+    while !buf.len().is_multiple_of(n) {
         buf.push(0);
     }
 }

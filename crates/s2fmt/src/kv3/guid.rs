@@ -50,12 +50,14 @@ impl Guid {
 /// non-hexdigit byte explicitly, since `u8::from_str_radix` would otherwise also accept a
 /// leading sign (e.g. `"+a"` parses as `10` under `from_str_radix(_, 16)`).
 fn hex_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let bytes = s.as_bytes();
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let hi = (pair[0] as char).to_digit(16)?;
             let lo = (pair[1] as char).to_digit(16)?;

@@ -108,7 +108,17 @@ struct ResCliArgs {
 }
 
 fn main() -> std::process::ExitCode {
-    match run() {
+    // KV3 parsing recurses per nesting level; run on a thread with a stack large enough for
+    // the deepest documents we accept (see `RECURSION_LIMIT` in `s2fmt::kv3::binary`).
+    let handle = std::thread::Builder::new()
+        .name("cs2mod-main".into())
+        .stack_size(16 << 20)
+        .spawn(run)
+        .expect("spawn main thread");
+    match handle
+        .join()
+        .unwrap_or_else(|p| std::panic::resume_unwind(p))
+    {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) if is_broken_pipe(&e) => {
             // The reader end of a pipe (e.g. `| head`) closed early; that's

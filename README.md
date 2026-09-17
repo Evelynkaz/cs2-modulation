@@ -43,7 +43,8 @@ world_physics.vmdl_c --kv3`). Подробности и текущее сост�
 
 ## Сборка
 
-Требуется Rust stable (`rust-version` 1.85, `edition = "2024"`).
+Требуется Rust, закреплённый в `rust-toolchain.toml` (1.98.1, `edition = "2024"`);
+`rustup` подхватит его автоматически.
 
 ```
 cargo build --workspace

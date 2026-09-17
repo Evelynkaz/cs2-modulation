@@ -14,15 +14,17 @@ const LEGACY_TRAILER: u32 = 0xFFFF_FFFF;
 /// Maximum nesting depth for arrays/objects. Lowered from an initially-planned 512: even after
 /// splitting each composite-value case into its own `#[inline(never)]` function (so a giant
 /// shared match arm doesn't force every level of recursion to reserve stack for the union of all
-/// arms' locals), unoptimized (debug) builds still use roughly 5-6 KiB of stack per nesting
-/// level on this codegen target, which overflows a 1 MiB thread stack well before depth 512
-/// (empirically: ~176 nested arrays is the last depth observed to succeed, 192 already
-/// overflows). 128 leaves a safety margin under that empirically-observed ceiling. See
-/// `tests::depth_128_nested_arrays_does_not_overflow_a_1mib_stack`.
+/// arms' locals), unoptimized builds still use several KiB of stack per nesting level (Windows
+/// opt-level 0: ~5-6 KiB, ~176 levels fit in 1 MiB; Linux debug overflowed 1 MiB below 128). 128
+/// plus the 4 MiB thread requirement below leaves a wide margin. See
+/// `tests::depth_at_limit_does_not_overflow_a_4mib_stack`.
 ///
 /// 128 is also generous relative to real documents: the deepest nesting seen in
 /// `de_mirage.vpk` (2,806 KV3 blocks) is 9, and the deepest across every KV3 block in
 /// `pak01_dir.vpk` (242,048 blocks) is 32 (a Panorama layout-compiled `LaCo` block).
+///
+/// Callers must parse on a thread with at least 4 MiB of stack (the CLI uses 16 MiB; the
+/// server configures its worker threads likewise).
 const RECURSION_LIMIT: u32 = 128;
 
 /// True if `bytes` starts with a recognised binary KV3 magic (v0 legacy or v1..v5).
@@ -289,8 +291,8 @@ fn legacy_read_value_inner(
 /// Split out of `legacy_read_value_inner` (rather than inlined as a match arm) so that the
 /// recursive call chain through composite values uses a smaller stack frame per level: keeping
 /// every arm's locals in one shared function forces the compiler to reserve stack for the union
-/// of all of them at every level of recursion, which overflows a 1 MiB thread stack in debug
-/// builds well before `RECURSION_LIMIT` is reached.
+/// of all of them at every level of recursion, which wastes stack per level in debug builds (see
+/// `RECURSION_LIMIT`).
 #[inline(never)]
 fn legacy_read_array(
     r: &mut Reader,
@@ -1437,13 +1439,13 @@ fn parse_v1_5(version: u8, r: &mut Reader) -> Result<Document, Kv3Error> {
         // table (no blocks) but the frame decoded a non-empty tail past buffer1 anyway, that tail
         // doesn't actually correspond to anything the rest of the format describes, so surface it
         // instead of silently dropping it.
-        if let Some(tail) = zstd_v_lt5_blob_tail.take() {
-            if !tail.is_empty() {
-                return Err(Kv3Error::TrailingData {
-                    lane: "zstd blob tail",
-                    remaining: tail.len(),
-                });
-            }
+        if let Some(tail) = zstd_v_lt5_blob_tail.take()
+            && !tail.is_empty()
+        {
+            return Err(Kv3Error::TrailingData {
+                lane: "zstd blob tail",
+                remaining: tail.len(),
+            });
         }
         blobs = Vec::new();
     }
@@ -1554,8 +1556,8 @@ fn read_value(ctx: &mut Context, node_type: NodeType) -> Result<Value, Kv3Error>
 /// Split out of `read_value` (rather than inlined as a match arm) so that the recursive call
 /// chain through composite values uses a smaller stack frame per level: keeping every arm's
 /// locals in one shared function forces the compiler to reserve stack for the union of all of
-/// them at every level of recursion, which overflows a 1 MiB thread stack in debug builds well
-/// before `RECURSION_LIMIT` is reached.
+/// them at every level of recursion, which wastes stack per level in debug builds (see
+/// `RECURSION_LIMIT`).
 #[inline(never)]
 fn read_array(ctx: &mut Context) -> Result<Value, Kv3Error> {
     enter_depth(ctx)?;
@@ -1956,11 +1958,11 @@ mod tests {
     }
 
     #[test]
-    fn depth_at_limit_does_not_overflow_a_1mib_stack() {
+    fn depth_at_limit_does_not_overflow_a_4mib_stack() {
         let tree = deep_nest(RECURSION_LIMIT as usize);
         let bytes = build(&tree, 5, Compression::None, FORMAT_GENERIC);
         let handle = std::thread::Builder::new()
-            .stack_size(1 << 20)
+            .stack_size(4 << 20)
             .spawn(move || parse_binary(&bytes).map(|_| ()))
             .expect("spawn probe thread");
         let result = handle
@@ -1977,7 +1979,7 @@ mod tests {
         let tree = deep_nest(RECURSION_LIMIT as usize + 50);
         let bytes = build(&tree, 5, Compression::None, FORMAT_GENERIC);
         let handle = std::thread::Builder::new()
-            .stack_size(1 << 20)
+            .stack_size(4 << 20)
             .spawn(move || parse_binary(&bytes).err().map(|e| e.to_string()))
             .expect("spawn probe thread");
         let err = handle
@@ -2007,31 +2009,41 @@ mod tests {
 
     #[test]
     fn round_trip_edge_cases() {
-        let cases: Vec<(&str, TestNode)> = vec![
-            ("empty_object", TestNode::Object(vec![])),
-            ("root_scalar", TestNode::Int64(-1)),
-            ("deep_nesting", deep_nest(100)),
-            ("big_array", big_array(20_000)),
-            (
-                "multi_blob_chain",
-                TestNode::Object(vec![
-                    ("a".to_string(), TestNode::Blob(vec![1u8; 20_000])),
-                    ("b".to_string(), TestNode::Blob(vec![2u8; 20_000])),
-                    ("c".to_string(), TestNode::Blob(vec![3u8; 5_000])),
-                ]),
-            ),
-        ];
-        for (name, node) in &cases {
-            let expected = expected_value(node);
-            for version in 1..=5u8 {
-                for compression in [Compression::None, Compression::Lz4, Compression::Zstd] {
-                    let bytes = build(node, version, compression, FORMAT_GENERIC);
-                    let doc = parse_binary(&bytes)
-                        .unwrap_or_else(|e| panic!("{name} v{version} {compression:?}: {e}"));
-                    assert_eq!(doc.root, expected, "{name} v{version} {compression:?}");
+        let handle = std::thread::Builder::new()
+            .stack_size(4 << 20)
+            .spawn(move || {
+                let cases: Vec<(&str, TestNode)> = vec![
+                    ("empty_object", TestNode::Object(vec![])),
+                    ("root_scalar", TestNode::Int64(-1)),
+                    ("deep_nesting", deep_nest(100)),
+                    ("big_array", big_array(20_000)),
+                    (
+                        "multi_blob_chain",
+                        TestNode::Object(vec![
+                            ("a".to_string(), TestNode::Blob(vec![1u8; 20_000])),
+                            ("b".to_string(), TestNode::Blob(vec![2u8; 20_000])),
+                            ("c".to_string(), TestNode::Blob(vec![3u8; 5_000])),
+                        ]),
+                    ),
+                ];
+                for (name, node) in &cases {
+                    let expected = expected_value(node);
+                    for version in 1..=5u8 {
+                        for compression in [Compression::None, Compression::Lz4, Compression::Zstd]
+                        {
+                            let bytes = build(node, version, compression, FORMAT_GENERIC);
+                            let doc = parse_binary(&bytes).unwrap_or_else(|e| {
+                                panic!("{name} v{version} {compression:?}: {e}")
+                            });
+                            assert_eq!(doc.root, expected, "{name} v{version} {compression:?}");
+                        }
+                    }
                 }
-            }
-        }
+            })
+            .expect("spawn probe thread");
+        handle
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
     }
 
     #[test]

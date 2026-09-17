@@ -1,0 +1,24 @@
+[package]
+name = "cs2mod-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cs2mod"
+path = "src/main.rs"
+
+[dependencies]
+s2fmt = { workspace = true }
+geom = { workspace = true }
+extract = { workspace = true }
+sim = { workspace = true }
+solver = { workspace = true }
+calib = { workspace = true }
+server = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }

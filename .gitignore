@@ -1,0 +1,15 @@
+# Game files must never be committed.
+/target/
+/data/
+/cache/
+*.vpk
+*.nav
+*.*_c
+*.s2geo
+*.cgeo
+.env
+.idea/
+.vscode/
+*.log
+
+!crates/*/tests/fixtures/**

@@ -8,8 +8,12 @@
 
 ## Статус
 
-Этап 0 — скелет workspace, документы, CI. Подробности и текущее состояние —
-в [`PROGRESS.md`](PROGRESS.md).
+Этапы 0–1 завершены: скелет workspace, документы, CI, а также VPK,
+контейнер ресурсов и KV3 (`s2fmt`). Для разработки доступны команды
+`cs2mod vpk ls|cat|verify` (например, `cs2mod vpk ls pak01_dir.vpk`) и
+`cs2mod res [--vpk] [--block] [--kv3]` (например, `cs2mod res
+world_physics.vmdl_c --kv3`). Подробности и текущее состояние — в
+[`PROGRESS.md`](PROGRESS.md).
 
 ## Жёсткие правила
 

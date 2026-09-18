@@ -1,0 +1,5615 @@
+{
+  "meta": {
+    "attribute_filter": "Default,default",
+    "voxel_size": 16,
+    "presets": [
+      "UncalibratedDefault",
+      "Coverage",
+      "FullReach",
+      "Conservative"
+    ],
+    "hash": "FNV-1a 64-bit over each cell index\u0027s 4 little-endian bytes, in SmokeFloodFill.Fill\u0027s own cell order"
+  },
+  "entries": [
+    {
+      "rest": [
+        82.48382,
+        -2235.5498,
+        -37.99978
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1262,
+      "cell_hash": "16569546943339950403",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        82.48382,
+        -2235.5498,
+        -37.99978
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "5209861686686308475",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        82.48382,
+        -2235.5498,
+        -37.99978
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "3786757022632501283",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 30,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        82.48382,
+        -2235.5498,
+        -37.99978
+      ],
+      "preset": "Conservative",
+      "cell_count": 374,
+      "cell_hash": "10819088158319794641",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2344.9292,
+        -136.7468,
+        -162.59941
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1810,
+      "cell_hash": "518364727223235357",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2344.9292,
+        -136.7468,
+        -162.59941
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "10284701331159323069",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2344.9292,
+        -136.7468,
+        -162.59941
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "15505951112558642679",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2344.9292,
+        -136.7468,
+        -162.59941
+      ],
+      "preset": "Conservative",
+      "cell_count": 518,
+      "cell_hash": "9209341649200022579",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1232.829,
+        -2350.27,
+        -197.99971
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2221,
+      "cell_hash": "15983390493252949864",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1232.829,
+        -2350.27,
+        -197.99971
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "1475256664743840855",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1232.829,
+        -2350.27,
+        -197.99971
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "15984482805658868343",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1232.829,
+        -2350.27,
+        -197.99971
+      ],
+      "preset": "Conservative",
+      "cell_count": 532,
+      "cell_hash": "6722877555529319897",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1920.853,
+        758.8933,
+        -45.999813
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1741,
+      "cell_hash": "18366356098017249955",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1920.853,
+        758.8933,
+        -45.999813
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "15301448253745589905",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1920.853,
+        758.8933,
+        -45.999813
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "6324101057906170627",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1920.853,
+        758.8933,
+        -45.999813
+      ],
+      "preset": "Conservative",
+      "cell_count": 417,
+      "cell_hash": "277761373952535795",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        286.49814,
+        -2264.4595,
+        -37.999733
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1535,
+      "cell_hash": "12378509527234161074",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        286.49814,
+        -2264.4595,
+        -37.999733
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "14083485156615347947",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        286.49814,
+        -2264.4595,
+        -37.999733
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "8962316057976790093",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        286.49814,
+        -2264.4595,
+        -37.999733
+      ],
+      "preset": "Conservative",
+      "cell_count": 415,
+      "cell_hash": "11237750232369370977",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        504.4591,
+        787.9122,
+        -133.99979
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1616,
+      "cell_hash": "6771507553534093748",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        504.4591,
+        787.9122,
+        -133.99979
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "17974810378400876936",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        504.4591,
+        787.9122,
+        -133.99979
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "5268370776083876002",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        504.4591,
+        787.9122,
+        -133.99979
+      ],
+      "preset": "Conservative",
+      "cell_count": 446,
+      "cell_hash": "1690557055959993734",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -380.32996,
+        -1935.5339,
+        -177.99985
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2483,
+      "cell_hash": "2678561006753395072",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        -380.32996,
+        -1935.5339,
+        -177.99985
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "6226521020396075523",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        -380.32996,
+        -1935.5339,
+        -177.99985
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "7283601610118484645",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        -380.32996,
+        -1935.5339,
+        -177.99985
+      ],
+      "preset": "Conservative",
+      "cell_count": 571,
+      "cell_hash": "11416877942544812998",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        131.35565,
+        -2072.6282,
+        -37.999763
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1882,
+      "cell_hash": "11220368590710933347",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        131.35565,
+        -2072.6282,
+        -37.999763
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "10530664307020288313",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        131.35565,
+        -2072.6282,
+        -37.999763
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9942528398152150498",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        131.35565,
+        -2072.6282,
+        -37.999763
+      ],
+      "preset": "Conservative",
+      "cell_count": 460,
+      "cell_hash": "175847861455429961",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 7,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -68.24659,
+        -1643.4839,
+        -165.99976
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2160,
+      "cell_hash": "838942681338809689",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -68.24659,
+        -1643.4839,
+        -165.99976
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "17646999990068296276",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -68.24659,
+        -1643.4839,
+        -165.99976
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "3509987847757883520",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -68.24659,
+        -1643.4839,
+        -165.99976
+      ],
+      "preset": "Conservative",
+      "cell_count": 534,
+      "cell_hash": "16276268540246151968",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1273.9166,
+        -1031.538,
+        -165.99977
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1842,
+      "cell_hash": "17724233069065018318",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1273.9166,
+        -1031.538,
+        -165.99977
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "1778392518189920164",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1273.9166,
+        -1031.538,
+        -165.99977
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "14811412532187954353",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1273.9166,
+        -1031.538,
+        -165.99977
+      ],
+      "preset": "Conservative",
+      "cell_count": 474,
+      "cell_hash": "9240120372790549984",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1579.9434,
+        -957.37756,
+        -198.63469
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2262,
+      "cell_hash": "2399532168738592926",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1579.9434,
+        -957.37756,
+        -198.63469
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "5472285593037124429",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1579.9434,
+        -957.37756,
+        -198.63469
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "8540434009878014202",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1579.9434,
+        -957.37756,
+        -198.63469
+      ],
+      "preset": "Conservative",
+      "cell_count": 548,
+      "cell_hash": "355618531233199270",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        414.77036,
+        -2331.5315,
+        -37.999817
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1893,
+      "cell_hash": "2329071518876808959",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        414.77036,
+        -2331.5315,
+        -37.999817
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "600143662581486666",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        414.77036,
+        -2331.5315,
+        -37.999817
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "16454261977341155067",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        414.77036,
+        -2331.5315,
+        -37.999817
+      ],
+      "preset": "Conservative",
+      "cell_count": 434,
+      "cell_hash": "10327305757206455234",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -497.84555,
+        -608.1128,
+        -274.10123
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2034,
+      "cell_hash": "4793811390862797177",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -497.84555,
+        -608.1128,
+        -274.10123
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4700676144090288228",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -497.84555,
+        -608.1128,
+        -274.10123
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "10929497014739620832",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -497.84555,
+        -608.1128,
+        -274.10123
+      ],
+      "preset": "Conservative",
+      "cell_count": 553,
+      "cell_hash": "7486194571864310003",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -961.318,
+        -165.6483,
+        -365.99966
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1089,
+      "cell_hash": "5643076455993456507",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -961.318,
+        -165.6483,
+        -365.99966
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "946399606077762380",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -961.318,
+        -165.6483,
+        -365.99966
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9378108185612315423",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 30,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -961.318,
+        -165.6483,
+        -365.99966
+      ],
+      "preset": "Conservative",
+      "cell_count": 401,
+      "cell_hash": "699104868226586752",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -500.5877,
+        -736.6549,
+        -261.4159
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1981,
+      "cell_hash": "1683410685198895261",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -500.5877,
+        -736.6549,
+        -261.4159
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4957386488196832343",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -500.5877,
+        -736.6549,
+        -261.4159
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "11578258900500934240",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -500.5877,
+        -736.6549,
+        -261.4159
+      ],
+      "preset": "Conservative",
+      "cell_count": 520,
+      "cell_hash": "1563248680250541627",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        627.7152,
+        -2214.0603,
+        -37.99972
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2020,
+      "cell_hash": "2041043811899693981",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        627.7152,
+        -2214.0603,
+        -37.99972
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "13769905376798776458",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        627.7152,
+        -2214.0603,
+        -37.99972
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "2749613121803898398",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        627.7152,
+        -2214.0603,
+        -37.99972
+      ],
+      "preset": "Conservative",
+      "cell_count": 447,
+      "cell_hash": "13427553034325331370",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        522.90436,
+        -2109.8362,
+        -37.999813
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1928,
+      "cell_hash": "13446264188621226548",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        522.90436,
+        -2109.8362,
+        -37.999813
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4743143821794851026",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        522.90436,
+        -2109.8362,
+        -37.999813
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "17333603359079446889",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        522.90436,
+        -2109.8362,
+        -37.999813
+      ],
+      "preset": "Conservative",
+      "cell_count": 520,
+      "cell_hash": "6166458604208109321",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1171.6868,
+        -214.8761,
+        -165.9998
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 826,
+      "cell_hash": "16462880270007927333",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1171.6868,
+        -214.8761,
+        -165.9998
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "2082951133863125091",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1171.6868,
+        -214.8761,
+        -165.9998
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "13775787131499155270",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1171.6868,
+        -214.8761,
+        -165.9998
+      ],
+      "preset": "Conservative",
+      "cell_count": 168,
+      "cell_hash": "1564595837560680638",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 5,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1206.7931,
+        -1257.8724,
+        -165.99968
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1512,
+      "cell_hash": "18433127976421589420",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1206.7931,
+        -1257.8724,
+        -165.99968
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "6109713342722534909",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1206.7931,
+        -1257.8724,
+        -165.99968
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "7110454522861772980",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 29,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1206.7931,
+        -1257.8724,
+        -165.99968
+      ],
+      "preset": "Conservative",
+      "cell_count": 428,
+      "cell_hash": "2839974749219636107",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -649.17194,
+        -2267.3293,
+        -177.9998
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2321,
+      "cell_hash": "14813221040058083820",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -649.17194,
+        -2267.3293,
+        -177.9998
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4161027458093946845",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -649.17194,
+        -2267.3293,
+        -177.9998
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "6813825811421187054",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -649.17194,
+        -2267.3293,
+        -177.9998
+      ],
+      "preset": "Conservative",
+      "cell_count": 555,
+      "cell_hash": "61749535086618554",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1292.8634,
+        -1379.4701,
+        -165.99986
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1489,
+      "cell_hash": "10942017176897636261",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1292.8634,
+        -1379.4701,
+        -165.99986
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "16090893796885663837",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1292.8634,
+        -1379.4701,
+        -165.99986
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "7504192851438711478",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1292.8634,
+        -1379.4701,
+        -165.99986
+      ],
+      "preset": "Conservative",
+      "cell_count": 458,
+      "cell_hash": "7017939006802478459",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1556.3384,
+        -239.75896,
+        -158.18213
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1056,
+      "cell_hash": "7225029119158348061",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 4,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1556.3384,
+        -239.75896,
+        -158.18213
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "16408659512927582128",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 4,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1556.3384,
+        -239.75896,
+        -158.18213
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "585659739528756187",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 4,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1556.3384,
+        -239.75896,
+        -158.18213
+      ],
+      "preset": "Conservative",
+      "cell_count": 303,
+      "cell_hash": "14893372487289569484",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 8,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 4,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -967.0278,
+        -681.79785,
+        -261.9998
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2110,
+      "cell_hash": "3245571466718221748",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -967.0278,
+        -681.79785,
+        -261.9998
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "10909431851774576949",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -967.0278,
+        -681.79785,
+        -261.9998
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "11183445450175254317",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -967.0278,
+        -681.79785,
+        -261.9998
+      ],
+      "preset": "Conservative",
+      "cell_count": 560,
+      "cell_hash": "2681346561899443465",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2166.7466,
+        -623.18536,
+        -165.99982
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1743,
+      "cell_hash": "9840743485704691429",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2166.7466,
+        -623.18536,
+        -165.99982
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "13038976872949893165",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2166.7466,
+        -623.18536,
+        -165.99982
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "11830822960581955459",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2166.7466,
+        -623.18536,
+        -165.99982
+      ],
+      "preset": "Conservative",
+      "cell_count": 477,
+      "cell_hash": "3323139194172733568",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        609.8322,
+        483.4281,
+        -256.88568
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1401,
+      "cell_hash": "6260255968117813510",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        609.8322,
+        483.4281,
+        -256.88568
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4662976159799452241",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        609.8322,
+        483.4281,
+        -256.88568
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "13102643832950472098",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        609.8322,
+        483.4281,
+        -256.88568
+      ],
+      "preset": "Conservative",
+      "cell_count": 465,
+      "cell_hash": "7083985331266461931",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -956.95197,
+        -58.498062,
+        -165.99976
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1332,
+      "cell_hash": "12933030177599662079",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -956.95197,
+        -58.498062,
+        -165.99976
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "7917874907588511251",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -956.95197,
+        -58.498062,
+        -165.99976
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "8638186334263073949",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -956.95197,
+        -58.498062,
+        -165.99976
+      ],
+      "preset": "Conservative",
+      "cell_count": 335,
+      "cell_hash": "16722824907026279310",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1103.8093,
+        -130.00131,
+        -162.35896
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1454,
+      "cell_hash": "16629519919793757189",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1103.8093,
+        -130.00131,
+        -162.35896
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "3895382391134167328",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1103.8093,
+        -130.00131,
+        -162.35896
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "397802170364720501",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1103.8093,
+        -130.00131,
+        -162.35896
+      ],
+      "preset": "Conservative",
+      "cell_count": 361,
+      "cell_hash": "10962097851958698706",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1407.3589,
+        368.58167,
+        -165.99974
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2073,
+      "cell_hash": "87721009685892732",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1407.3589,
+        368.58167,
+        -165.99974
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "15678506713850108097",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1407.3589,
+        368.58167,
+        -165.99974
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "7325452503045790444",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1407.3589,
+        368.58167,
+        -165.99974
+      ],
+      "preset": "Conservative",
+      "cell_count": 429,
+      "cell_hash": "9289565104296613871",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1116.9261,
+        -922.37177,
+        -260.8399
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1356,
+      "cell_hash": "12454550716428054462",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1116.9261,
+        -922.37177,
+        -260.8399
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "14570277764862654465",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1116.9261,
+        -922.37177,
+        -260.8399
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "17393006039187138434",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1116.9261,
+        -922.37177,
+        -260.8399
+      ],
+      "preset": "Conservative",
+      "cell_count": 322,
+      "cell_hash": "3709009343171028043",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -314.3498,
+        -758.18964,
+        -264.65332
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1743,
+      "cell_hash": "9155821814856786838",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -314.3498,
+        -758.18964,
+        -264.65332
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "278812765776525943",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -314.3498,
+        -758.18964,
+        -264.65332
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "15624959438169662475",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -314.3498,
+        -758.18964,
+        -264.65332
+      ],
+      "preset": "Conservative",
+      "cell_count": 422,
+      "cell_hash": "14906778400676160720",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -787.4162,
+        -1548.0353,
+        -165.99976
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1903,
+      "cell_hash": "6775199971547172277",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -787.4162,
+        -1548.0353,
+        -165.99976
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "13879683526333793563",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -787.4162,
+        -1548.0353,
+        -165.99976
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "16626934626173077894",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -787.4162,
+        -1548.0353,
+        -165.99976
+      ],
+      "preset": "Conservative",
+      "cell_count": 466,
+      "cell_hash": "17001924644093563885",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -356.2497,
+        -1615.1313,
+        -165.99982
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1667,
+      "cell_hash": "4109833351229764523",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -356.2497,
+        -1615.1313,
+        -165.99982
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "18402776129628513322",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -356.2497,
+        -1615.1313,
+        -165.99982
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "4437816431957327577",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -356.2497,
+        -1615.1313,
+        -165.99982
+      ],
+      "preset": "Conservative",
+      "cell_count": 421,
+      "cell_hash": "17931745237773146430",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 7,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -703.65625,
+        -778.893,
+        -261.99982
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1956,
+      "cell_hash": "491409183324290002",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -703.65625,
+        -778.893,
+        -261.99982
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "7146559490628671427",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -703.65625,
+        -778.893,
+        -261.99982
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9764603646676414582",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 26,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -703.65625,
+        -778.893,
+        -261.99982
+      ],
+      "preset": "Conservative",
+      "cell_count": 510,
+      "cell_hash": "6480114203871133208",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        312.8249,
+        -517.8496,
+        -160.52625
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2170,
+      "cell_hash": "4718084495747340055",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        312.8249,
+        -517.8496,
+        -160.52625
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "14600141989224041374",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        312.8249,
+        -517.8496,
+        -160.52625
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "14906743497462920806",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        312.8249,
+        -517.8496,
+        -160.52625
+      ],
+      "preset": "Conservative",
+      "cell_count": 442,
+      "cell_hash": "5621099860328680520",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1025.6204,
+        736.5816,
+        -77.823135
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1488,
+      "cell_hash": "16633419911077677234",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1025.6204,
+        736.5816,
+        -77.823135
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "17076413636593459016",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1025.6204,
+        736.5816,
+        -77.823135
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "12438103377074274667",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1025.6204,
+        736.5816,
+        -77.823135
+      ],
+      "preset": "Conservative",
+      "cell_count": 451,
+      "cell_hash": "9293588744889597471",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1642.795,
+        22.703232,
+        -167.72087
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2230,
+      "cell_hash": "4432484690710847116",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1642.795,
+        22.703232,
+        -167.72087
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "5505299181662154859",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1642.795,
+        22.703232,
+        -167.72087
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "16301654505936877335",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1642.795,
+        22.703232,
+        -167.72087
+      ],
+      "preset": "Conservative",
+      "cell_count": 555,
+      "cell_hash": "8966362018058864185",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -518.5717,
+        -1155.0663,
+        -165.99983
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1035,
+      "cell_hash": "16661163848997093496",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -518.5717,
+        -1155.0663,
+        -165.99983
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "8103162473000178911",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -518.5717,
+        -1155.0663,
+        -165.99983
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "10366598903566616179",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -518.5717,
+        -1155.0663,
+        -165.99983
+      ],
+      "preset": "Conservative",
+      "cell_count": 316,
+      "cell_hash": "4173591587459005075",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 6,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1508.0563,
+        -986.69006,
+        -207.99625
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2294,
+      "cell_hash": "9185716011064055498",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1508.0563,
+        -986.69006,
+        -207.99625
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "3938236128510388064",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1508.0563,
+        -986.69006,
+        -207.99625
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9290306187189358468",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1508.0563,
+        -986.69006,
+        -207.99625
+      ],
+      "preset": "Conservative",
+      "cell_count": 546,
+      "cell_hash": "12657540168256191805",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1261.7793,
+        -2496.562,
+        -189.9997
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 0,
+      "cell_hash": "14695981039346656037",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1261.7793,
+        -2496.562,
+        -189.9997
+      ],
+      "preset": "Coverage",
+      "cell_count": 0,
+      "cell_hash": "14695981039346656037",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1261.7793,
+        -2496.562,
+        -189.9997
+      ],
+      "preset": "FullReach",
+      "cell_count": 0,
+      "cell_hash": "14695981039346656037",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1261.7793,
+        -2496.562,
+        -189.9997
+      ],
+      "preset": "Conservative",
+      "cell_count": 0,
+      "cell_hash": "14695981039346656037",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 0,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1052.3842,
+        -129.99353,
+        -165.99983
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1398,
+      "cell_hash": "2729144365418553475",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1052.3842,
+        -129.99353,
+        -165.99983
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "567175093779715955",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1052.3842,
+        -129.99353,
+        -165.99983
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "1329213050759249787",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1052.3842,
+        -129.99353,
+        -165.99983
+      ],
+      "preset": "Conservative",
+      "cell_count": 480,
+      "cell_hash": "3387492667291960092",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        189.24821,
+        864.08044,
+        -133.99988
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 992,
+      "cell_hash": "1583190801702858891",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        189.24821,
+        864.08044,
+        -133.99988
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "12775867222460669479",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        189.24821,
+        864.08044,
+        -133.99988
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "16018512046046722517",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        189.24821,
+        864.08044,
+        -133.99988
+      ],
+      "preset": "Conservative",
+      "cell_count": 292,
+      "cell_hash": "2137498311764321479",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        372.89044,
+        810.40656,
+        -133.99968
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1209,
+      "cell_hash": "10735842626104756341",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        372.89044,
+        810.40656,
+        -133.99968
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "3564218783136348997",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        372.89044,
+        810.40656,
+        -133.99968
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "14116590853277261526",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        372.89044,
+        810.40656,
+        -133.99968
+      ],
+      "preset": "Conservative",
+      "cell_count": 442,
+      "cell_hash": "458353950323467833",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -200.75456,
+        -2334.2288,
+        -165.9998
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1482,
+      "cell_hash": "13194722153705970367",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -200.75456,
+        -2334.2288,
+        -165.9998
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "10530629087098314228",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -200.75456,
+        -2334.2288,
+        -165.9998
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "10312680763984127830",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -200.75456,
+        -2334.2288,
+        -165.9998
+      ],
+      "preset": "Conservative",
+      "cell_count": 456,
+      "cell_hash": "9238552647487076097",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1554.0734,
+        778.4966,
+        -45.99986
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1606,
+      "cell_hash": "4984183196348657934",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1554.0734,
+        778.4966,
+        -45.99986
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "2316172026470466125",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1554.0734,
+        778.4966,
+        -45.99986
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "2374183819089189271",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1554.0734,
+        778.4966,
+        -45.99986
+      ],
+      "preset": "Conservative",
+      "cell_count": 517,
+      "cell_hash": "17104727096885268640",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 16,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1156.7424,
+        -1090.8534,
+        -165.99982
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1545,
+      "cell_hash": "16194516732744235989",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1156.7424,
+        -1090.8534,
+        -165.99982
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "2795832986460490269",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1156.7424,
+        -1090.8534,
+        -165.99982
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "12373009952640717961",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1156.7424,
+        -1090.8534,
+        -165.99982
+      ],
+      "preset": "Conservative",
+      "cell_count": 468,
+      "cell_hash": "4411721492694071039",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1368.5945,
+        -313.8115,
+        -165.99986
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 1826,
+      "cell_hash": "10888042003495038247",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1368.5945,
+        -313.8115,
+        -165.99986
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "3312657733439291232",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 12,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1368.5945,
+        -313.8115,
+        -165.99986
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9782762149067548900",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        1368.5945,
+        -313.8115,
+        -165.99986
+      ],
+      "preset": "Conservative",
+      "cell_count": 492,
+      "cell_hash": "4208790720756281145",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 9,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        915.4853,
+        -1844.0756,
+        434.0003
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2475,
+      "cell_hash": "104178973349139296",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        915.4853,
+        -1844.0756,
+        434.0003
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "5258939709919838031",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        915.4853,
+        -1844.0756,
+        434.0003
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "9118102635508710474",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        915.4853,
+        -1844.0756,
+        434.0003
+      ],
+      "preset": "Conservative",
+      "cell_count": 571,
+      "cell_hash": "10856601098840016795",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1850.9244,
+        -85.80604,
+        -165.89148
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2406,
+      "cell_hash": "3007454924286490736",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1850.9244,
+        -85.80604,
+        -165.89148
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "7209847859359814716",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1850.9244,
+        -85.80604,
+        -165.89148
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "17814319001182735858",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 24,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1850.9244,
+        -85.80604,
+        -165.89148
+      ],
+      "preset": "Conservative",
+      "cell_count": 571,
+      "cell_hash": "8984838580416750955",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1669.578,
+        -2054.025,
+        -263.0359
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2108,
+      "cell_hash": "11767058325881437020",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 20,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1669.578,
+        -2054.025,
+        -263.0359
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "9000366443348820202",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 13,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 23,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 18,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1669.578,
+        -2054.025,
+        -263.0359
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "11327827358487841918",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 14,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -1669.578,
+        -2054.025,
+        -263.0359
+      ],
+      "preset": "Conservative",
+      "cell_count": 513,
+      "cell_hash": "13849417339602310086",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 10,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": false
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 15,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2132.9448,
+        -51.587814,
+        -166.84993
+      ],
+      "preset": "UncalibratedDefault",
+      "cell_count": 2299,
+      "cell_hash": "18048356236259722102",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 22,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 27,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2132.9448,
+        -51.587814,
+        -166.84993
+      ],
+      "preset": "Coverage",
+      "cell_count": 1153,
+      "cell_hash": "4880706039782579192",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2132.9448,
+        -51.587814,
+        -166.84993
+      ],
+      "preset": "FullReach",
+      "cell_count": 1662,
+      "cell_hash": "17455349847071575803",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 19,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 21,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 25,
+          "geometry_blocked": true
+        }
+      ]
+    },
+    {
+      "rest": [
+        -2132.9448,
+        -51.587814,
+        -166.84993
+      ],
+      "preset": "Conservative",
+      "cell_count": 567,
+      "cell_hash": "16763197239764105040",
+      "out_of_bounds": false,
+      "occlusion": [
+        {
+          "angle_bits": 0,
+          "smoke_cells_crossed": 11,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1074137746,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        },
+        {
+          "angle_bits": 1082526354,
+          "smoke_cells_crossed": 17,
+          "geometry_blocked": true
+        }
+      ]
+    }
+  ]
+}

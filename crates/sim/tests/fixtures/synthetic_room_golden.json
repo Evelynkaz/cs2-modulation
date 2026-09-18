@@ -1,0 +1,5202 @@
+[
+  {
+    "eye": [
+      0,
+      0,
+      100
+    ],
+    "yaw_deg": 0,
+    "pitch_deg": 0,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      2817.6743,
+      0,
+      -14737.951
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99481,
+      0,
+      124.23428
+    ]
+  },
+  {
+    "eye": [
+      0,
+      100,
+      200
+    ],
+    "yaw_deg": 0,
+    "pitch_deg": 0,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.03206,
+      100,
+      2.0002894
+    ],
+    "bounces": 15,
+    "flight_time": 3.4375,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99481,
+      100,
+      224.23427
+    ]
+  },
+  {
+    "eye": [
+      0,
+      -100,
+      150
+    ],
+    "yaw_deg": 0,
+    "pitch_deg": 0,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      2817.6743,
+      -100,
+      -14687.951
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99481,
+      -100,
+      174.23427
+    ]
+  },
+  {
+    "eye": [
+      100,
+      0,
+      300
+    ],
+    "yaw_deg": 0,
+    "pitch_deg": 0,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.024,
+      0,
+      195.50002
+    ],
+    "bounces": 1142,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1142,
+    "first_touch": [
+      253.9948,
+      0,
+      320.23148
+    ]
+  },
+  {
+    "eye": [
+      -34.65422,
+      -159.25137,
+      252.98969
+    ],
+    "yaw_deg": -10.378113,
+    "pitch_deg": 88.35252,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      64.960304,
+      238.05817,
+      2.0001962
+    ],
+    "bounces": 5,
+    "flight_time": 2.609375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      24.296274,
+      93.81183,
+      2.0034075
+    ]
+  },
+  {
+    "eye": [
+      -57.273148,
+      -94.21618,
+      87.31683
+    ],
+    "yaw_deg": -88.190125,
+    "pitch_deg": 61.77495,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -52.011696,
+      -247.27397,
+      2.0001626
+    ],
+    "bounces": 5,
+    "flight_time": 1.609375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -55.6756,
+      -144.77386,
+      2.0048058
+    ]
+  },
+  {
+    "eye": [
+      170.86035,
+      -18.2668,
+      217.01262
+    ],
+    "yaw_deg": 77.071396,
+    "pitch_deg": 35.279663,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      232.19951,
+      248.94757,
+      2.0002644
+    ],
+    "bounces": 4,
+    "flight_time": 2.65625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      208.40843,
+      145.30339,
+      2.0029495
+    ]
+  },
+  {
+    "eye": [
+      -91.19169,
+      -186.4384,
+      51.59808
+    ],
+    "yaw_deg": 87.72221,
+    "pitch_deg": -66.10579,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -82.60215,
+      29.513285,
+      2.0001934
+    ],
+    "bounces": 6,
+    "flight_time": 4.21875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -87.87235,
+      -102.99064,
+      381.99588
+    ]
+  },
+  {
+    "eye": [
+      -140.02432,
+      -175.69173,
+      160.69841
+    ],
+    "yaw_deg": -62.785976,
+    "pitch_deg": -71.09201,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -80.16459,
+      -215.90326,
+      2.0003178
+    ],
+    "bounces": 6,
+    "flight_time": 3.046875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -119.89654,
+      -214.83276,
+      381.9933
+    ]
+  },
+  {
+    "eye": [
+      -7.948166,
+      -182.87935,
+      234.74353
+    ],
+    "yaw_deg": 10.531303,
+    "pitch_deg": -11.461205,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      184.84593,
+      231.82964,
+      2.0003197
+    ],
+    "bounces": 6,
+    "flight_time": 4.15625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      69.475365,
+      -19.53363,
+      381.9985
+    ]
+  },
+  {
+    "eye": [
+      111.52881,
+      81.365234,
+      280.77536
+    ],
+    "yaw_deg": 78.05873,
+    "pitch_deg": -72.14364,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      139.80017,
+      215.05078,
+      2.0002131
+    ],
+    "bounces": 6,
+    "flight_time": 3.96875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      117.948235,
+      111.719345,
+      381.99728
+    ]
+  },
+  {
+    "eye": [
+      -34.195847,
+      168.57239,
+      116.15135
+    ],
+    "yaw_deg": -75.16741,
+    "pitch_deg": -6.612732,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      192.25333,
+      178.5475,
+      2.0002534
+    ],
+    "bounces": 5,
+    "flight_time": 3.234375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      77.70844,
+      -253.9951,
+      172.97504
+    ]
+  },
+  {
+    "eye": [
+      -52.24939,
+      84.77902,
+      284.36502
+    ],
+    "yaw_deg": -42.11729,
+    "pitch_deg": 6.94664,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      159.88062,
+      -107.01131,
+      2.000185
+    ],
+    "bounces": 6,
+    "flight_time": 4.234375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      15.7774315,
+      23.27473,
+      381.99875
+    ]
+  },
+  {
+    "eye": [
+      -24.178741,
+      15.352844,
+      156.60934
+    ],
+    "yaw_deg": 44.498657,
+    "pitch_deg": 36.21765,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.00803,
+      219.28333,
+      2.0001657
+    ],
+    "bounces": 15,
+    "flight_time": 2.765625,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      218.67929,
+      253.99792,
+      98.423874
+    ]
+  },
+  {
+    "eye": [
+      22.067307,
+      91.0202,
+      277.63037
+    ],
+    "yaw_deg": 79.026,
+    "pitch_deg": -58.430347,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -100.212074,
+      218.84096,
+      2.0002427
+    ],
+    "bounces": 6,
+    "flight_time": 2.28125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      5.545124,
+      126.09359,
+      381.99338
+    ]
+  },
+  {
+    "eye": [
+      -119.15253,
+      85.322845,
+      85.926544
+    ],
+    "yaw_deg": -60.203995,
+    "pitch_deg": -58.6231,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -20.633263,
+      -86.72873,
+      2.0002449
+    ],
+    "bounces": 4,
+    "flight_time": 3,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -43.81681,
+      -46.241055,
+      2.0024004
+    ]
+  },
+  {
+    "eye": [
+      194.43933,
+      69.03543,
+      265.90778
+    ],
+    "yaw_deg": 11.198273,
+    "pitch_deg": -63.540493,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.01662,
+      80.83017,
+      2.0003161
+    ],
+    "bounces": 25,
+    "flight_time": 4.515625,
+    "lost": false,
+    "glass_breaks": 20,
+    "first_touch": [
+      249.5216,
+      79.940216,
+      381.99756
+    ]
+  },
+  {
+    "eye": [
+      76.66037,
+      84.51584,
+      259.88348
+    ],
+    "yaw_deg": -46.07367,
+    "pitch_deg": -5.983986,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      1022.1856,
+      -897.1038,
+      -15007.62
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      186.85178,
+      -29.88482,
+      381.997
+    ]
+  },
+  {
+    "eye": [
+      -88.39704,
+      -163.84496,
+      43.79438
+    ],
+    "yaw_deg": -8.477089,
+    "pitch_deg": -6.9788666,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.01772,
+      -214.88087,
+      2.0002415
+    ],
+    "bounces": 20,
+    "flight_time": 3.796875,
+    "lost": false,
+    "glass_breaks": 17,
+    "first_touch": [
+      253.9985,
+      -214.87712,
+      167.41402
+    ]
+  },
+  {
+    "eye": [
+      -178.37865,
+      96.789795,
+      131.17587
+    ],
+    "yaw_deg": -15.695213,
+    "pitch_deg": 34.99392,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01277,
+      238.5398,
+      2.0003178
+    ],
+    "bounces": 14,
+    "flight_time": 2.515625,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      217.31532,
+      253.9985,
+      81.44518
+    ]
+  },
+  {
+    "eye": [
+      -78.042175,
+      -8.264404,
+      98.193924
+    ],
+    "yaw_deg": -9.62999,
+    "pitch_deg": -42.652706,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.02557,
+      -64.608574,
+      147.04358
+    ],
+    "bounces": 1034,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1033,
+    "first_touch": [
+      244.23615,
+      -62.947247,
+      381.99783
+    ]
+  },
+  {
+    "eye": [
+      49.38083,
+      -193.29895,
+      64.67967
+    ],
+    "yaw_deg": -19.01236,
+    "pitch_deg": 56.80861,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      131.43135,
+      -221.57158,
+      2.0001962
+    ],
+    "bounces": 4,
+    "flight_time": 1.421875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      86.88963,
+      -206.22327,
+      2.0018806
+    ]
+  },
+  {
+    "eye": [
+      96.989105,
+      169.18692,
+      246.43819
+    ],
+    "yaw_deg": -60.64109,
+    "pitch_deg": 23.409958,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      1021.2558,
+      -1473.9111,
+      -13767.327
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.9984,
+      -109.92719,
+      288.7113
+    ]
+  },
+  {
+    "eye": [
+      95.67987,
+      -59.59491,
+      234.0857
+    ],
+    "yaw_deg": -71.45281,
+    "pitch_deg": 42.882324,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.00319,
+      23.487022,
+      2.0001774
+    ],
+    "bounces": 12,
+    "flight_time": 2.46875,
+    "lost": false,
+    "glass_breaks": 8,
+    "first_touch": [
+      160.90373,
+      -253.99603,
+      181.16336
+    ]
+  },
+  {
+    "eye": [
+      -152.11726,
+      -192.525,
+      118.91095
+    ],
+    "yaw_deg": 10.47657,
+    "pitch_deg": -34.327362,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      15.5608425,
+      163.40479,
+      2.0002995
+    ],
+    "bounces": 6,
+    "flight_time": 4.46875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -50.852425,
+      116.45507,
+      381.99915
+    ]
+  },
+  {
+    "eye": [
+      147.8931,
+      168.508,
+      292.24277
+    ],
+    "yaw_deg": 17.713577,
+    "pitch_deg": 32.872528,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.01855,
+      202.40558,
+      2.0002916
+    ],
+    "bounces": 15,
+    "flight_time": 3.34375,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99707,
+      202.39767,
+      226.86263
+    ]
+  },
+  {
+    "eye": [
+      -38.90477,
+      150.53073,
+      293.58102
+    ],
+    "yaw_deg": 75.122345,
+    "pitch_deg": -61.677376,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      9.28393,
+      176.07518,
+      2.0001647
+    ],
+    "bounces": 7,
+    "flight_time": 3.46875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -27.93191,
+      191.83464,
+      381.99554
+    ]
+  },
+  {
+    "eye": [
+      -113.076996,
+      -122.925224,
+      264.85968
+    ],
+    "yaw_deg": -22.09298,
+    "pitch_deg": -68.73952,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -43.429146,
+      -151.1985,
+      2.0001814
+    ],
+    "bounces": 6,
+    "flight_time": 3.90625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -95.914215,
+      -129.89185,
+      381.9969
+    ]
+  },
+  {
+    "eye": [
+      -136.85767,
+      184.50629,
+      164.35356
+    ],
+    "yaw_deg": -33.76109,
+    "pitch_deg": 88.91728,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -127.23646,
+      178.07503,
+      2.0002859
+    ],
+    "bounces": 4,
+    "flight_time": 2.390625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -131.72585,
+      181.07591,
+      2.0028508
+    ]
+  },
+  {
+    "eye": [
+      -161.39166,
+      151.11862,
+      29.402927
+    ],
+    "yaw_deg": -38.80618,
+    "pitch_deg": -64.408806,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01126,
+      225.05081,
+      2.0002942
+    ],
+    "bounces": 14,
+    "flight_time": 4.015625,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      -9.300779,
+      175.15121,
+      381.99393
+    ]
+  },
+  {
+    "eye": [
+      -154.04352,
+      16.876648,
+      79.508224
+    ],
+    "yaw_deg": 42.6512,
+    "pitch_deg": 45.960693,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -60.245937,
+      103.282265,
+      2.0002058
+    ],
+    "bounces": 4,
+    "flight_time": 1.578125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -105.489555,
+      61.604446,
+      2.001928
+    ]
+  },
+  {
+    "eye": [
+      13.322662,
+      -41.5887,
+      273.3127
+    ],
+    "yaw_deg": 39.06337,
+    "pitch_deg": -72.94912,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      116.84208,
+      42.429745,
+      2.0001876
+    ],
+    "bounces": 6,
+    "flight_time": 3.96875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      38.158176,
+      -21.431797,
+      381.99728
+    ]
+  },
+  {
+    "eye": [
+      -114.735344,
+      134.99597,
+      116.71453
+    ],
+    "yaw_deg": -63.090538,
+    "pitch_deg": 41.643173,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      118.02911,
+      -184.37779,
+      2.0002553
+    ],
+    "bounces": 5,
+    "flight_time": 2.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      37.56903,
+      -165.08937,
+      2.0024765
+    ]
+  },
+  {
+    "eye": [
+      170.27463,
+      -49.487762,
+      200.07152
+    ],
+    "yaw_deg": -38.55752,
+    "pitch_deg": 42.38713,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      729.7341,
+      -495.40518,
+      -14060.469
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99902,
+      -116.222115,
+      240.58418
+    ]
+  },
+  {
+    "eye": [
+      89.411285,
+      -134.80507,
+      30.162495
+    ],
+    "yaw_deg": -71.17445,
+    "pitch_deg": -38.106354,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01945,
+      -228.12856,
+      2.0002174
+    ],
+    "bounces": 22,
+    "flight_time": 2.6875,
+    "lost": false,
+    "glass_breaks": 19,
+    "first_touch": [
+      253.99695,
+      -228.11728,
+      271.5078
+    ]
+  },
+  {
+    "eye": [
+      -144.06615,
+      -180.15628,
+      85.09934
+    ],
+    "yaw_deg": -83.426674,
+    "pitch_deg": 4.004654,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -94.199844,
+      104.91251,
+      2.0001965
+    ],
+    "bounces": 5,
+    "flight_time": 2.0625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -135.55756,
+      -253.9948,
+      91.11209
+    ]
+  },
+  {
+    "eye": [
+      120.18463,
+      -192.3452,
+      291.65054
+    ],
+    "yaw_deg": 40.91638,
+    "pitch_deg": 22.457733,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.0143,
+      -76.35097,
+      2.0002227
+    ],
+    "bounces": 14,
+    "flight_time": 3.21875,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      253.99886,
+      -76.36446,
+      135.16061
+    ]
+  },
+  {
+    "eye": [
+      136.50967,
+      -15.475159,
+      184.52792
+    ],
+    "yaw_deg": -85.4441,
+    "pitch_deg": 60.97026,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      158.60884,
+      -215.1837,
+      2.000273
+    ],
+    "bounces": 5,
+    "flight_time": 2.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      152.5173,
+      -216.36487,
+      2.002822
+    ]
+  },
+  {
+    "eye": [
+      -126.98633,
+      34.252426,
+      298.36926
+    ],
+    "yaw_deg": -27.069466,
+    "pitch_deg": -88.20843,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -112.69667,
+      26.949848,
+      2.0002472
+    ],
+    "bounces": 6,
+    "flight_time": 4.03125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -125.85642,
+      33.674984,
+      381.99268
+    ]
+  },
+  {
+    "eye": [
+      15.213852,
+      62.19095,
+      167.48227
+    ],
+    "yaw_deg": 32.954826,
+    "pitch_deg": 66.35933,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -91.93141,
+      63.357086,
+      2.0002499
+    ],
+    "bounces": 5,
+    "flight_time": 3.046875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -34.987083,
+      253.99762,
+      163.18105
+    ]
+  },
+  {
+    "eye": [
+      45.683594,
+      27.825638,
+      222.10922
+    ],
+    "yaw_deg": 72.957184,
+    "pitch_deg": -56.55517,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      119.99422,
+      237.76123,
+      2.0002065
+    ],
+    "bounces": 6,
+    "flight_time": 2.9375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      78.61181,
+      135.24197,
+      381.99823
+    ]
+  },
+  {
+    "eye": [
+      166.68008,
+      -63.603012,
+      289.8048
+    ],
+    "yaw_deg": -16.366837,
+    "pitch_deg": 18.637115,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      2770.614,
+      -828.3385,
+      -16000.849
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99503,
+      -89.2463,
+      270.53275
+    ]
+  },
+  {
+    "eye": [
+      -98.41645,
+      105.491425,
+      54.91588
+    ],
+    "yaw_deg": -28.899147,
+    "pitch_deg": 51.516037,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      87.28331,
+      2.9830081,
+      2.0001848
+    ],
+    "bounces": 4,
+    "flight_time": 2.203125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      42.950638,
+      27.455202,
+      2.001768
+    ]
+  },
+  {
+    "eye": [
+      112.73886,
+      53.307526,
+      232.95483
+    ],
+    "yaw_deg": 0.59381104,
+    "pitch_deg": -36.0626,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.00719,
+      54.771645,
+      236.57875
+    ],
+    "bounces": 1146,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1145,
+    "first_touch": [
+      196.51886,
+      54.175797,
+      381.9961
+    ]
+  },
+  {
+    "eye": [
+      -32.442123,
+      -141.48264,
+      42.507698
+    ],
+    "yaw_deg": -24.89885,
+    "pitch_deg": -55.62049,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.02002,
+      -60.52936,
+      2.000231
+    ],
+    "bounces": 15,
+    "flight_time": 3.40625,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      140.9091,
+      -94.7274,
+      381.99426
+    ]
+  },
+  {
+    "eye": [
+      52.193314,
+      -177.38512,
+      25.174707
+    ],
+    "yaw_deg": -41.822617,
+    "pitch_deg": -83.887024,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      79.7,
+      -201.99889,
+      2.0001907
+    ],
+    "bounces": 4,
+    "flight_time": 2.671875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      73.76771,
+      -196.69044,
+      2.0020092
+    ]
+  },
+  {
+    "eye": [
+      -58.475647,
+      -189.50078,
+      40.297676
+    ],
+    "yaw_deg": 62.909195,
+    "pitch_deg": -49.117687,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      232.49097,
+      128.67603,
+      2.0002398
+    ],
+    "bounces": 5,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      168.38428,
+      253.99818,
+      152.21574
+    ]
+  },
+  {
+    "eye": [
+      -160.45398,
+      -185.07735,
+      41.45613
+    ],
+    "yaw_deg": -82.493164,
+    "pitch_deg": 74.58855,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -146.51083,
+      -217.10349,
+      2.0002983
+    ],
+    "bounces": 5,
+    "flight_time": 1.984375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -156.5094,
+      -215.0121,
+      2.0032244
+    ]
+  },
+  {
+    "eye": [
+      111.431274,
+      66.9169,
+      57.50323
+    ],
+    "yaw_deg": 55.073364,
+    "pitch_deg": -64.65959,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      199.44635,
+      192.95638,
+      2.0001898
+    ],
+    "bounces": 6,
+    "flight_time": 4.78125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      156.80249,
+      131.8905,
+      381.99872
+    ]
+  },
+  {
+    "eye": [
+      156.6218,
+      -62.869812,
+      127.13573
+    ],
+    "yaw_deg": 30.40316,
+    "pitch_deg": 38.640465,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01453,
+      181.34879,
+      2.0001986
+    ],
+    "bounces": 14,
+    "flight_time": 2.703125,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      253.99872,
+      181.30652,
+      112.45254
+    ]
+  },
+  {
+    "eye": [
+      46.62738,
+      -20.498856,
+      262.8634
+    ],
+    "yaw_deg": 48.878754,
+    "pitch_deg": -66.49116,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      208.28532,
+      164.67488,
+      2.0002055
+    ],
+    "bounces": 6,
+    "flight_time": 3.921875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      77.740166,
+      15.139698,
+      381.9955
+    ]
+  },
+  {
+    "eye": [
+      176.35275,
+      128.7514,
+      246.48547
+    ],
+    "yaw_deg": -29.195808,
+    "pitch_deg": -85.26139,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      213.52058,
+      107.98354,
+      2.0001783
+    ],
+    "bounces": 5,
+    "flight_time": 4.359375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      204.05492,
+      113.27305,
+      2.003549
+    ]
+  },
+  {
+    "eye": [
+      -83.94784,
+      -80.131805,
+      279.80634
+    ],
+    "yaw_deg": -35.732132,
+    "pitch_deg": 49.946106,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.0028,
+      -184.73482,
+      2.0002441
+    ],
+    "bounces": 13,
+    "flight_time": 2.71875,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      157.7267,
+      -253.9986,
+      112.91618
+    ]
+  },
+  {
+    "eye": [
+      -178.01904,
+      36.236282,
+      195.52757
+    ],
+    "yaw_deg": -58.78354,
+    "pitch_deg": 42.03537,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      99.387375,
+      -86.47424,
+      2.000211
+    ],
+    "bounces": 5,
+    "flight_time": 2.28125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -2.1337342,
+      -253.99638,
+      77.80367
+    ]
+  },
+  {
+    "eye": [
+      170.54083,
+      -89.839294,
+      139.22426
+    ],
+    "yaw_deg": 53.07646,
+    "pitch_deg": -41.103706,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -42.82439,
+      185.57802,
+      2.0002685
+    ],
+    "bounces": 6,
+    "flight_time": 3.9375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      63.53779,
+      127.3404,
+      381.99847
+    ]
+  },
+  {
+    "eye": [
+      -50.68457,
+      -175.59335,
+      26.863497
+    ],
+    "yaw_deg": 54.202423,
+    "pitch_deg": -88.22537,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -25.108702,
+      -140.12592,
+      2.0001621
+    ],
+    "bounces": 5,
+    "flight_time": 5.1875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -30.425152,
+      -147.49802,
+      2.0036535
+    ]
+  },
+  {
+    "eye": [
+      -81.671585,
+      136.59573,
+      54.77305
+    ],
+    "yaw_deg": -45.057617,
+    "pitch_deg": -40.718536,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.02228,
+      -199.77383,
+      2.0002854
+    ],
+    "bounces": 21,
+    "flight_time": 3.828125,
+    "lost": false,
+    "glass_breaks": 17,
+    "first_touch": [
+      234.89835,
+      -180.61151,
+      381.99854
+    ]
+  },
+  {
+    "eye": [
+      168.31638,
+      -79.303505,
+      194.22139
+    ],
+    "yaw_deg": -41.21063,
+    "pitch_deg": 67.09372,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.01079,
+      -154.35236,
+      2.000181
+    ],
+    "bounces": 13,
+    "flight_time": 2.90625,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      253.9995,
+      -154.3423,
+      63.39661
+    ]
+  },
+  {
+    "eye": [
+      -183.94522,
+      -140.27884,
+      68.20404
+    ],
+    "yaw_deg": -68.11095,
+    "pitch_deg": -52.450554,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -97.93962,
+      -153.65413,
+      2.0001855
+    ],
+    "bounces": 7,
+    "flight_time": 4.328125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -138.25555,
+      -253.99825,
+      369.46765
+    ]
+  },
+  {
+    "eye": [
+      73.45343,
+      -20.16687,
+      166.40126
+    ],
+    "yaw_deg": -3.5567017,
+    "pitch_deg": 13.269714,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.00252,
+      41.723957,
+      2.0002916
+    ],
+    "bounces": 25,
+    "flight_time": 3.609375,
+    "lost": false,
+    "glass_breaks": 21,
+    "first_touch": [
+      253.9946,
+      41.720947,
+      234.00764
+    ]
+  },
+  {
+    "eye": [
+      131.46378,
+      -136.36885,
+      119.10676
+    ],
+    "yaw_deg": -82.51669,
+    "pitch_deg": -25.071186,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      159.67412,
+      -156.86693,
+      2.0002472
+    ],
+    "bounces": 5,
+    "flight_time": 2.859375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      146.91473,
+      -253.99867,
+      133.74187
+    ]
+  },
+  {
+    "eye": [
+      -144.49379,
+      -157.63055,
+      296.93106
+    ],
+    "yaw_deg": 25.572212,
+    "pitch_deg": -15.390968,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.01173,
+      33.06369,
+      220.29778
+    ],
+    "bounces": 1049,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1049,
+    "first_touch": [
+      253.99718,
+      33.056854,
+      309.88495
+    ]
+  },
+  {
+    "eye": [
+      34.264893,
+      -75.59982,
+      280.17194
+    ],
+    "yaw_deg": 56.668198,
+    "pitch_deg": 38.776,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.01546,
+      249.46042,
+      2.000242
+    ],
+    "bounces": 15,
+    "flight_time": 3.265625,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      251.03082,
+      253.9963,
+      160.96991
+    ]
+  },
+  {
+    "eye": [
+      188.68869,
+      93.423615,
+      175.87286
+    ],
+    "yaw_deg": 26.237946,
+    "pitch_deg": 40.972473,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.01817,
+      125.62366,
+      2.0002859
+    ],
+    "bounces": 14,
+    "flight_time": 3.34375,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      253.99886,
+      125.614006,
+      217.50183
+    ]
+  },
+  {
+    "eye": [
+      72.74231,
+      140.4776,
+      151.69847
+    ],
+    "yaw_deg": 37.501358,
+    "pitch_deg": -72.59711,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      7.410031,
+      134.01384,
+      2.0001702
+    ],
+    "bounces": 7,
+    "flight_time": 3.984375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      48.040504,
+      237.45563,
+      381.99533
+    ]
+  },
+  {
+    "eye": [
+      149.40628,
+      -162.11969,
+      274.74945
+    ],
+    "yaw_deg": -2.99057,
+    "pitch_deg": 73.8051,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00781,
+      -167.58379,
+      2.0003283
+    ],
+    "bounces": 13,
+    "flight_time": 2.265625,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      230.86649,
+      -166.37538,
+      2.005943
+    ]
+  },
+  {
+    "eye": [
+      -120.852066,
+      185.19891,
+      36.80919
+    ],
+    "yaw_deg": -75.62316,
+    "pitch_deg": 3.163231,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -76.193954,
+      10.97539,
+      2.0001352
+    ],
+    "bounces": 4,
+    "flight_time": 1.34375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -89.16954,
+      61.597065,
+      2.0012178
+    ]
+  },
+  {
+    "eye": [
+      -182.6716,
+      144.75262,
+      249.7397
+    ],
+    "yaw_deg": 80.897354,
+    "pitch_deg": -7.233429,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -127.678604,
+      20.00998,
+      2.0001855
+    ],
+    "bounces": 7,
+    "flight_time": 4.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -165.16824,
+      253.99677,
+      356.1127
+    ]
+  },
+  {
+    "eye": [
+      173.20074,
+      108.181885,
+      266.76093
+    ],
+    "yaw_deg": 79.85297,
+    "pitch_deg": -31.146145,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      230.02704,
+      82.30485,
+      2.000164
+    ],
+    "bounces": 7,
+    "flight_time": 3.59375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      186.55727,
+      182.80998,
+      381.9949
+    ]
+  },
+  {
+    "eye": [
+      144.63062,
+      -62.030914,
+      196.55766
+    ],
+    "yaw_deg": -37.494057,
+    "pitch_deg": 33.293297,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      1532.439,
+      484.86148,
+      -14469.999
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99744,
+      -31.133522,
+      243.20021
+    ]
+  },
+  {
+    "eye": [
+      104.48401,
+      163.68164,
+      207.2018
+    ],
+    "yaw_deg": 21.99855,
+    "pitch_deg": 38.106247,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00955,
+      224.0896,
+      2.0001833
+    ],
+    "bounces": 15,
+    "flight_time": 2.28125,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99731,
+      224.08441,
+      79.68971
+    ]
+  },
+  {
+    "eye": [
+      -154.16719,
+      171.98468,
+      285.20468
+    ],
+    "yaw_deg": 36.020584,
+    "pitch_deg": -44.999866,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      86.42461,
+      161.07913,
+      2.000187
+    ],
+    "bounces": 7,
+    "flight_time": 3.890625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -85.23727,
+      222.10309,
+      381.9964
+    ]
+  },
+  {
+    "eye": [
+      197.19818,
+      -33.529556,
+      154.25339
+    ],
+    "yaw_deg": -59.608997,
+    "pitch_deg": -6.692047,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      628.40265,
+      -768.7479,
+      -13499.774
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99924,
+      -130.379,
+      296.868
+    ]
+  },
+  {
+    "eye": [
+      106.34961,
+      -183.38086,
+      161.29025
+    ],
+    "yaw_deg": 69.45598,
+    "pitch_deg": -45.0198,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      226.3043,
+      136.70593,
+      2.0001915
+    ],
+    "bounces": 6,
+    "flight_time": 4.0625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      143.25989,
+      -84.890976,
+      381.99606
+    ]
+  },
+  {
+    "eye": [
+      98.73346,
+      57.230347,
+      116.94341
+    ],
+    "yaw_deg": -50.575764,
+    "pitch_deg": 25.13015,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.0257,
+      -22.745146,
+      2.000244
+    ],
+    "bounces": 15,
+    "flight_time": 2.71875,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99496,
+      -22.730854,
+      144.8365
+    ]
+  },
+  {
+    "eye": [
+      -191.32967,
+      -183.19273,
+      207.87874
+    ],
+    "yaw_deg": -15.834602,
+    "pitch_deg": -70.26619,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -33.541622,
+      -227.94461,
+      2.0001662
+    ],
+    "bounces": 5,
+    "flight_time": 4.09375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -73.675316,
+      -216.56093,
+      2.003306
+    ]
+  },
+  {
+    "eye": [
+      120.946014,
+      83.22974,
+      273.61813
+    ],
+    "yaw_deg": 37.30966,
+    "pitch_deg": 35.36666,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.01337,
+      184.6349,
+      2.0002291
+    ],
+    "bounces": 15,
+    "flight_time": 2.953125,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99762,
+      184.62355,
+      154.06372
+    ]
+  },
+  {
+    "eye": [
+      -36.29088,
+      132.72586,
+      95.773674
+    ],
+    "yaw_deg": -2.2496948,
+    "pitch_deg": -39.608044,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      1035.1624,
+      90.63406,
+      -14778.911
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      144.97377,
+      125.605,
+      381.99503
+    ]
+  },
+  {
+    "eye": [
+      193.96167,
+      32.02997,
+      241.2827
+    ],
+    "yaw_deg": 38.817726,
+    "pitch_deg": 30.872742,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.00787,
+      80.33846,
+      2.0002859
+    ],
+    "bounces": 24,
+    "flight_time": 4.140625,
+    "lost": false,
+    "glass_breaks": 20,
+    "first_touch": [
+      253.99887,
+      80.331665,
+      296.08615
+    ]
+  },
+  {
+    "eye": [
+      -162.61632,
+      76.26071,
+      107.09441
+    ],
+    "yaw_deg": 56.784363,
+    "pitch_deg": 62.15509,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -249.24193,
+      179.65115,
+      2.00016
+    ],
+    "bounces": 5,
+    "flight_time": 1.53125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -221.61012,
+      253.99721,
+      27.332993
+    ]
+  },
+  {
+    "eye": [
+      -4.749527,
+      -195.5237,
+      129.15024
+    ],
+    "yaw_deg": 72.27406,
+    "pitch_deg": -39.11727,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      181.68112,
+      120.26673,
+      2.000293
+    ],
+    "bounces": 6,
+    "flight_time": 4.078125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      93.64214,
+      112.29729,
+      381.99792
+    ]
+  },
+  {
+    "eye": [
+      -83.69546,
+      83.34378,
+      247.4734
+    ],
+    "yaw_deg": -67.75531,
+    "pitch_deg": -87.61151,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -75.53239,
+      63.38578,
+      2.0001724
+    ],
+    "bounces": 5,
+    "flight_time": 4.390625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -77.625084,
+      68.50184,
+      2.0035655
+    ]
+  },
+  {
+    "eye": [
+      -194.63629,
+      47.004944,
+      260.9771
+    ],
+    "yaw_deg": 43.236008,
+    "pitch_deg": 57.89711,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      59.81858,
+      221.74445,
+      2.0002618
+    ],
+    "bounces": 5,
+    "flight_time": 2.578125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      9.023507,
+      238.49469,
+      2.0032938
+    ]
+  },
+  {
+    "eye": [
+      -157.29118,
+      -8.05806,
+      240.87679
+    ],
+    "yaw_deg": 72.24956,
+    "pitch_deg": -37.03176,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -60.020355,
+      212.19289,
+      2.0002239
+    ],
+    "bounces": 6,
+    "flight_time": 2.34375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -131.73439,
+      71.77916,
+      381.99463
+    ]
+  },
+  {
+    "eye": [
+      -117.8843,
+      -87.97704,
+      253.69633
+    ],
+    "yaw_deg": -84.63165,
+    "pitch_deg": 20.473686,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.0192,
+      -211.87357,
+      36.594837
+    ],
+    "bounces": 940,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 939,
+    "first_touch": [
+      172.99915,
+      -253.99869,
+      340.8389
+    ]
+  },
+  {
+    "eye": [
+      175.45853,
+      -155.61513,
+      160.71533
+    ],
+    "yaw_deg": 45.217834,
+    "pitch_deg": 47.02014,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.01193,
+      -76.461784,
+      2.0002842
+    ],
+    "bounces": 13,
+    "flight_time": 1.609375,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      253.9982,
+      -76.47604,
+      44.395035
+    ]
+  },
+  {
+    "eye": [
+      -102.025375,
+      115.73764,
+      46.06508
+    ],
+    "yaw_deg": 25.063759,
+    "pitch_deg": 40.388626,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      208.78305,
+      246.90813,
+      2.000146
+    ],
+    "bounces": 6,
+    "flight_time": 2.015625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -46.34745,
+      141.77612,
+      2.0032399
+    ]
+  },
+  {
+    "eye": [
+      -134.50629,
+      73.05841,
+      260.3437
+    ],
+    "yaw_deg": 82.61705,
+    "pitch_deg": 29.135193,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -89.38952,
+      86.74747,
+      2.0001705
+    ],
+    "bounces": 6,
+    "flight_time": 4.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -111.06119,
+      253.99855,
+      315.94623
+    ]
+  },
+  {
+    "eye": [
+      90.29147,
+      110.30237,
+      64.47128
+    ],
+    "yaw_deg": -12.040146,
+    "pitch_deg": -19.374268,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.0021,
+      75.384544,
+      252.03844
+    ],
+    "bounces": 1214,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1214,
+    "first_touch": [
+      253.99702,
+      75.38557,
+      254.85417
+    ]
+  },
+  {
+    "eye": [
+      46.83235,
+      -185.69576,
+      215.08118
+    ],
+    "yaw_deg": 73.07558,
+    "pitch_deg": -67.95239,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -162.83221,
+      104.08202,
+      2.0002112
+    ],
+    "bounces": 6,
+    "flight_time": 4.015625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      16.231443,
+      -137.21939,
+      381.99326
+    ]
+  },
+  {
+    "eye": [
+      -83.96225,
+      184.9791,
+      163.63017
+    ],
+    "yaw_deg": -6.756531,
+    "pitch_deg": -47.671722,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      202.36053,
+      151.05664,
+      2.0002809
+    ],
+    "bounces": 4,
+    "flight_time": 3.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      129.41064,
+      159.69946,
+      2.0028975
+    ]
+  },
+  {
+    "eye": [
+      53.26715,
+      -147.34586,
+      62.22568
+    ],
+    "yaw_deg": -10.410339,
+    "pitch_deg": 55.567535,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.00195,
+      -184.22607,
+      2.0001776
+    ],
+    "bounces": 13,
+    "flight_time": 2.03125,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      97.862595,
+      -155.53906,
+      2.0030138
+    ]
+  },
+  {
+    "eye": [
+      -113.32422,
+      -174.53514,
+      82.789055
+    ],
+    "yaw_deg": 81.06601,
+    "pitch_deg": 52.552567,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -50.51812,
+      224.98586,
+      2.0001218
+    ],
+    "bounces": 5,
+    "flight_time": 2.0625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -88.449036,
+      -16.29972,
+      2.0026355
+    ]
+  },
+  {
+    "eye": [
+      -180.80034,
+      -199.69534,
+      180.32753
+    ],
+    "yaw_deg": -33.57163,
+    "pitch_deg": -62.370567,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -91.68403,
+      -249.16035,
+      2.000198
+    ],
+    "bounces": 7,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -144.19421,
+      -223.99062,
+      381.9975
+    ]
+  },
+  {
+    "eye": [
+      122.495514,
+      -152.32205,
+      169.36029
+    ],
+    "yaw_deg": -68.4101,
+    "pitch_deg": -73.80137,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      805.7244,
+      -132.62137,
+      -15349.014
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      211.72371,
+      -153.00859,
+      381.9952
+    ]
+  },
+  {
+    "eye": [
+      8.55246,
+      194.79623,
+      197.64699
+    ],
+    "yaw_deg": 32.49018,
+    "pitch_deg": 60.00421,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      178.37215,
+      205.05357,
+      2.0002441
+    ],
+    "bounces": 5,
+    "flight_time": 1.8125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      101.516174,
+      253.99844,
+      18.079102
+    ]
+  },
+  {
+    "eye": [
+      122.04233,
+      111.60553,
+      99.08673
+    ],
+    "yaw_deg": 62.86725,
+    "pitch_deg": -75.770294,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      168.08011,
+      201.44424,
+      2.0002608
+    ],
+    "bounces": 4,
+    "flight_time": 3.28125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      157.19699,
+      180.20674,
+      2.0026066
+    ]
+  },
+  {
+    "eye": [
+      -178.4716,
+      16.153687,
+      134.83505
+    ],
+    "yaw_deg": -72.62843,
+    "pitch_deg": -63.334854,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -115.009995,
+      -186.70068,
+      2.0002198
+    ],
+    "bounces": 6,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -158.51802,
+      -47.62963,
+      381.99557
+    ]
+  },
+  {
+    "eye": [
+      -152.56529,
+      -30.48027,
+      110.01392
+    ],
+    "yaw_deg": -80.21967,
+    "pitch_deg": -3.123085,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -14.690678,
+      185.66084,
+      2.0002003
+    ],
+    "bounces": 6,
+    "flight_time": 3.34375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -114.036606,
+      -253.99492,
+      260.10718
+    ]
+  },
+  {
+    "eye": [
+      148.15387,
+      -132.69171,
+      48.391174
+    ],
+    "yaw_deg": -64.87899,
+    "pitch_deg": -72.7448,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      1411.5872,
+      206.06714,
+      -13297.498
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99765,
+      -108.26973,
+      221.27824
+    ]
+  },
+  {
+    "eye": [
+      84.655426,
+      -182.1174,
+      251.84877
+    ],
+    "yaw_deg": 71.20917,
+    "pitch_deg": -80.77879,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      109.16034,
+      -110.09651,
+      2.0001986
+    ],
+    "bounces": 6,
+    "flight_time": 4.03125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      91.34188,
+      -162.46602,
+      381.99734
+    ]
+  },
+  {
+    "eye": [
+      68.18402,
+      57.869843,
+      224.5858
+    ],
+    "yaw_deg": -33.323776,
+    "pitch_deg": -4.6050262,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      2372.9868,
+      -1457.4769,
+      -14487.312
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99573,
+      -64.2961,
+      264.43903
+    ]
+  },
+  {
+    "eye": [
+      -71.419876,
+      -184.02528,
+      112.4818
+    ],
+    "yaw_deg": -67.1065,
+    "pitch_deg": 21.514969,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      19.644705,
+      -108.3236,
+      2.000264
+    ],
+    "bounces": 5,
+    "flight_time": 3.1875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -41.87137,
+      -253.99858,
+      176.66112
+    ]
+  },
+  {
+    "eye": [
+      -167.8442,
+      66.782776,
+      172.71033
+    ],
+    "yaw_deg": 69.212616,
+    "pitch_deg": -4.4315186,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      79.56942,
+      -210.54082,
+      2.000188
+    ],
+    "bounces": 6,
+    "flight_time": 4.6875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -96.77537,
+      253.99689,
+      332.67905
+    ]
+  },
+  {
+    "eye": [
+      144.8732,
+      -74.911736,
+      99.11011
+    ],
+    "yaw_deg": 72.6694,
+    "pitch_deg": -78.28483,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -125.35507,
+      147.91025,
+      2.000223
+    ],
+    "bounces": 6,
+    "flight_time": 4.15625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      76.80052,
+      -16.192715,
+      381.99335
+    ]
+  },
+  {
+    "eye": [
+      72.40964,
+      114.22446,
+      193.30247
+    ],
+    "yaw_deg": 43.805435,
+    "pitch_deg": -35.50956,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00578,
+      219.59596,
+      2.000221
+    ],
+    "bounces": 13,
+    "flight_time": 3.21875,
+    "lost": false,
+    "glass_breaks": 8,
+    "first_touch": [
+      218.1378,
+      253.99918,
+      120.864044
+    ]
+  },
+  {
+    "eye": [
+      -15.615036,
+      -182.92761,
+      156.87012
+    ],
+    "yaw_deg": -87.02647,
+    "pitch_deg": 87.04501,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -14.087387,
+      -212.3396,
+      2.0001967
+    ],
+    "bounces": 5,
+    "flight_time": 2.953125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -15.193377,
+      -191.04507,
+      2.004135
+    ]
+  },
+  {
+    "eye": [
+      0.94825745,
+      20.567703,
+      110.23487
+    ],
+    "yaw_deg": -5.951706,
+    "pitch_deg": -22.420822,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.02454,
+      -5.8161592,
+      191.1379
+    ],
+    "bounces": 1094,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1094,
+    "first_touch": [
+      253.99545,
+      -5.813002,
+      368.25754
+    ]
+  },
+  {
+    "eye": [
+      174.1925,
+      92.30893,
+      73.70369
+    ],
+    "yaw_deg": 50.37509,
+    "pitch_deg": 88.71095,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      178.63728,
+      97.6752,
+      2.0002022
+    ],
+    "bounces": 4,
+    "flight_time": 2.046875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      177.46642,
+      96.26224,
+      2.0017474
+    ]
+  },
+  {
+    "eye": [
+      177.85184,
+      -72.51068,
+      298.27377
+    ],
+    "yaw_deg": 11.491211,
+    "pitch_deg": -82.92888,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      167.41234,
+      198.6647,
+      2.000218
+    ],
+    "bounces": 6,
+    "flight_time": 3.875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      178.61798,
+      -50.9859,
+      381.9946
+    ]
+  },
+  {
+    "eye": [
+      -7.9600067,
+      24.138184,
+      31.749695
+    ],
+    "yaw_deg": 83.480194,
+    "pitch_deg": 56.198105,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      27.036446,
+      177.639,
+      2.0001733
+    ],
+    "bounces": 6,
+    "flight_time": 2.8125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -5.376933,
+      46.74007,
+      2.0042684
+    ]
+  },
+  {
+    "eye": [
+      72.13031,
+      -151.26689,
+      107.004166
+    ],
+    "yaw_deg": -82.732735,
+    "pitch_deg": 29.713531,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      89.858505,
+      -217.71068,
+      2.0002568
+    ],
+    "bounces": 4,
+    "flight_time": 1.34375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      85.23099,
+      -253.99857,
+      26.662252
+    ]
+  },
+  {
+    "eye": [
+      -125.34008,
+      102.7655,
+      82.80833
+    ],
+    "yaw_deg": -10.937614,
+    "pitch_deg": -77.08218,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -16.424877,
+      81.718834,
+      2.0001924
+    ],
+    "bounces": 6,
+    "flight_time": 4.125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -86.76229,
+      95.310295,
+      381.9955
+    ]
+  },
+  {
+    "eye": [
+      132.9386,
+      -98.06696,
+      60.719463
+    ],
+    "yaw_deg": -12.361603,
+    "pitch_deg": -15.356087,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      2627.2134,
+      -644.69855,
+      -13316.734
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99529,
+      -124.59797,
+      185.13437
+    ]
+  },
+  {
+    "eye": [
+      139.19452,
+      116.424835,
+      241.56888
+    ],
+    "yaw_deg": 85.08624,
+    "pitch_deg": -8.493698,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -142.25142,
+      162.03185,
+      2.0002017
+    ],
+    "bounces": 7,
+    "flight_time": 4.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      5.514541,
+      233.95154,
+      381.99854
+    ]
+  },
+  {
+    "eye": [
+      -107.85989,
+      28.317017,
+      272.80533
+    ],
+    "yaw_deg": 52.476807,
+    "pitch_deg": -55.656456,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      59.01043,
+      245.60405,
+      2.0001805
+    ],
+    "bounces": 6,
+    "flight_time": 4.0625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -63.89261,
+      85.56814,
+      381.99774
+    ]
+  },
+  {
+    "eye": [
+      175.33154,
+      -18.409424,
+      83.59815
+    ],
+    "yaw_deg": 26.287514,
+    "pitch_deg": 75.65378,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      247.43175,
+      17.204893,
+      2.000283
+    ],
+    "bounces": 4,
+    "flight_time": 1.84375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      195.81915,
+      -8.289366,
+      2.0053146
+    ]
+  },
+  {
+    "eye": [
+      -24.558594,
+      -106.33525,
+      61.374275
+    ],
+    "yaw_deg": -62.1959,
+    "pitch_deg": 6.667778,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      127.1425,
+      -113.985725,
+      2.0002558
+    ],
+    "bounces": 5,
+    "flight_time": 3.609375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      53.30903,
+      -253.99861,
+      197.99782
+    ]
+  },
+  {
+    "eye": [
+      60.35074,
+      189.88943,
+      240.39816
+    ],
+    "yaw_deg": 55.38011,
+    "pitch_deg": 64.632675,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      178.75644,
+      146.59631,
+      2.0002816
+    ],
+    "bounces": 5,
+    "flight_time": 2.890625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      104.60965,
+      253.99867,
+      190.78224
+    ]
+  },
+  {
+    "eye": [
+      -187.08673,
+      52.731247,
+      172.04057
+    ],
+    "yaw_deg": -76.311195,
+    "pitch_deg": 27.30095,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01015,
+      -15.186416,
+      2.0002456
+    ],
+    "bounces": 14,
+    "flight_time": 2.78125,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      57.215366,
+      -253.99576,
+      167.20735
+    ]
+  },
+  {
+    "eye": [
+      56.704193,
+      110.63379,
+      69.94406
+    ],
+    "yaw_deg": 33.154465,
+    "pitch_deg": 41.260635,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      164.45212,
+      181.0196,
+      2.0001733
+    ],
+    "bounces": 4,
+    "flight_time": 1.4375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      114.13893,
+      148.1528,
+      2.001776
+    ]
+  },
+  {
+    "eye": [
+      -35.78221,
+      53.50917,
+      297.9674
+    ],
+    "yaw_deg": 38.08287,
+    "pitch_deg": 25.850243,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.0087,
+      227.40207,
+      2.0003185
+    ],
+    "bounces": 14,
+    "flight_time": 2.375,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      220.06845,
+      253.998,
+      98.81211
+    ]
+  },
+  {
+    "eye": [
+      30.881958,
+      -72.006355,
+      241.07184
+    ],
+    "yaw_deg": 25.614815,
+    "pitch_deg": 5.79055,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.02328,
+      34.976048,
+      221.73204
+    ],
+    "bounces": 1120,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1120,
+    "first_touch": [
+      253.99525,
+      34.962574,
+      357.7065
+    ]
+  },
+  {
+    "eye": [
+      -138.76736,
+      59.468353,
+      199.67111
+    ],
+    "yaw_deg": 39.84587,
+    "pitch_deg": 16.859734,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      204.0311,
+      162.45792,
+      2.0003154
+    ],
+    "bounces": 5,
+    "flight_time": 4.296875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      94.336174,
+      253.999,
+      235.24236
+    ]
+  },
+  {
+    "eye": [
+      133.73398,
+      -57.60005,
+      122.5753
+    ],
+    "yaw_deg": -84.6792,
+    "pitch_deg": -38.48283,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01788,
+      -170.71687,
+      2.0001788
+    ],
+    "bounces": 25,
+    "flight_time": 3.46875,
+    "lost": false,
+    "glass_breaks": 21,
+    "first_touch": [
+      253.99739,
+      -170.69931,
+      340.2495
+    ]
+  },
+  {
+    "eye": [
+      -135.759,
+      -67.62404,
+      59.997364
+    ],
+    "yaw_deg": -56.425003,
+    "pitch_deg": -82.74011,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -77.755264,
+      -155.0079,
+      2.0002108
+    ],
+    "bounces": 6,
+    "flight_time": 4.25,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -112.89875,
+      -102.06447,
+      381.99603
+    ]
+  },
+  {
+    "eye": [
+      -103.819405,
+      54.243637,
+      28.454613
+    ],
+    "yaw_deg": 61.262314,
+    "pitch_deg": 3.979248,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -27.151049,
+      194.06267,
+      2.0001173
+    ],
+    "bounces": 4,
+    "flight_time": 1.171875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -49.223007,
+      153.81006,
+      2.001067
+    ]
+  },
+  {
+    "eye": [
+      -99.24947,
+      119.2695,
+      181.83177
+    ],
+    "yaw_deg": 59.79875,
+    "pitch_deg": 48.230774,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      67.53657,
+      102.17263,
+      2.0002267
+    ],
+    "bounces": 5,
+    "flight_time": 2.671875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -20.832056,
+      253.99785,
+      144.67978
+    ]
+  },
+  {
+    "eye": [
+      99.609924,
+      -150.41322,
+      107.742065
+    ],
+    "yaw_deg": 68.680084,
+    "pitch_deg": -76.65016,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      153.583,
+      -12.118111,
+      2.0002291
+    ],
+    "bounces": 6,
+    "flight_time": 4.125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      113.89225,
+      -113.81857,
+      381.99332
+    ]
+  },
+  {
+    "eye": [
+      72.31546,
+      107.81021,
+      254.11649
+    ],
+    "yaw_deg": -78.146866,
+    "pitch_deg": -66.99489,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      763.02655,
+      88.31615,
+      -14315.52
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      146.31958,
+      100.85782,
+      381.99695
+    ]
+  },
+  {
+    "eye": [
+      -190.04646,
+      -122.824104,
+      139.46309
+    ],
+    "yaw_deg": -57.679893,
+    "pitch_deg": -26.527111,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      64.12791,
+      16.581831,
+      2.0003066
+    ],
+    "bounces": 5,
+    "flight_time": 3.546875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -107.05779,
+      -253.99759,
+      218.40067
+    ]
+  },
+  {
+    "eye": [
+      -77.77706,
+      69.771484,
+      226.7426
+    ],
+    "yaw_deg": 86.727905,
+    "pitch_deg": 65.168884,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -65.96404,
+      231.59596,
+      2.0002549
+    ],
+    "bounces": 5,
+    "flight_time": 2.28125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -71.574554,
+      178.2618,
+      2.005484
+    ]
+  },
+  {
+    "eye": [
+      -139.16891,
+      -36.05246,
+      153.45578
+    ],
+    "yaw_deg": 32.008003,
+    "pitch_deg": 36.3956,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      203.60191,
+      178.2011,
+      2.0002706
+    ],
+    "bounces": 4,
+    "flight_time": 3.375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      118.41725,
+      124.95534,
+      2.0028143
+    ]
+  },
+  {
+    "eye": [
+      90.96884,
+      72.21564,
+      208.71494
+    ],
+    "yaw_deg": -56.77988,
+    "pitch_deg": -75.50567,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      147.4451,
+      -14.022008,
+      2.0001895
+    ],
+    "bounces": 6,
+    "flight_time": 3.953125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      103.897446,
+      52.473675,
+      381.995
+    ]
+  },
+  {
+    "eye": [
+      -125.94072,
+      -190.51176,
+      196.63463
+    ],
+    "yaw_deg": -49.744267,
+    "pitch_deg": -49.488262,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      194.31067,
+      -242.89929,
+      2.000225
+    ],
+    "bounces": 6,
+    "flight_time": 2.40625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -29.109068,
+      -217.16267,
+      381.99405
+    ]
+  },
+  {
+    "eye": [
+      199.53595,
+      64.18652,
+      100.90799
+    ],
+    "yaw_deg": -81.2401,
+    "pitch_deg": -16.854225,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      245.4477,
+      -233.75845,
+      2.0002265
+    ],
+    "bounces": 4,
+    "flight_time": 2.453125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      233.13017,
+      -153.82275,
+      2.0021346
+    ]
+  },
+  {
+    "eye": [
+      92.09494,
+      61.826508,
+      232.06738
+    ],
+    "yaw_deg": -80.85261,
+    "pitch_deg": -27.27472,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      198.97034,
+      93.89996,
+      2.00016
+    ],
+    "bounces": 6,
+    "flight_time": 4.59375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      142.94981,
+      -253.9972,
+      335.4386
+    ]
+  },
+  {
+    "eye": [
+      1.2063446,
+      81.98456,
+      118.43311
+    ],
+    "yaw_deg": -26.36504,
+    "pitch_deg": -50.795406,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.01044,
+      -43.316444,
+      2.0003178
+    ],
+    "bounces": 14,
+    "flight_time": 2.84375,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      108.58189,
+      28.764555,
+      381.99426
+    ]
+  },
+  {
+    "eye": [
+      -176.80768,
+      -0.7384491,
+      130.06894
+    ],
+    "yaw_deg": -79.40601,
+    "pitch_deg": -87.362366,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -174.45079,
+      -13.357218,
+      2.0001671
+    ],
+    "bounces": 6,
+    "flight_time": 4.296875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -175.81682,
+      -6.0348563,
+      381.99768
+    ]
+  },
+  {
+    "eye": [
+      126.936554,
+      -8.757919,
+      299.88184
+    ],
+    "yaw_deg": 58.171143,
+    "pitch_deg": -52.819836,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      25.1125,
+      219.2714,
+      2.0001922
+    ],
+    "bounces": 7,
+    "flight_time": 3.890625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      121.1782,
+      26.893206,
+      381.99518
+    ]
+  },
+  {
+    "eye": [
+      32.111526,
+      -107.49098,
+      157.77986
+    ],
+    "yaw_deg": 39.42314,
+    "pitch_deg": 54.61534,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00319,
+      74.92254,
+      2.0003104
+    ],
+    "bounces": 13,
+    "flight_time": 2.25,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      124.091446,
+      -31.875505,
+      2.0047145
+    ]
+  },
+  {
+    "eye": [
+      12.269714,
+      -148.45993,
+      291.98972
+    ],
+    "yaw_deg": 46.087494,
+    "pitch_deg": -16.437492,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      437.5479,
+      293.27304,
+      -9872.234
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      233.09863,
+      80.91509,
+      2.003472
+    ]
+  },
+  {
+    "eye": [
+      125.60095,
+      -93.50198,
+      121.58791
+    ],
+    "yaw_deg": -12.513908,
+    "pitch_deg": -45.166546,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.01787,
+      -122.00369,
+      103.99724
+    ],
+    "bounces": 1059,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1058,
+    "first_touch": [
+      250.87259,
+      -121.305725,
+      381.99628
+    ]
+  },
+  {
+    "eye": [
+      127.86609,
+      -182.29971,
+      284.1299
+    ],
+    "yaw_deg": 5.5062485,
+    "pitch_deg": -47.39983,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.0166,
+      -170.13882,
+      2.0001836
+    ],
+    "bounces": 25,
+    "flight_time": 3.171875,
+    "lost": false,
+    "glass_breaks": 20,
+    "first_touch": [
+      168.18431,
+      -178.41301,
+      381.99387
+    ]
+  },
+  {
+    "eye": [
+      36.71634,
+      150.78107,
+      246.54088
+    ],
+    "yaw_deg": 56.645264,
+    "pitch_deg": 18.49578,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -147.71342,
+      -97.90123,
+      2.0001705
+    ],
+    "bounces": 6,
+    "flight_time": 4.140625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      6.0139985,
+      253.99739,
+      309.69492
+    ]
+  },
+  {
+    "eye": [
+      161.67004,
+      -155.62099,
+      102.92471
+    ],
+    "yaw_deg": -11.833733,
+    "pitch_deg": 75.436584,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00606,
+      -174.96753,
+      2.0002458
+    ],
+    "bounces": 13,
+    "flight_time": 2.515625,
+    "lost": false,
+    "glass_breaks": 9,
+    "first_touch": [
+      188.70198,
+      -161.28477,
+      2.0037704
+    ]
+  },
+  {
+    "eye": [
+      -98.961044,
+      178.08362,
+      29.503944
+    ],
+    "yaw_deg": 53.78514,
+    "pitch_deg": -31.251354,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      229.04567,
+      -118.01176,
+      2.0002232
+    ],
+    "bounces": 5,
+    "flight_time": 3.015625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -43.370987,
+      253.99664,
+      98.70159
+    ]
+  },
+  {
+    "eye": [
+      -185.30211,
+      -76.320694,
+      72.215164
+    ],
+    "yaw_deg": -65.42253,
+    "pitch_deg": 82.1913,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      -167.96542,
+      -114.22869,
+      2.0001726
+    ],
+    "bounces": 4,
+    "flight_time": 2.015625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -172.57994,
+      -104.13824,
+      2.001741
+    ]
+  },
+  {
+    "eye": [
+      -149.82556,
+      150.1323,
+      270.48932
+    ],
+    "yaw_deg": 68.36621,
+    "pitch_deg": 80.667404,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -105.13102,
+      245.17497,
+      2.0002842
+    ],
+    "bounces": 5,
+    "flight_time": 3,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -122.266846,
+      219.6179,
+      2.003479
+    ]
+  },
+  {
+    "eye": [
+      38.021347,
+      34.28772,
+      255.49457
+    ],
+    "yaw_deg": -18.23793,
+    "pitch_deg": 65.49812,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.00821,
+      136.22485,
+      2.0002794
+    ],
+    "bounces": 14,
+    "flight_time": 1.859375,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99695,
+      136.21921,
+      45.69603
+    ]
+  },
+  {
+    "eye": [
+      -129.06343,
+      92.748505,
+      25.924446
+    ],
+    "yaw_deg": -22.52378,
+    "pitch_deg": -87.66191,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -115.92127,
+      87.29824,
+      2.000204
+    ],
+    "bounces": 4,
+    "flight_time": 2.703125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -118.77163,
+      88.4798,
+      2.0020225
+    ]
+  },
+  {
+    "eye": [
+      -186.38376,
+      -81.78758,
+      139.5708
+    ],
+    "yaw_deg": -77.15057,
+    "pitch_deg": 5.2793274,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -92.29748,
+      -13.729482,
+      2.0002208
+    ],
+    "bounces": 5,
+    "flight_time": 2.546875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -147.10233,
+      -253.99667,
+      130.76776
+    ]
+  },
+  {
+    "eye": [
+      -18.73967,
+      -189.80048,
+      141.87302
+    ],
+    "yaw_deg": 63.527054,
+    "pitch_deg": 17.417137,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      729.22107,
+      -804.12665,
+      -13027.34
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      202.26704,
+      253.99535,
+      200.39565
+    ]
+  },
+  {
+    "eye": [
+      52.744156,
+      103.54303,
+      289.20236
+    ],
+    "yaw_deg": 58.75145,
+    "pitch_deg": 61.56729,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      160.39786,
+      227.03804,
+      2.0002015
+    ],
+    "bounces": 5,
+    "flight_time": 3.078125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      144.03746,
+      253.9993,
+      56.08684
+    ]
+  },
+  {
+    "eye": [
+      150.85745,
+      27.70874,
+      277.91028
+    ],
+    "yaw_deg": 57.263214,
+    "pitch_deg": -24.817299,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      118.55463,
+      132.27592,
+      2.0003166
+    ],
+    "bounces": 6,
+    "flight_time": 3.3125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      149.347,
+      114.22066,
+      381.99643
+    ]
+  },
+  {
+    "eye": [
+      -157.95767,
+      40.81047,
+      194.78316
+    ],
+    "yaw_deg": -46.3258,
+    "pitch_deg": -9.51915,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      948.88214,
+      610.4748,
+      -12684.776
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      123.512,
+      -253.99638,
+      270.7515
+    ]
+  },
+  {
+    "eye": [
+      -143.59018,
+      -53.49745,
+      110.2027
+    ],
+    "yaw_deg": -28.151707,
+    "pitch_deg": 38.00641,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      13.383749,
+      -137.49586,
+      2.000215
+    ],
+    "bounces": 4,
+    "flight_time": 1.84375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -52.98454,
+      -101.98163,
+      2.0021427
+    ]
+  },
+  {
+    "eye": [
+      2.8439026,
+      -79.98583,
+      101.02716
+    ],
+    "yaw_deg": -18.723213,
+    "pitch_deg": -11.061485,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.02156,
+      -165.11899,
+      2.0002043
+    ],
+    "bounces": 16,
+    "flight_time": 3.53125,
+    "lost": false,
+    "glass_breaks": 12,
+    "first_touch": [
+      253.99695,
+      -165.10995,
+      323.71515
+    ]
+  },
+  {
+    "eye": [
+      -163.11263,
+      -170.47517,
+      161.56361
+    ],
+    "yaw_deg": 80.95297,
+    "pitch_deg": -65.99266,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -123.58649,
+      77.75569,
+      2.0002065
+    ],
+    "bounces": 6,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -154.26163,
+      -114.88822,
+      381.99344
+    ]
+  },
+  {
+    "eye": [
+      0.022079468,
+      18.034225,
+      94.57083
+    ],
+    "yaw_deg": -57.99037,
+    "pitch_deg": 70.527405,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      1349.862,
+      458.3467,
+      -14037.847
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99767,
+      95.97909,
+      52.726093
+    ]
+  },
+  {
+    "eye": [
+      0.051254272,
+      -158.86632,
+      131.33603
+    ],
+    "yaw_deg": -6.6810455,
+    "pitch_deg": 9.653564,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.00703,
+      -188.614,
+      54.039513
+    ],
+    "bounces": 1160,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1160,
+    "first_touch": [
+      253.9966,
+      -188.61284,
+      80.33861
+    ]
+  },
+  {
+    "eye": [
+      18.767807,
+      193.95898,
+      240.45917
+    ],
+    "yaw_deg": 59.859085,
+    "pitch_deg": -29.804329,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      254.00305,
+      -91.10057,
+      2.0002117
+    ],
+    "bounces": 21,
+    "flight_time": 4.296875,
+    "lost": false,
+    "glass_breaks": 16,
+    "first_touch": [
+      53.627556,
+      253.99634,
+      290.07626
+    ]
+  },
+  {
+    "eye": [
+      -120.78916,
+      108.88394,
+      210.68059
+    ],
+    "yaw_deg": -46.14433,
+    "pitch_deg": 4.6606903,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      251.6474,
+      -229.26382,
+      2.0001888
+    ],
+    "bounces": 5,
+    "flight_time": 3.59375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      225.76207,
+      -251.79436,
+      2.0037353
+    ]
+  },
+  {
+    "eye": [
+      116.177795,
+      32.355682,
+      82.51848
+    ],
+    "yaw_deg": 15.157051,
+    "pitch_deg": 27.939728,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      1785.5782,
+      484.591,
+      -14819.613
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.9969,
+      69.689384,
+      118.62676
+    ]
+  },
+  {
+    "eye": [
+      -135.91797,
+      55.056076,
+      235.6276
+    ],
+    "yaw_deg": -2.356964,
+    "pitch_deg": 36.063904,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.02425,
+      232.19444,
+      2.000259
+    ],
+    "bounces": 15,
+    "flight_time": 3.171875,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99535,
+      232.18106,
+      149.2905
+    ]
+  },
+  {
+    "eye": [
+      14.201706,
+      -76.5835,
+      85.11782
+    ],
+    "yaw_deg": -37.86468,
+    "pitch_deg": 56.435135,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      95.8272,
+      -140.04613,
+      2.0002315
+    ],
+    "bounces": 4,
+    "flight_time": 1.640625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      53.747894,
+      -107.3301,
+      2.0020888
+    ]
+  },
+  {
+    "eye": [
+      51.92018,
+      95.453,
+      277.11862
+    ],
+    "yaw_deg": 53.813736,
+    "pitch_deg": -44.307713,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      218.31009,
+      185.09073,
+      2.0003254
+    ],
+    "bounces": 6,
+    "flight_time": 3.828125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      113.90541,
+      180.18752,
+      381.99823
+    ]
+  },
+  {
+    "eye": [
+      52.6335,
+      49.007202,
+      164.09242
+    ],
+    "yaw_deg": -65.9159,
+    "pitch_deg": -88.53555,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      58.90479,
+      34.976784,
+      2.0002196
+    ],
+    "bounces": 6,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      53.980556,
+      45.99365,
+      381.99307
+    ]
+  },
+  {
+    "eye": [
+      82.75952,
+      14.22493,
+      173.01086
+    ],
+    "yaw_deg": -1.4142761,
+    "pitch_deg": -84.378456,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      107.52229,
+      13.647127,
+      2.000213
+    ],
+    "bounces": 6,
+    "flight_time": 4.203125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      91.86756,
+      14.000076,
+      381.99738
+    ]
+  },
+  {
+    "eye": [
+      -61.42061,
+      -123.41523,
+      285.15912
+    ],
+    "yaw_deg": 81.19743,
+    "pitch_deg": 1.0023346,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      -248.45583,
+      212.08438,
+      2.0002167
+    ],
+    "bounces": 7,
+    "flight_time": 2.828125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -117.13868,
+      9.240853,
+      381.99796
+    ]
+  },
+  {
+    "eye": [
+      61.324707,
+      -31.059631,
+      239.7999
+    ],
+    "yaw_deg": 11.768677,
+    "pitch_deg": 70.9583,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      229.17496,
+      3.9105182,
+      2.0003157
+    ],
+    "bounces": 4,
+    "flight_time": 2.25,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      144.94308,
+      -13.638518,
+      2.0057285
+    ]
+  },
+  {
+    "eye": [
+      -135.21417,
+      148.47668,
+      117.47343
+    ],
+    "yaw_deg": 61.984863,
+    "pitch_deg": -86.954185,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -124.497894,
+      168.6197,
+      2.0002866
+    ],
+    "bounces": 4,
+    "flight_time": 3.453125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -127.05538,
+      163.81126,
+      2.0027654
+    ]
+  },
+  {
+    "eye": [
+      28.178406,
+      -107.811806,
+      68.26197
+    ],
+    "yaw_deg": 14.985291,
+    "pitch_deg": 12.581413,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      1861.0785,
+      382.80255,
+      -13955.474
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.9967,
+      -47.366013,
+      168.5274
+    ]
+  },
+  {
+    "eye": [
+      -116.06522,
+      -188.20177,
+      90.25129
+    ],
+    "yaw_deg": -23.185326,
+    "pitch_deg": 86.147964,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -69.27742,
+      -208.24168,
+      2.0001755
+    ],
+    "bounces": 5,
+    "flight_time": 2.625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -104.422005,
+      -193.18864,
+      2.0036669
+    ]
+  },
+  {
+    "eye": [
+      189.62204,
+      -165.66876,
+      265.25754
+    ],
+    "yaw_deg": -7.8022156,
+    "pitch_deg": 5.176407,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      1201.0294,
+      968.44653,
+      -14148.068
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99811,
+      -112.40513,
+      331.98853
+    ]
+  },
+  {
+    "eye": [
+      -114.12414,
+      124.41467,
+      120.43992
+    ],
+    "yaw_deg": -80.576675,
+    "pitch_deg": -75.01915,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -83.72367,
+      -58.75554,
+      2.0001907
+    ],
+    "bounces": 6,
+    "flight_time": 4.671875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -99.5964,
+      36.882027,
+      381.99875
+    ]
+  },
+  {
+    "eye": [
+      -141.82509,
+      -29.533081,
+      252.67926
+    ],
+    "yaw_deg": -46.633797,
+    "pitch_deg": 77.077255,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -62.78347,
+      -113.216576,
+      2.0003014
+    ],
+    "bounces": 4,
+    "flight_time": 2.21875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -100.873955,
+      -72.88884,
+      2.0059388
+    ]
+  },
+  {
+    "eye": [
+      -50.724808,
+      -18.279724,
+      133.81828
+    ],
+    "yaw_deg": -3.462532,
+    "pitch_deg": -72.85759,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      32.45443,
+      -23.312643,
+      2.0001864
+    ],
+    "bounces": 6,
+    "flight_time": 4.328125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -15.609951,
+      -20.40438,
+      381.99777
+    ]
+  },
+  {
+    "eye": [
+      -141.43542,
+      -120.128975,
+      251.96385
+    ],
+    "yaw_deg": 88.77379,
+    "pitch_deg": -39.369934,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -134.51312,
+      203.29587,
+      2.000191
+    ],
+    "bounces": 6,
+    "flight_time": 3.890625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -140.02156,
+      -54.08277,
+      381.99585
+    ]
+  },
+  {
+    "eye": [
+      36.2742,
+      -119.36846,
+      224.88535
+    ],
+    "yaw_deg": -83.020836,
+    "pitch_deg": 14.548439,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      877.2102,
+      996.7744,
+      -13408.502
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      111.004166,
+      -253.99509,
+      281.55267
+    ]
+  },
+  {
+    "eye": [
+      -91.155136,
+      -90.3147,
+      162.09799
+    ],
+    "yaw_deg": 76.87727,
+    "pitch_deg": 38.635033,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      -40.923717,
+      125.15414,
+      2.0002673
+    ],
+    "bounces": 4,
+    "flight_time": 2.296875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -61.5644,
+      36.614998,
+      2.0025885
+    ]
+  },
+  {
+    "eye": [
+      146.62732,
+      -108.74501,
+      106.4732
+    ],
+    "yaw_deg": 81.88156,
+    "pitch_deg": 25.367668,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      199.61919,
+      245.26538,
+      2.0001292
+    ],
+    "bounces": 5,
+    "flight_time": 1.59375,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      176.39392,
+      99.924034,
+      2.0022514
+    ]
+  },
+  {
+    "eye": [
+      -145.34305,
+      139.54724,
+      215.41718
+    ],
+    "yaw_deg": 18.615616,
+    "pitch_deg": 75.36374,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      101.27932,
+      222.61772,
+      2.0001984
+    ],
+    "bounces": 5,
+    "flight_time": 3.1875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -52.550964,
+      170.80305,
+      2.004165
+    ]
+  },
+  {
+    "eye": [
+      36.661148,
+      167.91006,
+      236.46797
+    ],
+    "yaw_deg": 48.18007,
+    "pitch_deg": 6.291214,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.00418,
+      97.173134,
+      2.000266
+    ],
+    "bounces": 12,
+    "flight_time": 4.109375,
+    "lost": false,
+    "glass_breaks": 7,
+    "first_touch": [
+      113.68746,
+      253.99881,
+      354.36978
+    ]
+  },
+  {
+    "eye": [
+      -172.97575,
+      137.03366,
+      34.53015
+    ],
+    "yaw_deg": -53.57662,
+    "pitch_deg": 17.00946,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.01773,
+      -14.257741,
+      2.0001986
+    ],
+    "bounces": 15,
+    "flight_time": 3.015625,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99608,
+      -14.250696,
+      112.629074
+    ]
+  },
+  {
+    "eye": [
+      -25.203796,
+      -112.768425,
+      116.35584
+    ],
+    "yaw_deg": -25.474483,
+    "pitch_deg": 14.254669,
+    "throw_type": 0,
+    "strength": 1,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.01303,
+      -245.7956,
+      2.0002668
+    ],
+    "bounces": 20,
+    "flight_time": 1.53125,
+    "lost": false,
+    "glass_breaks": 18,
+    "first_touch": [
+      253.99527,
+      -245.78732,
+      54.195656
+    ]
+  },
+  {
+    "eye": [
+      -128.47298,
+      90.30899,
+      282.46277
+    ],
+    "yaw_deg": 55.758102,
+    "pitch_deg": 80.4565,
+    "throw_type": 1,
+    "strength": 0,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      -94.456474,
+      140.28366,
+      2.0001776
+    ],
+    "bounces": 5,
+    "flight_time": 3.125,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -109.89966,
+      117.59586,
+      2.0035765
+    ]
+  },
+  {
+    "eye": [
+      40.373474,
+      -55.808548,
+      176.92892
+    ],
+    "yaw_deg": -8.458771,
+    "pitch_deg": -61.53716,
+    "throw_type": 2,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      249.87932,
+      -86.96537,
+      2.0002081
+    ],
+    "bounces": 6,
+    "flight_time": 4.015625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      97.624214,
+      -64.3226,
+      381.99542
+    ]
+  },
+  {
+    "eye": [
+      -130.87341,
+      126.69516,
+      217.85873
+    ],
+    "yaw_deg": 67.98514,
+    "pitch_deg": 78.45003,
+    "throw_type": 3,
+    "strength": 1,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      -66.80691,
+      222.8527,
+      2.0002038
+    ],
+    "bounces": 6,
+    "flight_time": 3.296875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -101.85432,
+      198.46614,
+      2.0042138
+    ]
+  },
+  {
+    "eye": [
+      -91.01728,
+      169.41315,
+      133.86795
+    ],
+    "yaw_deg": -7.9705734,
+    "pitch_deg": -24.717201,
+    "throw_type": 4,
+    "strength": 0,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      217.98267,
+      -47.79247,
+      2.0003057
+    ],
+    "bounces": 5,
+    "flight_time": 4.046875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      -11.753166,
+      253.99782,
+      258.92273
+    ]
+  },
+  {
+    "eye": [
+      -142.69545,
+      -116.13621,
+      298.3932
+    ],
+    "yaw_deg": -3.7601166,
+    "pitch_deg": 35.889122,
+    "throw_type": 0,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      254.01094,
+      -142.20854,
+      2.0003316
+    ],
+    "bounces": 14,
+    "flight_time": 2.78125,
+    "lost": false,
+    "glass_breaks": 10,
+    "first_touch": [
+      183.71107,
+      -137.5881,
+      2.003768
+    ]
+  },
+  {
+    "eye": [
+      171.78708,
+      -199.2989,
+      58.03542
+    ],
+    "yaw_deg": -13.906189,
+    "pitch_deg": 80.65686,
+    "throw_type": 1,
+    "strength": 1,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      215.8676,
+      -210.21313,
+      2.000274
+    ],
+    "bounces": 4,
+    "flight_time": 1.75,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      181.64854,
+      -201.7405,
+      2.0053334
+    ]
+  },
+  {
+    "eye": [
+      42.98291,
+      162.05481,
+      215.21835
+    ],
+    "yaw_deg": -8.243034,
+    "pitch_deg": -88.904205,
+    "throw_type": 2,
+    "strength": 0,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      47.333477,
+      161.46219,
+      2.0002003
+    ],
+    "bounces": 6,
+    "flight_time": 4.0625,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      44.34977,
+      161.8566,
+      381.9971
+    ]
+  },
+  {
+    "eye": [
+      -9.815521,
+      189.69608,
+      49.263016
+    ],
+    "yaw_deg": 40.58438,
+    "pitch_deg": -27.02203,
+    "throw_type": 3,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      663.9105,
+      -258.84106,
+      -11676.828
+    ],
+    "bounces": 2,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      65.24862,
+      253.99815,
+      192.42287
+    ]
+  },
+  {
+    "eye": [
+      -112.05472,
+      197.59155,
+      25.184654
+    ],
+    "yaw_deg": -62.294037,
+    "pitch_deg": 17.45784,
+    "throw_type": 4,
+    "strength": 1,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      254.0171,
+      -92.797615,
+      2.000201
+    ],
+    "bounces": 15,
+    "flight_time": 2.578125,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99547,
+      -92.780556,
+      88.537544
+    ]
+  },
+  {
+    "eye": [
+      87.08392,
+      -27.23375,
+      276.64792
+    ],
+    "yaw_deg": -13.056335,
+    "pitch_deg": -17.139122,
+    "throw_type": 0,
+    "strength": 0,
+    "run_yaw_offset_deg": -90,
+    "rest": [
+      906.62244,
+      -217.2934,
+      -13818.165
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.9986,
+      -65.94197,
+      240.05406
+    ]
+  },
+  {
+    "eye": [
+      -57.96144,
+      26.704056,
+      184.93092
+    ],
+    "yaw_deg": -57.175133,
+    "pitch_deg": -58.847565,
+    "throw_type": 1,
+    "strength": 0.5,
+    "run_yaw_offset_deg": -45,
+    "rest": [
+      121.389534,
+      -251.32887,
+      2.000185
+    ],
+    "bounces": 6,
+    "flight_time": 4.46875,
+    "lost": false,
+    "glass_breaks": 0,
+    "first_touch": [
+      16.682137,
+      -89.00976,
+      381.99857
+    ]
+  },
+  {
+    "eye": [
+      152.3902,
+      -79.25093,
+      30.840942
+    ],
+    "yaw_deg": 1.0220566,
+    "pitch_deg": 13.12587,
+    "throw_type": 2,
+    "strength": 1,
+    "run_yaw_offset_deg": 0,
+    "rest": [
+      254.01907,
+      -77.437485,
+      2.0001855
+    ],
+    "bounces": 15,
+    "flight_time": 2.015625,
+    "lost": false,
+    "glass_breaks": 11,
+    "first_touch": [
+      253.99475,
+      -77.438255,
+      81.03382
+    ]
+  },
+  {
+    "eye": [
+      -28.35884,
+      -56.004517,
+      88.160255
+    ],
+    "yaw_deg": -36.64043,
+    "pitch_deg": -18.240631,
+    "throw_type": 3,
+    "strength": 0,
+    "run_yaw_offset_deg": 45,
+    "rest": [
+      254.02037,
+      -241.96898,
+      2.0003204
+    ],
+    "bounces": 20,
+    "flight_time": 3.8125,
+    "lost": false,
+    "glass_breaks": 17,
+    "first_touch": [
+      237.84653,
+      -253.99915,
+      261.93677
+    ]
+  },
+  {
+    "eye": [
+      183.63107,
+      182.23468,
+      54.95121
+    ],
+    "yaw_deg": -65.27098,
+    "pitch_deg": -25.78246,
+    "throw_type": 4,
+    "strength": 0.5,
+    "run_yaw_offset_deg": 90,
+    "rest": [
+      1956.1855,
+      -674.636,
+      -13526.564
+    ],
+    "bounces": 1,
+    "flight_time": 10,
+    "lost": true,
+    "glass_breaks": 1,
+    "first_touch": [
+      253.99663,
+      139.08255,
+      156.79054
+    ]
+  }
+]

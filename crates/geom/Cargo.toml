@@ -11,3 +11,13 @@ workspace = true
 [dependencies]
 thiserror = { workspace = true }
 crc32fast = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+criterion = "0.5"
+
+[[bench]]
+name = "queries"
+harness = false

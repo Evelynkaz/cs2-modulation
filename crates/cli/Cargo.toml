@@ -22,4 +22,5 @@ calib = { workspace = true }
 server = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }

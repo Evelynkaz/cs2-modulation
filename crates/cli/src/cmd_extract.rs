@@ -30,14 +30,14 @@ fn default_cache_dir() -> anyhow::Result<PathBuf> {
     Ok(root.join("cache"))
 }
 
-fn resolve_cache_root(cache: Option<&Path>) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_cache_root(cache: Option<&Path>) -> anyhow::Result<PathBuf> {
     match cache {
         Some(c) => Ok(c.to_path_buf()),
         None => default_cache_dir(),
     }
 }
 
-fn install_for(game: Option<&Path>) -> anyhow::Result<GameInstall> {
+pub(crate) fn install_for(game: Option<&Path>) -> anyhow::Result<GameInstall> {
     let dir = resolve_game_dir(game)?;
     GameInstall::new(&dir)
         .with_context(|| format!("failed to use game directory {}", dir.display()))
@@ -263,6 +263,29 @@ fn parse_region(spec: &str) -> anyhow::Result<([f32; 3], [f32; 3])> {
         [parts[0], parts[1], parts[2]],
         [parts[3], parts[4], parts[5]],
     ))
+}
+
+/// Loads `map`'s cached mesh for the current build, auto-extracting first if there is none yet.
+pub(crate) fn load_or_extract_mesh(
+    map: &str,
+    game: Option<&Path>,
+    cache: Option<&Path>,
+) -> anyhow::Result<(geom::mesh::CollisionMesh, PathBuf)> {
+    let install = install_for(game)?;
+    let cache_root = resolve_cache_root(cache)?;
+
+    let dir = match cache::find_cached(&cache_root, &install, map)? {
+        Some(dir) => dir,
+        None => {
+            let extraction = extract_map(&install, map, &ExtractOptions::default())
+                .with_context(|| format!("failed to extract {map}"))?;
+            cache::save_extraction(&cache_root, &extraction, false)
+                .with_context(|| format!("failed to write cache for {map}"))?
+        }
+    };
+    let mesh = cache::load_mesh(&dir)
+        .with_context(|| format!("failed to load cached mesh from {}", dir.display()))?;
+    Ok((mesh, dir))
 }
 
 /// `cs2mod export-obj <MAP> --out <FILE.obj>`. Auto-extracts into the cache if there is none yet.

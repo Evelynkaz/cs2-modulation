@@ -98,8 +98,13 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 name = "calib"
 version = "0.1.0"
 dependencies = [
+ "extract",
  "geom",
+ "rayon",
+ "serde",
+ "serde_json",
  "sim",
+ "thiserror",
 ]
 
 [[package]]
@@ -292,6 +297,7 @@ dependencies = [
  "extract",
  "geom",
  "s2fmt",
+ "serde",
  "serde_json",
  "server",
  "sim",
@@ -687,6 +693,9 @@ name = "sim"
 version = "0.1.0"
 dependencies = [
  "geom",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

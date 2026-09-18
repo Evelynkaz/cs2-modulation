@@ -1,3 +1,8 @@
 //! Collision geometry: triangle meshes with per-triangle collision
-//! attributes, attribute filters, BVH ray/box-sweep queries, voxel occupancy
-//! grids and OBJ export.
+//! attributes, attribute filters, a versioned `.cgeo` file format, and OBJ
+//! export.
+
+pub mod cgeo;
+pub mod filter;
+pub mod mesh;
+pub mod obj;

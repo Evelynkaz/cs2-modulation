@@ -9,3 +9,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
+crc32fast = { workspace = true }

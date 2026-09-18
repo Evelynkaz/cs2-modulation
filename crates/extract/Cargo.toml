@@ -11,3 +11,7 @@ workspace = true
 [dependencies]
 s2fmt = { workspace = true }
 geom = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

@@ -8,10 +8,11 @@
 
 ## Статус
 
-Этапы 0–2 сделаны в коде: скелет workspace, документы, CI, VPK, контейнер
-ресурсов и KV3 (`s2fmt`), а также физика, entity lump'ы, world node'ы,
-`.nav` и извлечение геометрии карты (`extract`) — ждём визуальной проверки
-геометрии в Blender. Для разработки доступны команды `cs2mod vpk
+Этапы 0–3 сделаны: скелет workspace, документы, CI, VPK, контейнер
+ресурсов и KV3 (`s2fmt`), физика, entity lump'ы, world node'ы, `.nav` и
+извлечение геометрии карты (`extract`), а также геометрические запросы —
+`UniformGrid`, `Bvh`, `VoxelGrid` (`geom`). Для разработки доступны команды
+`cs2mod vpk
 ls|cat|verify` (например, `cs2mod vpk ls pak01_dir.vpk`), `cs2mod res
 [--vpk] [--block] [--kv3]` (например, `cs2mod res world_physics.vmdl_c
 --kv3`), а также:

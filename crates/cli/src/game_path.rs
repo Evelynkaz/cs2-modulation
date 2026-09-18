@@ -103,7 +103,7 @@ fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
 
 /// Walks up from `dir` to find the nearest ancestor containing `.git`
 /// (a directory for a normal checkout, or a file for a linked worktree).
-fn find_git_root(mut dir: &Path) -> Option<PathBuf> {
+pub(crate) fn find_git_root(mut dir: &Path) -> Option<PathBuf> {
     loop {
         if dir.join(".git").exists() {
             return Some(dir.to_path_buf());

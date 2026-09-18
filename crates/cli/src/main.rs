@@ -1,3 +1,4 @@
+mod cmd_extract;
 mod cmd_res;
 mod cmd_vpk;
 mod game_path;
@@ -15,12 +16,55 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Extract a CS2 map into a collision mesh and cache it.
-    Extract,
+    /// Extract one or more CS2 maps into a collision mesh and cache them.
+    Extract {
+        /// Map name(s) (e.g. `de_mirage`).
+        #[arg(required = true)]
+        maps: Vec<String>,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Re-extract even if a cache entry for this build already exists.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print information about a cached extraction.
-    Info,
-    /// Export a cached collision mesh to an OBJ file.
-    ExportObj,
+    Info {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
+    /// Export a cached collision mesh to an OBJ file, auto-extracting first if there is no cache.
+    ExportObj {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// Output `.obj` path; a `.mtl` is written alongside it.
+        #[arg(long)]
+        out: PathBuf,
+        /// `grenade`, `player`, `all`, or `attrs:Name1,Name2`.
+        #[arg(long, default_value = "all")]
+        filter: String,
+        /// `minx,miny,minz,maxx,maxy,maxz`.
+        #[arg(long)]
+        region: Option<String>,
+        /// Write vertices as Source's native (x,y,z) instead of swapping to Y-up.
+        #[arg(long)]
+        no_y_up: bool,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
     /// Simulate a single grenade throw.
     #[command(alias = "simulate")]
     Throw,
@@ -146,11 +190,32 @@ fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Extract => anyhow::bail!("extract is not implemented yet (planned for stage 2)"),
-        Command::Info => anyhow::bail!("info is not implemented yet (planned for stage 2)"),
-        Command::ExportObj => {
-            anyhow::bail!("export-obj is not implemented yet (planned for stage 2)")
+        Command::Extract {
+            maps,
+            game,
+            cache,
+            force,
+        } => cmd_extract::extract(&maps, game.as_deref(), cache.as_deref(), force),
+        Command::Info { map, game, cache } => {
+            cmd_extract::info(&map, game.as_deref(), cache.as_deref())
         }
+        Command::ExportObj {
+            map,
+            out,
+            filter,
+            region,
+            no_y_up,
+            game,
+            cache,
+        } => cmd_extract::export_obj(
+            &map,
+            &out,
+            &filter,
+            region.as_deref(),
+            !no_y_up,
+            game.as_deref(),
+            cache.as_deref(),
+        ),
         Command::Throw => anyhow::bail!("throw is not implemented yet (planned for stage 4)"),
         Command::Smoke => anyhow::bail!("smoke is not implemented yet (planned for stage 4)"),
         Command::Sightline => {

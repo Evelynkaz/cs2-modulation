@@ -23,6 +23,37 @@ cs2mod info de_mirage
 cs2mod export-obj de_mirage --filter grenade --out cache/obj/de_mirage_grenade.obj
 ```
 
+Этап 4b добавил симуляцию броска/дыма/линии видимости и офлайн-инструменты
+калибровки:
+
+```
+cs2mod throw de_mirage --pos 500,-800,-160 --ang -10,45 --type jump
+cs2mod smoke de_mirage --rest -500,-1400,250 --params full
+cs2mod sightline de_mirage --from ... --to ... --rest ...
+cs2mod replay --all                       # весь корпус validation референса
+cs2mod calibrate de_mirage --throws data/throws.json --unfreeze speed,jumpv
+```
+
+Константы броска (`ThrowConstants`) по умолчанию берутся из `sim`; если
+рядом лежит `data/throw-constants.json` (или передан `--constants <path>`),
+он подхватывается автоматически, о чём печатается строка `throw constants:
+<path>` — как у референса (`MeshSetup.cs:LoadConstants`). `calibrate` по
+умолчанию ничего не подбирает: все константы заморожены (`physics-sim.md`
+референса называет измеренными и `ThrowSpeed`, и клики, и `JumpVelocity` —
+неконтролируемый фит по броскам однажды испортил гравитацию до `0.34`);
+подбор конкретной константы включается явно через `--unfreeze
+speed,jumpv,...`, и `--out` по умолчанию пишет в `data/throw-constants.json`
+(`config/` отклонит guard записи — это каталог не для игровых/калиброванных
+данных). Коды возврата (как у референса):
+
+| Команда | `0` | `2` | иначе |
+|---|---|---|---|
+| `throw` | бросок долетел | `result.lost` | — |
+| `smoke` | объём дыма не пуст | объём дыма пуст | — |
+| `sightline` без `--rest` | геометрия не блокирует | геометрия блокирует | — |
+| `sightline` с `--rest` | `NOT blocked by smoke` | `BLOCKED by smoke` (`smoke_cells_crossed >= 3`, независимо от точной геометрии) | — |
+| `replay` | — | — | `1`, если не нашлось ни одного зачётного броска |
+
 Подробности и текущее состояние — в [`PROGRESS.md`](PROGRESS.md).
 
 ## Жёсткие правила

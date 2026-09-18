@@ -11,3 +11,10 @@ workspace = true
 [dependencies]
 sim = { workspace = true }
 geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+extract = { workspace = true }

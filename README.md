@@ -8,12 +8,21 @@
 
 ## Статус
 
-Этапы 0–1 завершены: скелет workspace, документы, CI, а также VPK,
-контейнер ресурсов и KV3 (`s2fmt`). Для разработки доступны команды
-`cs2mod vpk ls|cat|verify` (например, `cs2mod vpk ls pak01_dir.vpk`) и
-`cs2mod res [--vpk] [--block] [--kv3]` (например, `cs2mod res
-world_physics.vmdl_c --kv3`). Подробности и текущее состояние — в
-[`PROGRESS.md`](PROGRESS.md).
+Этапы 0–2 сделаны в коде: скелет workspace, документы, CI, VPK, контейнер
+ресурсов и KV3 (`s2fmt`), а также физика, entity lump'ы, world node'ы,
+`.nav` и извлечение геометрии карты (`extract`) — ждём визуальной проверки
+геометрии в Blender. Для разработки доступны команды `cs2mod vpk
+ls|cat|verify` (например, `cs2mod vpk ls pak01_dir.vpk`), `cs2mod res
+[--vpk] [--block] [--kv3]` (например, `cs2mod res world_physics.vmdl_c
+--kv3`), а также:
+
+```
+cs2mod extract de_mirage
+cs2mod info de_mirage
+cs2mod export-obj de_mirage --filter grenade --out cache/obj/de_mirage_grenade.obj
+```
+
+Подробности и текущее состояние — в [`PROGRESS.md`](PROGRESS.md).
 
 ## Жёсткие правила
 

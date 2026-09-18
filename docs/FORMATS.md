@@ -376,6 +376,10 @@ BlockCompress: `u32 hdr`; если `hdr & 0x80000000` — хранится ка�
 - `maps/<map>.vpk` → `maps/<map>/world_physics.vmdl_c` с блоком PHYS.
   Фолбэк: `maps/<map>/world_physics.vphys_c` (DATA = PhysAggregateData).
   VRF ещё умеет через `world_physics.vrman_c`.
+  **(!)** В билде 2000908 `pak01` не содержит отдельных `*.vphys_c` — физика
+  пропов встроена в `*.vmdl_c`; отдельные `vphys_c` встречаются только в
+  `maps/cs_italy.vpk` (`world_physics`, `phys_level_water`) и
+  `maps/lobby_mapveto.vpk`.
 - `Model.GetEmbeddedPhys()`: блок CTRL (KV3) → `embedded_physics.phys_data_block`
   (индекс в таблице блоков) → этот блок PHYS.
 - Модели пропов чаще используют отдельный файл: DATA модели →
@@ -408,7 +412,7 @@ part'а**), `m_nSurfacePropertyIndex`, `m_UserFriendlyName`, payload в
 | Ключ | Элемент блоба | Форма объекта |
 |---|---|---|
 | `m_Vertices` (старые, до 2023-11-04) | vec3 f32, 12 байт | array vec3 |
-| `m_Vertices` (новые) | **u8 индекс вершины** | — |
+| `m_Vertices` (новые) | **u8 исходящий полуребро-индекс вершины** (`RnVertex_t::m_nEdge`) | — |
 | `m_VertexPositions` (новые) | vec3 f32, 12 байт | — |
 | `m_Edges` | `{u8 next, u8 twin, u8 origin, u8 face}`, 4 байта | объекты с `m_nNext`, `m_nTwin`, `m_nOrigin`, `m_nFace` |
 | `m_Faces` | `{u8 edge}`, 1 байт | `{m_nEdge}` |
@@ -416,7 +420,11 @@ part'а**), `m_nSurfacePropertyIndex`, `m_UserFriendlyName`, payload в
 
 Правило: есть `m_VertexPositions` → это позиции, а `m_Vertices` — u8-индексы;
 иначе позиции в `m_Vertices`. Рёбра идут парами (e, twin). Индексы u8 →
-не больше 255 вершин/рёбер в hull.
+не больше 255 вершин/рёбер в hull. В новом формате `m_Vertices[v]` — индекс
+**исходящего** из вершины `v` полуребра (`edges[m_Vertices[v]].origin == v`
+выполняется на всех реальных hull'ах), а `HalfEdge.origin` индексирует
+`m_VertexPositions` напрямую — проверено на 1933 hull'ах de_mirage:
+0 треугольников с нормалью внутрь, 0 вершин вне плоскостей/bounds.
 
 **Триангуляция** (веером по грани, `Hull.GetFaceTriangles`):
 ```
@@ -520,7 +528,13 @@ playerclip, и grenadeclip) — решения принимаем по слоя�
 - `AggregateSceneObjects` — объединённые визуальные меши без связи с
   исходной моделью; коллизию из них не восстановить (у референса пропущены
   сознательно; на dust2/mirage/anubis все реальные пропы — агрегаты,
-  предполагается, что их коллизия уже запечена в world_physics).
+  предполагается, что их коллизия уже запечена в world_physics). На
+  de_mirage worldnode n0: 335 scene objects (объединённые render-батчи
+  worldnode'а, без физики) + 260 агрегатов. На de_cache физика есть у 762
+  из 1330 scene objects — там важны именно статические пропы. Сферы и
+  капсулы в физике на некоторых картах не редкость (de_fachwerk — 2992
+  капсулы, de_boulder — 2662, de_overpass — 524, cs_shelter — 175 сфер /
+  123 капсулы) и пока не триангулируются (как у референса).
 - Поиск моделей: VPK карты → `csgo/pak01_dir.vpk` →
   `csgo_community_addons/<map>/<map>_dir.vpk` (cs_shelter, de_boulder, de_fachwerk).
 
@@ -586,6 +600,13 @@ subVersion>0: KV3 custom data
 
 **(!)** Высота nav-области — среднее углов полигона, до ~5u ниже реального
 пола; для `setpos` ноги ставим по коллизии.
+
+Реальные параметры генерации de_mirage (билд 2000908): `nav_gen_version 13`,
+один hull: `radius 16, height 71, max_climb 16, max_slope 50,
+max_jump_down_dist 157, max_jump_horiz_dist_base 64, max_jump_up_dist 68`.
+Это параметры генерации навигационной сетки, а не константы движения
+игрока — не путать. В билде 2000908 в игре 27 файлов `.nav`, версии 35–36,
+все парсятся.
 
 ---
 

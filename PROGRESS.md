@@ -90,3 +90,47 @@ lane'ам сохранено; текстовый KV3 не различает Int
 закреплён тулчейн 1.98.1 (`rust-toolchain.toml`, тот же в CI); контракт по
 стеку — парсинг KV3 требует потока с ≥ 4 МиБ стека (CLI выделяет 16 МиБ,
 сервер должен настраивать свои воркеры так же).
+
+## Этап 2 — геометрия Mirage (код готов, ждёт визуальной проверки в Blender)
+
+### Сделано
+
+`s2fmt::phys` (PhysAggregateData, blob/array поля, веерная триангуляция
+hull'ов, валидация), `s2fmt::entities` (KV3 + legacy blob-форма, 29
+известных хэшированных ключей, connections, матрица углов Source),
+`s2fmt::worldnode`, `s2fmt::hash` (строковые токены MurmurHash2),
+`s2fmt::nav` (версии 30–36, встроенный KV3), `kv3::parse_binary_prefix`;
+`geom`: `CollisionMesh` (атрибут/поверхность/объект на треугольник),
+фильтры атрибутов grenade/player/attrs: (регистронезависимо, EntitySolid
+подразумевает EntityDoor/EntityBreakable), файл `.cgeo` v1 (CRC, атомарное
+сохранение), экспорт OBJ; `crates/extract`: политика извлечения референса,
+кэш `cache/maps/<map>/<build>-<sha12>-x<ver>/` с world.cgeo, entities.json,
+nav.json, report.json, manifest.json; CLI `extract`, `info`, `export-obj`.
+
+### Проверено
+
+Тесты: s2fmt 173, geom 36, extract 30, cli 20; реальные данные: извлечение
+de_mirage ~0.4 с (release) → 134 187 треугольников (world hulls 36 776,
+world meshes 96 355, энтити 1 056); 9 атрибутов мира +
+EntitySolid 788 / EntityPhysicsClip 254 / EntityBreakable 14 треугольников;
+26 объединённых энтити; пропущено: retake 29, startdisabled 2,
+prop_dynamic не разрушаемых 7; 2 544 nav-области; точки спавна над
+твёрдым для гранаты полом на mirage/dust2/nuke; размещение
+энтити/пропов проверено численно на mirage/nuke/dust2/cache; матрица
+вращения против System.Numerics ≤ 1e-6; хэш против токенов реальной
+игры; 21 карта извлекается без ошибок (de_cache — 1 756 726 треугольников
+с 762 статическими пропами).
+
+### Осталось
+
+Визуальная проверка OBJ пользователем в Blender; сферы/капсулы не
+триангулируются (как у референса) — оценить влияние на этапе 4 через
+replay корпуса бросков; геометрия lump'ов point_template/child не
+применяется (как у референса, их энтити попадают в entities.json);
+prop_dynamic_override не в allowlist (как у референса).
+
+### Решения
+
+Следуем политике извлечения референса (подтверждена его корпусом бросков);
+индекс атрибута u16; OBJ пишется как (x, z, −y) для Y-up импортёров; кэш
+инвалидируется по build + SHA-256 VPK карты + версии экстрактора.

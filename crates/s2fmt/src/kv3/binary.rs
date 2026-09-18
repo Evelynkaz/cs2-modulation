@@ -81,22 +81,54 @@ pub fn binary_header_info(bytes: &[u8]) -> Option<BinaryHeaderInfo> {
 /// Parses a binary KV3 document. `bytes` must be the exact block contents, starting at the
 /// magic number.
 pub fn parse_binary(bytes: &[u8]) -> Result<Document, Kv3Error> {
+    parse_binary_prefix(bytes).map(|(doc, _)| doc)
+}
+
+/// Parses a binary KV3 document starting at the beginning of `bytes`, returning it together with
+/// the number of bytes it consumed. `bytes` may contain unrelated trailing data after the
+/// document (e.g. more sections of an embedded file format such as `.nav`); for v2-v5 documents
+/// the returned length is precise even then, since (like VRF's `BinaryKV3.Read`, which reads such
+/// embedded documents directly off a shared stream) every buffer is sized from header fields
+/// rather than "rest of input". v1 is precise only when uncompressed: per
+/// `ValveResourceFormat/Resource/ResourceTypes/BinaryKV3.cs` `ReadBuffer`
+/// (`sizeCompressedTotal = Size - (Position - Offset)`), v1 has no explicit compressed-size field
+/// for its LZ4/Zstd paths, so those consume the rest of `bytes` (mirrored here as `parse_v1_5`'s
+/// `size_compressed_total = r.remaining()`); v1 uncompressed reads exactly
+/// `size_uncompressed_buffer1` bytes instead and is unaffected. v0 (legacy) documents always
+/// consume the rest of `bytes` for the same reason (no way to tell where the compressed/encoded
+/// body ends without an outer block size).
+pub fn parse_binary_prefix(bytes: &[u8]) -> Result<(Document, usize), Kv3Error> {
     let mut r = Reader::new(bytes);
     let magic = r.u32().map_err(|source| trunc("magic", source))?;
 
-    if magic == MAGIC0 {
-        return parse_v0(&mut r);
-    }
+    let doc = if magic == MAGIC0 {
+        parse_v0(&mut r)?
+    } else {
+        let version = magic & 0xFF;
+        if magic & 0xFFFF_FF00 != 0x4B56_3300 {
+            return Err(Kv3Error::BadMagic { magic });
+        }
+        if !(1..=5).contains(&version) {
+            return Err(Kv3Error::UnsupportedVersion { version });
+        }
+        parse_v1_5(version as u8, &mut r)?
+    };
+    Ok((doc, bytes.len() - r.remaining()))
+}
 
-    let version = magic & 0xFF;
-    if magic & 0xFFFF_FF00 != 0x4B56_3300 {
-        return Err(Kv3Error::BadMagic { magic });
+/// Returns the exact byte length of the binary KV3 document starting at the beginning of
+/// `bytes`, or `None` if `bytes` doesn't parse as one, or is a v0/legacy document (see
+/// [`parse_binary_prefix`] for why v0 can't be given an exact length here). Added for `nav`
+/// (spec `s2_nav.md`), which embeds binary KV3 documents inside `.nav` files with no length
+/// prefix of their own.
+pub fn binary_document_len(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() >= 4 {
+        let magic = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        if magic == MAGIC0 {
+            return None;
+        }
     }
-    if !(1..=5).contains(&version) {
-        return Err(Kv3Error::UnsupportedVersion { version });
-    }
-
-    parse_v1_5(version as u8, &mut r)
+    parse_binary_prefix(bytes).ok().map(|(_, len)| len)
 }
 
 fn trunc(context: &'static str, source: ReadError) -> Kv3Error {
@@ -2119,6 +2151,20 @@ mod tests {
         let parsed = parse_binary(&doubled)
             .expect("a document followed by a byte-for-byte copy of itself should still parse");
         assert_eq!(parsed.root, expected);
+        let solo = parse_binary(&doc).expect("the original document parses on its own");
+        assert_eq!(parsed.root, solo.root);
+    }
+
+    #[test]
+    fn parse_binary_prefix_length_ignores_trailing_bytes() {
+        let tree = sample_tree(5);
+        let doc = build(&tree, 5, Compression::Lz4, FORMAT_GENERIC);
+        let mut with_trailer = doc.clone();
+        with_trailer.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
+
+        let (parsed, len) =
+            parse_binary_prefix(&with_trailer).expect("document with trailing bytes parses");
+        assert_eq!(len, doc.len());
         let solo = parse_binary(&doc).expect("the original document parses on its own");
         assert_eq!(parsed.root, solo.root);
     }

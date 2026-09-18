@@ -7,7 +7,10 @@ pub(crate) mod test_writer;
 mod text;
 mod value;
 
-pub use binary::{BinaryHeaderInfo, binary_header_info, is_binary_kv3, parse_binary};
+pub use binary::{
+    BinaryHeaderInfo, binary_document_len, binary_header_info, is_binary_kv3, parse_binary,
+    parse_binary_prefix,
+};
 pub use guid::{
     ENCODING_BINARY, ENCODING_BINARY_BC, ENCODING_BINARY_LZ4, ENCODING_TEXT, FORMAT_GENERIC, Guid,
 };

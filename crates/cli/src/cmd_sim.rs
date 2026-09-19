@@ -11,8 +11,7 @@ use geom::math::{Aabb, V3};
 use geom::mesh::CollisionMesh;
 use geom::voxel::VoxelGrid;
 use sim::{
-    SmokeParams, ThrowConstants, ThrowSpec, ThrowType, Trace, eye_height, occlusion,
-    simulate_exact, smoke_fill,
+    SmokeParams, ThrowSpec, ThrowType, Trace, eye_height, occlusion, simulate_exact, smoke_fill,
 };
 
 use crate::cmd_extract::load_or_extract_mesh;
@@ -66,30 +65,7 @@ fn parse_pair(s: &str, flag: &str) -> anyhow::Result<(f32, f32)> {
     Ok((parts[0], parts[1]))
 }
 
-/// Reference default (`MeshSetup.cs:LoadConstants`: `<geo dir>/throw-constants.json`);
-/// we have no single geo-file directory, so this is relative to the cwd, matching
-/// `calibrate`'s own `--out` default.
-const DEFAULT_CONSTANTS_PATH: &str = "data/throw-constants.json";
-
-/// Loads `--constants` if given; otherwise auto-loads `data/throw-constants.json`
-/// when it exists (printing `throw constants: <path>`, like `MeshSetup.cs:116-127`),
-/// else falls back to `sim`'s built-in defaults.
-fn resolve_constants(explicit: Option<&Path>) -> anyhow::Result<ThrowConstants> {
-    let path = match explicit {
-        Some(p) => Some(p.to_path_buf()),
-        None => {
-            let default = Path::new(DEFAULT_CONSTANTS_PATH);
-            default.is_file().then(|| default.to_path_buf())
-        }
-    };
-    match path {
-        Some(p) => {
-            println!("throw constants: {}", p.display());
-            Ok(ThrowConstants::load_or_default(Some(&p))?)
-        }
-        None => Ok(ThrowConstants::default()),
-    }
-}
+use crate::constants::resolve_constants;
 
 /// Mirrors `geom::filter::grenade_mask`'s per-attribute predicate
 /// (`CollisionMesh.cs:GrenadeSolidFilter`), for building a second collider

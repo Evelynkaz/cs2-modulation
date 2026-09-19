@@ -1,7 +1,9 @@
 mod cmd_extract;
 mod cmd_res;
 mod cmd_sim;
+mod cmd_solver;
 mod cmd_vpk;
+mod constants;
 mod game_path;
 
 use std::path::PathBuf;
@@ -137,10 +139,80 @@ enum Command {
         #[arg(long)]
         cache: Option<PathBuf>,
     },
-    /// Find candidate stand spots for a lineup.
-    Standspots,
+    /// Precompute every stand spot on a map, using the real player hull.
+    Standspots {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// Lattice spacing, in units.
+        #[arg(long, default_value_t = 16.0)]
+        step: f32,
+        /// Recompute even if a cached `standspots.json` already matches.
+        #[arg(long)]
+        force: bool,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
     /// Solve for a lineup that hits a target.
-    Solve,
+    #[allow(clippy::too_many_arguments)]
+    Solve {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// `x,y` or `x,y,z`; without a `z`, the height is derived from nav data.
+        #[arg(long, allow_hyphen_values = true)]
+        target: String,
+        #[arg(long, default_value_t = 80.0)]
+        tolerance: f32,
+        /// Origin click `x,y[,z]`: only lineups near this spot.
+        #[arg(long, allow_hyphen_values = true, conflicts_with = "getpos")]
+        from: Option<String>,
+        /// `setpos x y z;setang p y r`, in place of `--from`: with a `setang` line,
+        /// feet = eye - (0,0,64.06); without one the position is already feet.
+        #[arg(long, conflicts_with = "from")]
+        getpos: Option<String>,
+        /// Defaults to 300u with `--from`/`--getpos`, else 3100u (map-wide).
+        #[arg(long)]
+        reach: Option<f32>,
+        /// With `--from`: only that exact origin (and its wall/corner pins), no lattice neighbour.
+        #[arg(long)]
+        exact: bool,
+        /// Halve the angle lattice step for a more thorough (slower) search.
+        #[arg(long)]
+        fine: bool,
+        /// Comma-separated: stand,crouch,jump,crouchjump,runjump.
+        #[arg(long)]
+        types: Option<String>,
+        /// Comma-separated: left,both,right.
+        #[arg(long)]
+        clicks: Option<String>,
+        /// Comma-separated: glass,doors (collision groups to treat as gone).
+        #[arg(long)]
+        broken: Option<String>,
+        /// `t`, `ct`, or `all`: search only from spawn positions.
+        #[arg(long)]
+        spawns: Option<String>,
+        /// Also run the exhaustive exact-spot referee (exact-origin solves only).
+        #[arg(long)]
+        referee: bool,
+        #[arg(long, default_value_t = 20)]
+        top: usize,
+        /// Writes the full ranked lineup list as JSON.
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// `throw-constants.json` path; defaults to `data/throw-constants.json` if present,
+        /// else sim's own defaults.
+        #[arg(long)]
+        constants: Option<PathBuf>,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
     /// Calibrate throw constants from measured throws.
     Calibrate {
         map: String,
@@ -382,10 +454,55 @@ fn run() -> anyhow::Result<u8> {
             game.as_deref(),
             cache.as_deref(),
         ),
-        Command::Standspots => {
-            anyhow::bail!("standspots is not implemented yet (planned for stage 5)")
+        Command::Standspots {
+            map,
+            step,
+            force,
+            game,
+            cache,
+        } => {
+            cmd_solver::standspots(&map, game.as_deref(), cache.as_deref(), force, step).map(|()| 0)
         }
-        Command::Solve => anyhow::bail!("solve is not implemented yet (planned for stage 5)"),
+        Command::Solve {
+            map,
+            target,
+            tolerance,
+            from,
+            getpos,
+            reach,
+            exact,
+            fine,
+            types,
+            clicks,
+            broken,
+            spawns,
+            referee,
+            top,
+            json,
+            constants,
+            game,
+            cache,
+        } => cmd_solver::solve(
+            &map,
+            &target,
+            tolerance,
+            from.as_deref(),
+            getpos.as_deref(),
+            reach,
+            exact,
+            fine,
+            types.as_deref(),
+            clicks.as_deref(),
+            broken.as_deref(),
+            spawns.as_deref(),
+            referee,
+            top,
+            json.as_deref(),
+            constants.as_deref(),
+            game.as_deref(),
+            cache.as_deref(),
+        )
+        .map(|()| 0),
         Command::Calibrate {
             map,
             throws,

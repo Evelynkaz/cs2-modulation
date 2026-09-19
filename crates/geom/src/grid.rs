@@ -42,15 +42,22 @@ fn for_each_covered_cell(
     };
     let (x0, y0, z0) = cell_of(aabb.min);
     let (x1, y1, z1) = cell_of(aabb.max);
-    // Clamp both ends of each axis range independently (not just "clamp
-    // below zero, clamp above n-1"): an AABB face sitting exactly on the
-    // region's own upper bound floors to cell index `n` on that axis, which
-    // is out of range on *both* sides of a naive one-sided clamp, producing
-    // an inverted (and silently empty) range that drops the triangle from
-    // every cell. Symmetric clamping instead pins it to the last valid cell.
-    for z in z0.clamp(0, nz - 1)..=z1.clamp(0, nz - 1) {
-        for y in y0.clamp(0, ny - 1)..=y1.clamp(0, ny - 1) {
-            for x in x0.clamp(0, nx - 1)..=x1.clamp(0, nx - 1) {
+    // Reference-exact one-sided clamp (`TriangleCollider.cs`'s own
+    // `ForEachCoveredCell`): the low end is clamped up to 0, the high end
+    // clamped down to `n-1`, independently. A triangle whose AABB face sits
+    // exactly on the grid's own upper bound on some axis floors to cell
+    // index `n` on *both* ends of that axis's range, so this produces an
+    // inverted, silently empty range and the triangle is dropped from every
+    // cell of the grid - a real reference bug, but region-bounded colliders
+    // (every one `TargetSolver` builds) are always used with `region` padded
+    // so the geometry that matters sits inside it, not flush on its face.
+    // `TargetSolver` clamps its region's x/y to the mesh bounds and
+    // `standspots` uses `region: None`, so triangles flush with the mesh's
+    // max x/y/z are dropped there exactly as in the reference; kept
+    // deliberately for parity.
+    for z in z0.max(0)..=z1.min(nz - 1) {
+        for y in y0.max(0)..=y1.min(ny - 1) {
+            for x in x0.max(0)..=x1.min(nx - 1) {
                 visit(((z * ny + y) * nx + x) as usize);
             }
         }
@@ -65,21 +72,12 @@ impl UniformGrid {
     /// the AABB union of the kept triangles. `cell_size` is typically 128
     /// (`TriangleCollider.cs:38`, the reference's default).
     ///
-    /// **Deliberate deviation from the reference**: `TriangleCollider.cs`'s
-    /// `ForEachCoveredCell` clamps each covered-cell range one-sided
-    /// (`max(lo, 0)..min(hi, n-1)`). A triangle whose AABB face sits exactly
-    /// on the grid's own upper bound on some axis (e.g. a ceiling triangle
-    /// at `region.max.z`, which is common on real maps since `region`
-    /// defaults to the exact bounds of the kept triangles) floors to cell
-    /// index `n` on *both* ends of that axis's range, so the one-sided clamp
-    /// produces `n..=(n-1)` - inverted, silently empty - and the reference
-    /// drops that triangle from every cell of the grid it builds. This is a
-    /// reference bug, not an intentional exclusion: it also affects
-    /// `first_hit_hull`/`box_intersects`'s own covered-cell ranges. This
-    /// port instead clamps both ends of each axis symmetrically
-    /// (`.clamp(0, n-1)`), pinning a boundary-flush triangle to the last
-    /// valid cell instead of losing it (see `for_each_covered_cell`,
-    /// `first_hit_hull`, `box_intersects`).
+    /// Reference-exact, including its one-sided covered-cell clamp (see
+    /// `for_each_covered_cell`'s rustdoc): a triangle flush with `region`'s
+    /// own upper bound on some axis is dropped from the grid entirely, same
+    /// as `TriangleCollider`. Callers must pad `region` past the geometry
+    /// that matters, the way the reference's own `TargetSolver` regions do,
+    /// rather than passing one flush with it.
     pub fn build(
         mesh: &CollisionMesh,
         mask: &AttributeMask,
@@ -208,23 +206,14 @@ impl UniformGrid {
             .wrapping_abs()
             .wrapping_add(y1.wrapping_sub(y0).wrapping_abs())
             .wrapping_add(z1.wrapping_sub(z0).wrapping_abs());
-        // Same symmetric-clamp deviation as `for_each_covered_cell` (see
-        // `build`'s rustdoc): this also means that if *both* `from` and `to`
-        // project outside the grid on the same side of some axis (e.g. a
-        // segment entirely above `region.max.z`), this walk still visits the
-        // single boundary-cell layer on that axis instead of the empty range
-        // a one-sided clamp (or the reference) would produce. That's a
-        // superset of the reference's candidate cells in that case, not a
-        // subset: visiting more cells can only ever *find* a hit the
-        // reference's own off-by-one bug would have missed (it restores the
-        // boundary-flush triangles `build`'s symmetric clamp keeps in the
-        // grid in the first place), never introduce a false one - every
-        // candidate found here still gets the exact same `hit_triangle`
-        // test as any other cell's candidates.
+        // Reference-exact one-sided clamp, same as `for_each_covered_cell`
+        // (see `build`'s rustdoc): a query that lands exactly on the grid's
+        // own upper bound on some axis walks an empty range there, matching
+        // the reference's own off-by-one instead of working around it.
         if span <= 3 {
-            'outer: for z in z0.min(z1).clamp(0, self.nz - 1)..=z0.max(z1).clamp(0, self.nz - 1) {
-                for y in y0.min(y1).clamp(0, self.ny - 1)..=y0.max(y1).clamp(0, self.ny - 1) {
-                    for x in x0.min(x1).clamp(0, self.nx - 1)..=x0.max(x1).clamp(0, self.nx - 1) {
+            'outer: for z in z0.min(z1).max(0)..=z0.max(z1).min(self.nz - 1) {
+                for y in y0.min(y1).max(0)..=y0.max(y1).min(self.ny - 1) {
+                    for x in x0.min(x1).max(0)..=x0.max(x1).min(self.nx - 1) {
                         let cell = ((z * self.ny + y) * self.nx + x) as usize;
                         for &local in &self.cell_tris[self.cell_range(cell)] {
                             let local = local as usize;
@@ -422,9 +411,9 @@ impl Collider for UniformGrid {
         let hi = from.max(to) + half;
         let (x0, y0, z0) = self.cell_of(lo);
         let (x1, y1, z1) = self.cell_of(hi);
-        for z in z0.clamp(0, self.nz - 1)..=z1.clamp(0, self.nz - 1) {
-            for y in y0.clamp(0, self.ny - 1)..=y1.clamp(0, self.ny - 1) {
-                for x in x0.clamp(0, self.nx - 1)..=x1.clamp(0, self.nx - 1) {
+        for z in z0.max(0)..=z1.min(self.nz - 1) {
+            for y in y0.max(0)..=y1.min(self.ny - 1) {
+                for x in x0.max(0)..=x1.min(self.nx - 1) {
                     let cell = ((z * self.ny + y) * self.nx + x) as usize;
                     for &local in &self.cell_tris[self.cell_range(cell)] {
                         let local = local as usize;
@@ -484,9 +473,9 @@ impl Collider for UniformGrid {
     fn box_intersects(&self, center: V3, half: V3) -> bool {
         let (x0, y0, z0) = self.cell_of(center - half);
         let (x1, y1, z1) = self.cell_of(center + half);
-        for z in z0.clamp(0, self.nz - 1)..=z1.clamp(0, self.nz - 1) {
-            for y in y0.clamp(0, self.ny - 1)..=y1.clamp(0, self.ny - 1) {
-                for x in x0.clamp(0, self.nx - 1)..=x1.clamp(0, self.nx - 1) {
+        for z in z0.max(0)..=z1.min(self.nz - 1) {
+            for y in y0.max(0)..=y1.min(self.ny - 1) {
+                for x in x0.max(0)..=x1.min(self.nx - 1) {
                     let cell = ((z * self.ny + y) * self.nx + x) as usize;
                     for &local in &self.cell_tris[self.cell_range(cell)] {
                         let [a, b, c] = self.triangles.vertices(local as usize);
@@ -774,10 +763,13 @@ mod tests {
     }
 
     #[test]
-    fn triangle_flush_with_region_upper_bound_is_found() {
-        // Regression test for the reference's off-by-one boundary bug (see
-        // `UniformGrid::build`'s rustdoc): a triangle exactly on the grid's
-        // own upper Z bound must still be reachable by every query.
+    fn triangle_flush_with_region_upper_bound_is_dropped() {
+        // Regression test for the reference's own off-by-one boundary bug
+        // (see `UniformGrid::build`'s rustdoc): a triangle exactly on the
+        // grid's own upper Z bound floors into cell index `n` on both ends
+        // of the covered-cell range, so it never lands in the grid and no
+        // query can find it. Callers must pad their region past geometry
+        // that matters instead of leaving it flush with the bound.
         let mut mesh = CollisionMesh::new();
         let attr = mesh
             .add_attribute(CollisionAttribute {
@@ -825,10 +817,13 @@ mod tests {
         let mask = all_mask(&mesh);
         let grid = UniformGrid::build(&mesh, &mask, None, 16.0).unwrap();
         assert_eq!(grid.nz, 10);
+        // The triangle count still includes it (`ColliderTriangles` keeps
+        // every masked triangle in `region`); it is the grid's own
+        // covered-cell CSR that silently drops it, matching the reference.
         assert_eq!(grid.triangle_count(), 2);
 
         let ray_hit = grid.first_hit_ray(V3::new(0.0, 0.0, 200.0), V3::new(0.0, 0.0, 150.0));
-        assert_eq!(ray_hit.map(|h| h.triangle), Some(1));
+        assert_eq!(ray_hit, None);
 
         let hull_hit = grid.first_hit_hull(
             V3::new(0.0, 0.0, 165.0),
@@ -837,9 +832,9 @@ mod tests {
             -2.0,
             None,
         );
-        assert_eq!(hull_hit.map(|h| h.triangle), Some(1));
+        assert_eq!(hull_hit, None);
 
-        assert!(grid.box_intersects(V3::new(0.0, 0.0, 160.0), V3::new(1.0, 1.0, 1.0)));
+        assert!(!grid.box_intersects(V3::new(0.0, 0.0, 160.0), V3::new(1.0, 1.0, 1.0)));
     }
 
     #[test]

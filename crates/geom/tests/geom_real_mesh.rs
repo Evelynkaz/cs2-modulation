@@ -16,7 +16,7 @@ use geom::filter::{AttributeMask, all_mask, grenade_mask, player_mask};
 use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
 use geom::mesh::CollisionMesh;
-use geom::tri::{RayWindow, moller_trumbore, swept_box_triangle};
+use geom::tri::{RayWindow, moller_trumbore, swept_box_triangle, tri_box_overlap};
 use geom::voxel::VoxelGrid;
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +196,46 @@ fn oracle_hit(
         )
 }
 
+/// Whether `original`'s triangle AABB lies flush with (or past) the grid's
+/// own upper bound on some axis - `UniformGrid::build`'s documented
+/// reference-exact one-sided covered-cell clamp (`grid.rs`) then drops that
+/// triangle from every cell of the grid, even though it's still part of the
+/// grid's own triangle set (`grid.triangle`/`local_index` still know it).
+/// `region` is recomputed here the same way `UniformGrid::build` does for
+/// `region: None` (the union of `triangles`' own AABBs), so this needs no
+/// access to the grid's private fields.
+fn is_grid_boundary_drop(triangles: &ColliderTriangles, cell_size: f32, original: u32) -> bool {
+    let Some(local) = triangles.local_index(original) else {
+        return false;
+    };
+    let Some(region) = triangles.bounds() else {
+        return false;
+    };
+    let aabb = triangles.aabb(local);
+    let n = |lo: f32, hi: f32| (((hi - lo) / cell_size).ceil()).max(1.0);
+    let grid_max = V3::new(
+        region.min.x + n(region.min.x, region.max.x) * cell_size,
+        region.min.y + n(region.min.y, region.max.y) * cell_size,
+        region.min.z + n(region.min.z, region.max.z) * cell_size,
+    );
+    aabb.max.x >= grid_max.x - 1e-3
+        || aabb.max.y >= grid_max.y - 1e-3
+        || aabb.max.z >= grid_max.z - 1e-3
+}
+
+/// Brute-force (no acceleration structure) SAT overlap scan, used to
+/// adjudicate `box_intersects` BVH/grid mismatches: the query returns no
+/// triangle index, so the boundary-drop check needs its own candidate set.
+fn oracle_box_overlap_triangles(triangles: &ColliderTriangles, center: V3, half: V3) -> Vec<u32> {
+    (0..triangles.len())
+        .filter(|&local| {
+            let [a, b, c] = triangles.vertices(local);
+            tri_box_overlap(center, half, a, b, c)
+        })
+        .map(|local| triangles.original_index(local))
+        .collect()
+}
+
 /// Whether `original`'s triangle plane is nearly parallel to `direction`
 /// (`|cos(direction, normal)| < 1e-5`) - the documented `moller_trumbore`
 /// in-plane-ray exception (`bvh.rs` module doc) that both `UniformGrid` and
@@ -262,6 +302,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
         let mut rng = Rng::new(0xD1FF_0001 ^ (mask_name.len() as u32));
         let mut hull_hits = 0u64;
         let mut hull_mismatches = 0u64;
+        let mut hull_explained_boundary = 0u64;
         let mut hull_ties = 0u64;
         let mut hull_ties_changed_normal = 0u64;
         for _ in 0..200_000 {
@@ -298,15 +339,24 @@ fn real_mesh_bvh_grid_differential_and_reports() {
                 }
                 (None, None) => {}
                 (g, b) => {
-                    hull_mismatches += 1;
-                    if hull_mismatches <= 5 {
-                        println!("  hull mismatch: from={from:?} to={to:?} grid={g:?} bvh={b:?}");
+                    let explained = b.is_some_and(|hit| {
+                        is_grid_boundary_drop(&oracle_triangles, 16.0, hit.triangle)
+                    });
+                    if explained {
+                        hull_explained_boundary += 1;
+                    } else {
+                        hull_mismatches += 1;
+                        if hull_mismatches <= 5 {
+                            println!(
+                                "  hull mismatch: from={from:?} to={to:?} grid={g:?} bvh={b:?}"
+                            );
+                        }
                     }
                 }
             }
         }
         println!(
-            "[{mask_name}] hull sweeps: 200000, hits={hull_hits}, mismatches={hull_mismatches}, ties={hull_ties} (normal changed: {hull_ties_changed_normal})"
+            "[{mask_name}] hull sweeps: 200000, hits={hull_hits}, mismatches={hull_mismatches}, explained(grid drops boundary-flush triangle)={hull_explained_boundary}, ties={hull_ties} (normal changed: {hull_ties_changed_normal})"
         );
         if hull_mismatches != 0 {
             failures.push(format!(
@@ -316,6 +366,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
 
         let mut ray_hits = 0u64;
         let mut ray_mismatches = 0u64;
+        let mut ray_explained_boundary = 0u64;
         let mut ray_ties = 0u64;
         let mut ray_ties_changed_normal = 0u64;
         for _ in 0..100_000 {
@@ -341,15 +392,24 @@ fn real_mesh_bvh_grid_differential_and_reports() {
                 }
                 (None, None) => {}
                 (g, b) => {
-                    ray_mismatches += 1;
-                    if ray_mismatches <= 5 {
-                        println!("  ray mismatch: from={from:?} to={to:?} grid={g:?} bvh={b:?}");
+                    let explained = b.is_some_and(|hit| {
+                        is_grid_boundary_drop(&oracle_triangles, 16.0, hit.triangle)
+                    });
+                    if explained {
+                        ray_explained_boundary += 1;
+                    } else {
+                        ray_mismatches += 1;
+                        if ray_mismatches <= 5 {
+                            println!(
+                                "  ray mismatch: from={from:?} to={to:?} grid={g:?} bvh={b:?}"
+                            );
+                        }
                     }
                 }
             }
         }
         println!(
-            "[{mask_name}] long rays: 100000, hits={ray_hits}, mismatches={ray_mismatches}, ties={ray_ties} (normal changed: {ray_ties_changed_normal})"
+            "[{mask_name}] long rays: 100000, hits={ray_hits}, mismatches={ray_mismatches}, explained(grid drops boundary-flush triangle)={ray_explained_boundary}, ties={ray_ties} (normal changed: {ray_ties_changed_normal})"
         );
         if ray_mismatches != 0 {
             failures.push(format!(
@@ -363,6 +423,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
         let mut blocked_total = 0u64;
         let mut blocked_mismatches = 0u64;
         let mut blocked_unexplained = 0u64;
+        let mut blocked_explained_boundary = 0u64;
         for _ in 0..100_000 {
             let from = lerp_aabb(&bounds, &mut rng);
             let dir = rng.unit_v3();
@@ -381,9 +442,13 @@ fn real_mesh_bvh_grid_differential_and_reports() {
                 .map(|(_, tri)| tri)
                 .or_else(|| grid.first_hit_ray(from, to).map(|h| h.triangle))
                 .or_else(|| bvh.first_hit_ray(from, to).map(|h| h.triangle));
-            let explained = candidate
+            let explained_in_plane = candidate
                 .is_some_and(|tri| is_in_plane_mismatch(&oracle_triangles, direction, tri));
-            if !explained {
+            let explained_boundary =
+                candidate.is_some_and(|tri| is_grid_boundary_drop(&oracle_triangles, 16.0, tri));
+            if explained_boundary {
+                blocked_explained_boundary += 1;
+            } else if !explained_in_plane {
                 blocked_unexplained += 1;
                 if blocked_unexplained <= 5 {
                     println!(
@@ -393,7 +458,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
             }
         }
         println!(
-            "[{mask_name}] blocked: {blocked_total}, mismatches={blocked_mismatches}, unexplained={blocked_unexplained}"
+            "[{mask_name}] blocked: {blocked_total}, mismatches={blocked_mismatches}, unexplained={blocked_unexplained}, explained(grid drops boundary-flush triangle)={blocked_explained_boundary}"
         );
         if blocked_unexplained != 0 {
             failures.push(format!(
@@ -405,6 +470,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
         // ray-in-plane ambiguity possible, so this must match exactly.
         let mut box_total = 0u64;
         let mut box_mismatches = 0u64;
+        let mut box_explained_boundary = 0u64;
         for _ in 0..50_000 {
             let center = lerp_aabb(&bounds, &mut rng);
             let half = V3::new(rng.f32(0.5, 5.0), rng.f32(0.5, 5.0), rng.f32(0.5, 5.0));
@@ -412,15 +478,26 @@ fn real_mesh_bvh_grid_differential_and_reports() {
             let g = grid.box_intersects(center, half);
             let b = bvh.box_intersects(center, half);
             if g != b {
-                box_mismatches += 1;
-                if box_mismatches <= 5 {
-                    println!(
-                        "  box_intersects mismatch: center={center:?} half={half:?} grid={g} bvh={b}"
-                    );
+                let overlapping = oracle_box_overlap_triangles(&oracle_triangles, center, half);
+                let explained = !overlapping.is_empty()
+                    && overlapping
+                        .iter()
+                        .all(|&tri| is_grid_boundary_drop(&oracle_triangles, 16.0, tri));
+                if explained {
+                    box_explained_boundary += 1;
+                } else {
+                    box_mismatches += 1;
+                    if box_mismatches <= 5 {
+                        println!(
+                            "  box_intersects mismatch: center={center:?} half={half:?} grid={g} bvh={b}"
+                        );
+                    }
                 }
             }
         }
-        println!("[{mask_name}] box_intersects: {box_total}, mismatches={box_mismatches}");
+        println!(
+            "[{mask_name}] box_intersects: {box_total}, mismatches={box_mismatches}, explained(grid drops boundary-flush triangle)={box_explained_boundary}"
+        );
         if box_mismatches != 0 {
             failures.push(format!(
                 "{mask_name} box_intersects BVH/grid mismatch: {box_mismatches}"
@@ -509,6 +586,7 @@ fn real_mesh_bvh_grid_differential_and_reports() {
         // `moller_trumbore` ray property), so this must be exact.
         let mut surf_total = 0u64;
         let mut surf_mismatches = 0u64;
+        let mut surf_explained_boundary = 0u64;
         for _ in 0..1000 {
             let ti = rng.next_u32() as usize % mesh.triangles.len();
             let tri = mesh.triangles[ti];
@@ -549,11 +627,18 @@ fn real_mesh_bvh_grid_differential_and_reports() {
                 _ => false,
             };
             if !ok {
-                surf_mismatches += 1;
+                let explained = b2.is_some_and(|hit| {
+                    is_grid_boundary_drop(&oracle_triangles, 16.0, hit.triangle)
+                });
+                if explained {
+                    surf_explained_boundary += 1;
+                } else {
+                    surf_mismatches += 1;
+                }
             }
         }
         println!(
-            "[{mask_name}] surface-start hull sweeps: {surf_total}, mismatches={surf_mismatches}"
+            "[{mask_name}] surface-start hull sweeps: {surf_total}, mismatches={surf_mismatches}, explained(grid drops boundary-flush triangle)={surf_explained_boundary}"
         );
         if surf_mismatches != 0 {
             failures.push(format!(

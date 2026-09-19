@@ -34,6 +34,33 @@ cs2mod replay --all                       # весь корпус validation р�
 cs2mod calibrate de_mirage --throws data/throws.json --unfreeze speed,jumpv
 ```
 
+Этап 5 добавил обратный поиск раскидок (`solver`) и его CLI:
+
+```
+cs2mod standspots de_mirage                # кэширует standspots.json (реальный хулл игрока)
+cs2mod solve de_mirage --target -662.5,-1612.5 --from -104.5,-1796 --reach 600 --tolerance 32
+    # 2945 верифицированных раскидок, побитово сверено с референсом (parity harness)
+cs2mod solve de_mirage --target -662.5,-1612.5,-172 --exact --from 32,-1696 --referee
+cs2mod solve de_mirage --target -662.5,-1612.5 --json cache/a-site.json
+```
+
+`solve` резолвит `--target`/`--from`/`--getpos` (пасте getpos'а: с `setang` —
+это EYE, feet = eye − (0,0,64.06); без `setang` позиция уже feet, как в
+вьюере `main.js`/`state.js`, а не безусловное `eye − 64` как в
+`ValidateCommand.cs`), собирает воксельную сетку и коллайдеры региона
+(с `MeshSetup.cs:SingleTargetDefaultAttrs` = `Default,default,EntitySolid`;
+`EntitySolid` тянет `EntityDoor`/`EntityBreakable`), собирает origins (кэш
+`standspots.json`, иначе стойки с nav-área — с подсказкой запустить
+`standspots`, если кэша нет или он устарел), проходит грубым перебором по
+углам (`sweep`), точной проверкой с шевелением прицела (`verify`), при
+пустом точном спуске (`--exact`) — исчерпывающим перебором и эскалацией
+2°→1°, затем ранжирует результат (`LineupApi.cs:Rank`) и печатает топ
+`--top` строк плюс, по `--json`, полный список в формате JSON-полей
+референса (`id`, `feet`, `yaw`, `pitch`, `how`, `rest`, `Bounces`,
+`stability`, `humanError`, `aimRef`, `coverage`, `console`, …).
+`--reach` по умолчанию 300u при `--from`/`--getpos`, иначе 3100u (весь
+уровень) — как в `LineupApi.cs`'s `RunTargetQuery`.
+
 Константы броска (`ThrowConstants`) по умолчанию берутся из `sim`; если
 рядом лежит `data/throw-constants.json` (или передан `--constants <path>`),
 он подхватывается автоматически, о чём печатается строка `throw constants:

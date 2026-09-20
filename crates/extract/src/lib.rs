@@ -6,6 +6,7 @@ pub mod build;
 pub mod cache;
 pub mod game;
 pub mod lookup;
+pub mod mapdata;
 mod mesh_build;
 pub mod policy;
 pub mod report;
@@ -13,6 +14,10 @@ pub mod report;
 pub use build::{EXTRACTOR_VERSION, ExtractOptions, Extraction, extract_map};
 pub use game::GameInstall;
 pub use lookup::{ModelLookup, ModelPhys, PhysSource};
+pub use mapdata::{
+    MapBundle, STANDSPOTS_VERSION, Spawns, StandSpotFile, StandSpotJson, StandSpotsState,
+    load_bundle, load_nav_areas, load_spawns, load_stand_spots, save_stand_spots,
+};
 pub use report::{EntityRecord, ExtractMeta, ExtractReport, NavAreasDump};
 
 use std::path::PathBuf;

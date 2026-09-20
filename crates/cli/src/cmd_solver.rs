@@ -7,10 +7,11 @@ use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 
 use anyhow::{Context, bail};
+use extract::{StandSpotFile, StandSpotJson, StandSpotsState};
 use geom::filter::{names_mask, player_mask};
 use geom::grid::UniformGrid;
 use geom::math::V3;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sim::ThrowType;
 use solver::rank::{self, RankedLineup};
 use solver::standspots::{self, Stance};
@@ -23,26 +24,6 @@ use crate::constants::resolve_constants;
 /// single-target commands - `EntitySolid` also implies `EntityDoor`/
 /// `EntityBreakable` (`geom::filter::names_mask`).
 const SINGLE_TARGET_DEFAULT_ATTRS: [&str; 3] = ["Default", "default", "EntitySolid"];
-
-/// Bump when `standspots::compute`'s output for the same inputs would
-/// change, so a stale cache from an older build gets recomputed rather than
-/// silently reused.
-const STANDSPOTS_VERSION: u32 = 2;
-
-#[derive(Debug, Serialize, Deserialize)]
-struct StandSpotFile {
-    version: u32,
-    map: String,
-    step: f32,
-    spots: Vec<StandSpotJson>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct StandSpotJson {
-    feet: [f32; 3],
-    stance: String,
-    nav: bool,
-}
 
 fn stance_str(s: Stance) -> &'static str {
     match s {
@@ -65,9 +46,7 @@ pub fn standspots(
     let cache_path = dir.join("standspots.json");
 
     if !force
-        && let Ok(text) = fs::read_to_string(&cache_path)
-        && let Ok(cached) = serde_json::from_str::<StandSpotFile>(&text)
-        && cached.version == STANDSPOTS_VERSION
+        && let StandSpotsState::Loaded(cached) = extract::load_stand_spots(&dir)
         && cached.step == step
     {
         print_summary(map, &cached);
@@ -76,20 +55,19 @@ pub fn standspots(
     }
 
     let nav_path = dir.join("nav.json");
-    let nav_text = fs::read_to_string(&nav_path).with_context(|| {
-        format!(
+    if !nav_path.is_file() {
+        bail!(
             "{} not found; run `cs2mod extract {map}` first",
             nav_path.display()
-        )
+        );
+    }
+    let nav_areas = extract::load_nav_areas(&dir).map_err(|e| match e {
+        extract::ExtractError::Io { .. } => anyhow::anyhow!(
+            "{} not found; run `cs2mod extract {map}` first",
+            nav_path.display()
+        ),
+        other => other.into(),
     })?;
-    let nav: extract::report::NavAreasDump = serde_json::from_str(&nav_text)
-        .with_context(|| format!("failed to parse {}", nav_path.display()))?;
-    let nav_areas: Vec<Vec<V3>> = nav
-        .areas
-        .iter()
-        .filter(|a| a.hull_index == 0)
-        .map(|a| a.corners.iter().map(|c| V3::from_array(*c)).collect())
-        .collect();
 
     let Some((min, max)) = mesh.bounds() else {
         bail!("{map}'s mesh has no triangles");
@@ -126,7 +104,7 @@ pub fn standspots(
     let elapsed = start.elapsed();
 
     let payload = StandSpotFile {
-        version: STANDSPOTS_VERSION,
+        version: extract::STANDSPOTS_VERSION,
         map: map.to_string(),
         step,
         spots: spots
@@ -142,12 +120,7 @@ pub fn standspots(
             })
             .collect(),
     };
-    // Via a temp file: this run takes long enough to be interrupted, and a
-    // truncated standspots file would otherwise greet the next server start.
-    let tmp_path = dir.join("standspots.json.tmp");
-    fs::write(&tmp_path, serde_json::to_string(&payload)?)
-        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-    fs::rename(&tmp_path, &cache_path)
+    extract::save_stand_spots(&dir, &payload)
         .with_context(|| format!("failed to write {}", cache_path.display()))?;
 
     println!(
@@ -263,89 +236,50 @@ pub fn solve(
 
     let (mesh, dir) = load_or_extract_mesh(map, game, cache)?;
 
-    let nav_path = dir.join("nav.json");
-    let nav_areas: Vec<Vec<V3>> = if nav_path.is_file() {
-        let text = fs::read_to_string(&nav_path)
-            .with_context(|| format!("failed to read {}", nav_path.display()))?;
-        let nav: extract::report::NavAreasDump = serde_json::from_str(&text)
-            .with_context(|| format!("failed to parse {}", nav_path.display()))?;
-        nav.areas
-            .iter()
-            .filter(|a| a.hull_index == 0)
-            .map(|a| a.corners.iter().map(|c| V3::from_array(*c)).collect())
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let nav_areas = extract::load_nav_areas(&dir)?;
 
     let standspots_path = dir.join("standspots.json");
-    let stand_spots: Option<Vec<StandSpotOrigin>> = 'load: {
-        if standspots_path.is_file() {
-            let cached: Option<StandSpotFile> = fs::read_to_string(&standspots_path)
-                .ok()
-                .and_then(|text| serde_json::from_str(&text).ok());
-            match cached {
-                Some(cached) if cached.version == STANDSPOTS_VERSION => {
-                    break 'load Some(
-                        cached
-                            .spots
-                            .iter()
-                            .map(|s| StandSpotOrigin {
-                                feet: V3::new(s.feet[0], s.feet[1], s.feet[2]),
-                                crouched: s.stance == "Crouching",
-                            })
-                            .collect(),
-                    );
-                }
-                Some(_) => println!(
-                    "hint: {} is from an older standspots version - run `cs2mod standspots {map} --force` to refresh it; falling back to nav-mesh origins for now",
-                    standspots_path.display()
-                ),
-                // Unreadable or unparsable (a truncated/corrupt file, a
-                // format from before this port existed, ...): the same
-                // "treat it as missing" fallback as a stale version, not a
-                // hard failure - the command still has a working answer via
-                // nav-mesh origins.
-                None => println!(
-                    "hint: {} is unreadable or not valid JSON - run `cs2mod standspots {map} --force` to rebuild it; falling back to nav-mesh origins for now",
-                    standspots_path.display()
-                ),
-            }
-        } else {
+    let stand_spots: Option<Vec<StandSpotOrigin>> = match extract::load_stand_spots(&dir) {
+        StandSpotsState::Loaded(cached) => Some(
+            cached
+                .spots
+                .iter()
+                .map(|s| StandSpotOrigin {
+                    feet: V3::new(s.feet[0], s.feet[1], s.feet[2]),
+                    crouched: s.stance == "Crouching",
+                })
+                .collect(),
+        ),
+        StandSpotsState::Stale { .. } => {
+            println!(
+                "hint: {} is from an older standspots version - run `cs2mod standspots {map} --force` to refresh it; falling back to nav-mesh origins for now",
+                standspots_path.display()
+            );
+            None
+        }
+        // Unreadable or unparsable (a truncated/corrupt file, a format from
+        // before this port existed, ...): the same "treat it as missing"
+        // fallback as a stale version, not a hard failure - the command
+        // still has a working answer via nav-mesh origins.
+        StandSpotsState::Unreadable => {
+            println!(
+                "hint: {} is unreadable or not valid JSON - run `cs2mod standspots {map} --force` to rebuild it; falling back to nav-mesh origins for now",
+                standspots_path.display()
+            );
+            None
+        }
+        StandSpotsState::Missing => {
             println!(
                 "hint: no {} - run `cs2mod standspots {map}` for the precomputed hull-checked origin set; falling back to nav-mesh origins",
                 standspots_path.display()
             );
+            None
         }
-        None
     };
 
-    let entities_path = dir.join("entities.json");
-    let mut t_spawns = Vec::new();
-    let mut ct_spawns = Vec::new();
-    if entities_path.is_file() {
-        let text = fs::read_to_string(&entities_path)
-            .with_context(|| format!("failed to read {}", entities_path.display()))?;
-        let entities: Vec<extract::report::EntityRecord> = serde_json::from_str(&text)
-            .with_context(|| format!("failed to parse {}", entities_path.display()))?;
-        for e in &entities {
-            let bucket = match e.classname.as_str() {
-                "info_player_terrorist" => &mut t_spawns,
-                "info_player_counterterrorist" => &mut ct_spawns,
-                _ => continue,
-            };
-            // `MapRegistry.cs:347-353`: Wingman (2v2) spawns are tagged
-            // `[PR#]spawnpoints.2v2`, sit in walled-off areas and are
-            // disabled (`enabled=0`) in Defusal - not real round-start spots.
-            if e.targetname
-                .as_deref()
-                .is_some_and(|n| n.to_lowercase().contains("2v2"))
-            {
-                continue;
-            }
-            bucket.push(V3::new(e.origin[0], e.origin[1], e.origin[2]));
-        }
-    }
+    let spawns = extract::load_spawns(&dir)?;
+    let t_spawns = spawns.t;
+    let ct_spawns = spawns.ct;
     let mut all_spawns = t_spawns.clone();
     all_spawns.extend(ct_spawns.iter().copied());
 

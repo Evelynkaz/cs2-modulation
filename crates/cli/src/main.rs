@@ -2,6 +2,7 @@ mod cmd_extract;
 mod cmd_res;
 mod cmd_sim;
 mod cmd_solver;
+mod cmd_viewerdata;
 mod cmd_vpk;
 mod constants;
 mod game_path;
@@ -251,6 +252,26 @@ enum Command {
         constants: Option<PathBuf>,
         #[arg(long)]
         game: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
+    /// Render a 2D radar PNG and `viewer-map.json` header for a map.
+    Viewerdata {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// World units per pixel.
+        #[arg(long, default_value_t = 2.0)]
+        pixel_size: f32,
+        /// `x0,y0,x1,y1`; defaults to the nav mesh's AABB.
+        #[arg(long)]
+        region: Option<String>,
+        /// Overwrite an existing `viewer-map.png`/`.json`.
+        #[arg(long)]
+        force: bool,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
         #[arg(long)]
         cache: Option<PathBuf>,
     },
@@ -539,6 +560,22 @@ fn run() -> anyhow::Result<u8> {
             game.as_deref(),
             cache.as_deref(),
         ),
+        Command::Viewerdata {
+            map,
+            pixel_size,
+            region,
+            force,
+            game,
+            cache,
+        } => cmd_viewerdata::viewerdata(
+            &map,
+            pixel_size,
+            region.as_deref(),
+            force,
+            game.as_deref(),
+            cache.as_deref(),
+        )
+        .map(|()| 0),
         Command::Serve => anyhow::bail!("serve is not implemented yet (planned for stage 6)"),
         Command::Vpk { command } => match command {
             VpkCommand::Ls {

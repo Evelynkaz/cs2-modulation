@@ -20,6 +20,7 @@ sim = { workspace = true }
 solver = { workspace = true }
 calib = { workspace = true }
 server = { workspace = true }
+radar = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }

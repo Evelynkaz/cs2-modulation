@@ -13,3 +13,13 @@ solver = { workspace = true }
 sim = { workspace = true }
 geom = { workspace = true }
 extract = { workspace = true }
+radar = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+tower = "0.5"

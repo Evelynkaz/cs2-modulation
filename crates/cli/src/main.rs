@@ -1,5 +1,6 @@
 mod cmd_extract;
 mod cmd_res;
+mod cmd_serve;
 mod cmd_sim;
 mod cmd_solver;
 mod cmd_viewerdata;
@@ -276,7 +277,21 @@ enum Command {
         cache: Option<PathBuf>,
     },
     /// Run the HTTP API and web viewer server.
-    Serve,
+    Serve {
+        /// Port to listen on (loopback only); defaults to the saved config's port (8137 if
+        /// unconfigured).
+        #[arg(long)]
+        port: Option<u16>,
+        /// Open the viewer in the default browser once the server is up.
+        #[arg(long)]
+        open: bool,
+        /// Game directory (`...\game\csgo`); overrides the saved config for this run.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; overrides the saved config for this run.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
     /// Inspect and extract VPK archives.
     Vpk {
         #[command(subcommand)]
@@ -576,7 +591,12 @@ fn run() -> anyhow::Result<u8> {
             cache.as_deref(),
         )
         .map(|()| 0),
-        Command::Serve => anyhow::bail!("serve is not implemented yet (planned for stage 6)"),
+        Command::Serve {
+            port,
+            open,
+            game,
+            cache,
+        } => cmd_serve::serve(port, open, game.as_deref(), cache.as_deref()),
         Command::Vpk { command } => match command {
             VpkCommand::Ls {
                 vpk,

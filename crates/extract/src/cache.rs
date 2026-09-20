@@ -99,7 +99,7 @@ fn cache_key_dir_from_meta(cache_root: &Path, meta: &ExtractMeta) -> PathBuf {
 
 /// True if `dir` has a readable, current-version manifest and every file it lists is present
 /// with the recorded size.
-fn is_complete(dir: &Path) -> bool {
+pub fn is_complete(dir: &Path) -> bool {
     let manifest_path = dir.join("manifest.json");
     let Ok(text) = fs::read_to_string(&manifest_path) else {
         return false;

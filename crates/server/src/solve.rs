@@ -275,6 +275,16 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
     {
         return Some("target is outside the map bounds".to_string());
     }
+    if target_arr.len() == 3 {
+        let tz = as_f32_finite(&target_arr[2]).unwrap();
+        if tz < mesh_min[2] - MAP_BOUNDS_MARGIN || tz > mesh_max[2] + MAP_BOUNDS_MARGIN {
+            return Some(format!(
+                "target z is outside the map bounds ({} to {} allowed)",
+                mesh_min[2] - MAP_BOUNDS_MARGIN,
+                mesh_max[2] + MAP_BOUNDS_MARGIN
+            ));
+        }
+    }
     if let Some(origin) = query.get("origin") {
         let ok = origin
             .as_array()
@@ -1135,6 +1145,26 @@ mod tests {
     fn validate_accepts_a_minimal_query() {
         let mesh = CollisionMesh::new();
         let q = json!({ "target": [0.0, 0.0] });
+        assert_eq!(validate_lineup_query(&q, &mesh), None);
+    }
+
+    #[test]
+    fn validate_rejects_target_far_below_mesh_z() {
+        let mut mesh = CollisionMesh::new();
+        mesh.vertices = vec![[-100.0, -100.0, -448.0], [100.0, 100.0, 1024.0]];
+        let q = json!({ "target": [0.0, 0.0, -1400.0] });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("target z is outside the map bounds")
+        );
+    }
+
+    #[test]
+    fn validate_accepts_target_just_inside_the_widened_z_range() {
+        let mut mesh = CollisionMesh::new();
+        mesh.vertices = vec![[-100.0, -100.0, -448.0], [100.0, 100.0, 1024.0]];
+        let q = json!({ "target": [0.0, 0.0, -900.0] });
         assert_eq!(validate_lineup_query(&q, &mesh), None);
     }
 

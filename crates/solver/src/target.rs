@@ -631,7 +631,10 @@ pub fn solve_for_target(
     let max = V3::new(
         (target.x.max(origin_click[0] + q.origin_reach) + 500.0).min(mesh_max.x),
         (target.y.max(origin_click[1] + q.origin_reach) + 500.0).min(mesh_max.y),
-        (mesh_max.z + 64.0).min(target.z + 900.0),
+        // A target far below the map used to invert this region (`max.z` below `min.z`),
+        // which sent `VoxelGrid::build` a negative cell count and aborted the process - clamp
+        // to at least one voxel above `min.z` so the grid always stays non-degenerate here too.
+        ((mesh_max.z + 64.0).min(target.z + 900.0)).max(min.z + VOXEL_SIZE),
     );
     let region = Aabb { min, max };
     let grid =
@@ -1512,6 +1515,37 @@ mod tests {
             target: V3::new(0.0, 0.0, 0.0),
             has_target_z: true,
             tolerance: 1.0,
+            ..Default::default()
+        };
+        let k = ThrowConstants::default();
+        let cancel = AtomicBool::new(false);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
+        assert!(solve.lineups.is_empty());
+        assert!(solve.empty_reason.is_some());
+    }
+
+    /// A target far below the mesh used to invert the region's z range (`max.z < min.z`),
+    /// which sent `VoxelGrid::build` a negative cell count and aborted the whole process. It
+    /// must now come back as a normal empty result instead.
+    #[test]
+    fn target_far_below_mesh_does_not_panic() {
+        let mesh = flat_plane(400.0);
+        let map = MapData {
+            mesh,
+            nav_areas: vec![],
+            stand_spots: None,
+            spawns: vec![],
+            attribute_filter: None,
+        };
+        let q = SolveQuery {
+            target: V3::new(0.0, 0.0, -1400.0),
+            has_target_z: true,
+            tolerance: 80.0,
             ..Default::default()
         };
         let k = ThrowConstants::default();

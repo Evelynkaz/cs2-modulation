@@ -110,10 +110,16 @@ impl VoxelGrid {
             ((bounds.min.y / voxel_size).floor() - 1.0) * voxel_size,
             ((bounds.min.z / voxel_size).floor() - 1.0) * voxel_size,
         );
-        let nx = (((bounds.max.x - origin.x) / voxel_size).ceil() as i32) + 1;
-        let ny = (((bounds.max.y - origin.y) / voxel_size).ceil() as i32) + 1;
-        let nz = (((bounds.max.z - origin.z) / voxel_size).ceil() as i32) + 1;
-        let cell_count = (nx as usize) * (ny as usize) * (nz as usize);
+        // `bounds` can be degenerate or inverted (e.g. a caller-computed region whose `max` ends
+        // up below its `min`) - saturate every axis at 1 cell rather than letting a negative
+        // count slip into the product below, and multiply in `u64` with saturation so the
+        // product itself can never wrap around to a huge `usize` and abort the allocation.
+        let nx = ((((bounds.max.x - origin.x) / voxel_size).ceil() as i32) + 1).max(1);
+        let ny = ((((bounds.max.y - origin.y) / voxel_size).ceil() as i32) + 1).max(1);
+        let nz = ((((bounds.max.z - origin.z) / voxel_size).ceil() as i32) + 1).max(1);
+        let cell_count = (nx as u64)
+            .saturating_mul(ny as u64)
+            .saturating_mul(nz as u64) as usize;
         let words = cell_count.div_ceil(64);
         let solid: Vec<AtomicU64> = (0..words).map(|_| AtomicU64::new(0)).collect();
         let grid = VoxelGrid {
@@ -342,6 +348,29 @@ mod tests {
             );
         }
         mesh
+    }
+
+    /// An inverted z range (`max.z < min.z`, as a caller-computed region can end up with) used to
+    /// make `nz` negative, wrapping `nx * ny * nz` to a huge `usize` and aborting the allocation.
+    /// It must now build a small, sane grid instead.
+    #[test]
+    fn build_survives_an_inverted_z_range() {
+        let mut rng = Rng::new(0x1234_5678);
+        let mesh = random_mesh(&mut rng, 20, 60.0, 12.0);
+        let mask = all_mask(&mesh);
+        let bounds = Aabb {
+            min: V3::new(-80.0, -80.0, 0.0),
+            max: V3::new(80.0, 80.0, -1000.0),
+        };
+        let grid = VoxelGrid::build(&mesh, &mask, 16.0, bounds).unwrap();
+        assert!(grid.nx >= 1 && grid.ny >= 1 && grid.nz >= 1);
+        assert!(
+            grid.cell_count() < 1_000_000,
+            "grid ballooned: nx={} ny={} nz={}",
+            grid.nx,
+            grid.ny,
+            grid.nz
+        );
     }
 
     #[test]

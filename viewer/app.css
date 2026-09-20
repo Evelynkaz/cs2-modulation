@@ -240,6 +240,171 @@ canvas#radar-canvas:active {
   cursor: grabbing;
 }
 
+.solve-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.radar-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.map-sidebar {
+  flex: 0 0 320px;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  .solve-layout {
+    flex-direction: column;
+  }
+  .map-sidebar {
+    flex: 1 1 auto;
+    max-height: none;
+    width: 100%;
+  }
+  .radar-wrap {
+    height: 50vh;
+  }
+}
+
+.params-box summary,
+.target-box h2,
+.panel-box h2 {
+  font-size: 1rem;
+  margin: 0 0 0.4rem;
+}
+
+.params-box summary {
+  cursor: pointer;
+}
+
+.params-box .params-content {
+  margin-top: 0.6rem;
+}
+
+.params-box label,
+.target-box label {
+  display: block;
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0.15rem;
+}
+
+.params-box input[type="number"] {
+  width: 6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.radio-item,
+.checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.15rem 0.6rem 0.15rem 0;
+  font-size: 0.85rem;
+}
+
+.level-chooser {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.level-chooser button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 0.3rem;
+}
+
+.panel-filters {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.panel-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.lineup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.lineup-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel);
+}
+
+.lineup-row.selected {
+  border-color: var(--accent);
+}
+
+.lineup-select {
+  cursor: pointer;
+}
+
+.lineup-select:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lineup-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.lineup-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+}
+
+.lineup-flags {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.25rem;
+}
+
+.lineup-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.copy-fallback {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

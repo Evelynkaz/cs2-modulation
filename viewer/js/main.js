@@ -4,9 +4,21 @@
 
 import { state, applyTheme, resolveInitialTheme, storeTheme } from "./state.js?v=1";
 import { strings } from "./strings.js?v=1";
-import { fetchConfig, putConfig, fetchMaps, fetchJobs, fetchRadar, radarPngUrl, deleteJob } from "./api.js?v=1";
+import {
+  fetchConfig,
+  putConfig,
+  fetchMaps,
+  fetchJobs,
+  fetchRadar,
+  fetchLevels,
+  radarPngUrl,
+  deleteJob,
+} from "./api.js?v=1";
 import { renderSetup } from "./setup.js?v=1";
 import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
+import { createMapView } from "./map2d.js?v=1";
+import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=1";
+import { createPanel, TYPE_LABELS } from "./panel.js?v=1";
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -28,6 +40,13 @@ function el(tag, props, ...children) {
 const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
 let radarView = null; // { recolor(): void } for the current map screen's canvas, if any.
+// AMBER-7: the map view owns a ResizeObserver, a devicePixelRatio listener and a recolored
+// canvas - each `showMapScreen` must destroy the previous one instead of leaking it.
+let currentMapView = null;
+function destroyCurrentMapView() {
+  currentMapView?.destroy();
+  currentMapView = null;
+}
 
 // Screen changes go through the dedicated `#status` live region, not `#app` itself - `#app`'s
 // own DOM churn (a whole screen replaced at once) would otherwise be announced line by line.
@@ -47,7 +66,7 @@ function wireThemeToggle() {
     applyTheme(state.theme === "dark" ? "light" : "dark");
     storeTheme(state.theme);
     sync();
-    radarView?.recolor();
+    radarView?.recolor(state.theme);
   });
 }
 
@@ -72,7 +91,111 @@ async function boot() {
   applyTheme(resolveInitialTheme());
   wireThemeToggle();
   await routeFromConfig();
+  // `s6f2_solve_ui.md`: a link with `#map=...&target=...` opens straight to that map and starts
+  // the same solve, instead of stopping at the map list.
+  if (state.screen === "maps") {
+    const hashQuery = readHash();
+    const ready = hashQuery && state.maps.find((m) => m.map === hashQuery.map && m.hasLineups && m.hasStandSpots && m.hasRadar);
+    if (ready) {
+      state.screen = "map";
+      putConfig({ lastMap: hashQuery.map });
+      showMapScreen(hashQuery.map, { autoBody: bodyFromHash(hashQuery) });
+    }
+  }
   reattachJobs();
+}
+
+// ---- address-bar state (`#map=...&target=x,y,z&tolerance=80&...`) -------------------------------
+
+function readHash() {
+  const raw = location.hash.replace(/^#/, "");
+  if (!raw) {
+    return null;
+  }
+  const params = new URLSearchParams(raw);
+  const map = params.get("map");
+  const targetStr = params.get("target");
+  if (!map || !targetStr) {
+    return null;
+  }
+  const target = targetStr.split(",").map(Number);
+  if (target.length < 3 || target.some((v) => !Number.isFinite(v))) {
+    return null;
+  }
+  const query = { map, target };
+  for (const [k, v] of params.entries()) {
+    if (k === "map" || k === "target") {
+      continue;
+    }
+    query[k] = v;
+  }
+  return query;
+}
+
+// AMBER-10: a non-numeric hash value must be dropped, not turned into a `NaN` that serialises to
+// `null`, gets rejected by the server, and then gets written straight back into the hash.
+function finiteNumber(str) {
+  const v = Number(str);
+  return Number.isFinite(v) ? v : undefined;
+}
+
+function bodyFromHash(q) {
+  const body = { map: q.map, target: q.target };
+  if (q.origin) {
+    const o = q.origin.split(",").map(Number);
+    if (o.length === 2 && o.every(Number.isFinite)) {
+      body.origin = o;
+    }
+  }
+  if (q.originReach) {
+    const v = finiteNumber(q.originReach);
+    if (v !== undefined) {
+      body.originReach = v;
+    }
+  }
+  if (q.scope) {
+    body.scope = q.scope;
+  }
+  if (q.tolerance) {
+    const v = finiteNumber(q.tolerance);
+    if (v !== undefined) {
+      body.tolerance = v;
+    }
+  }
+  if (q.minStability) {
+    const v = finiteNumber(q.minStability);
+    if (v !== undefined) {
+      body.minStability = v;
+    }
+  }
+  if (q.fineScan === "true") {
+    body.fineScan = true;
+  }
+  if (q.types) {
+    body.types = q.types.split(",");
+  }
+  if (q.strengths) {
+    const strengths = q.strengths.split(",").map(finiteNumber).filter((v) => v !== undefined);
+    if (strengths.length > 0) {
+      body.strengths = strengths;
+    }
+  }
+  if (q.broken) {
+    body.broken = q.broken.split(",");
+  }
+  return body;
+}
+
+function syncHash(body) {
+  const parts = [`map=${encodeURIComponent(body.map)}`, `target=${body.target.map((v) => v.toFixed(1)).join(",")}`];
+  for (const [k, v] of Object.entries(body)) {
+    if (k === "map" || k === "target") {
+      continue;
+    }
+    const text = Array.isArray(v) ? v.join(",") : String(v);
+    parts.push(`${k}=${encodeURIComponent(text)}`);
+  }
+  history.replaceState(null, "", "#" + parts.join("&"));
 }
 
 async function routeFromConfig() {
@@ -107,6 +230,7 @@ boot();
 
 async function showMapsScreen() {
   state.screen = "maps";
+  destroyCurrentMapView();
   radarView = null;
   renderLoadingMaps();
   const { data, error } = await fetchMaps();
@@ -605,269 +729,515 @@ function selectMap(map) {
   putConfig({ lastMap: map });
 }
 
-// ---- screen 3: map preparation (radar only for now) --------------------------------------------
+// ---- screen 3: map + target + solve -------------------------------------------------------------
 
-async function showMapScreen(map) {
+const ALL_TYPES = ["Stand", "Crouch", "JumpThrow", "CrouchJumpThrow", "RunJumpThrow"];
+const ALL_STRENGTHS = [1, 0.5, 0];
+
+// `opts.autoBody`: a full `/api/lineup` request body reconstructed from the address bar
+// (`bodyFromHash`) - when given, the target/origin/params it carries are applied and the solve
+// starts immediately once the radar has loaded.
+async function showMapScreen(map, opts = {}) {
   state.screen = "map";
   state.currentMap = map;
+  destroyCurrentMapView();
   radarView = null;
   app.replaceChildren();
   announce(map);
+
+  const mapSummary = state.maps.find((m) => m.map === map) ?? {};
+
   const header = el(
     "div",
     { className: "map-screen-header" },
     el("h1", { textContent: map }),
     el("button", { type: "button", textContent: strings.mapScreen.backToList, onclick: showMapsScreen }),
   );
-  const caption = el("p", { className: "hint", textContent: strings.mapScreen.targetComingSoon });
   const wrap = el("div", { className: "radar-wrap" });
-  const canvas = el("canvas", {
-    id: "radar-canvas",
-    role: "img",
-    "aria-label": `Радар карты ${map}`,
-  });
+  const canvas = el("canvas", { id: "radar-canvas", role: "img", "aria-label": `Радар карты ${map}` });
   wrap.append(canvas);
-  app.append(header, caption, wrap);
+  const caption = el("p", { className: "hint" });
 
-  const { data, error } = await fetchRadar(map);
-  if (error !== undefined) {
-    caption.textContent = error ?? strings.errors.serverDown;
+  // RED-1: params is the tallest box by far - it goes last, collapsed, so target/run/results
+  // (what a two-minute solve actually needs seen) are the ones sitting in the visible band.
+  const paramsContent = el("div", { className: "params-content" });
+  const paramsBox = el(
+    "details",
+    { className: "field params-box" },
+    el("summary", { textContent: strings.solveParams.heading }),
+    paramsContent,
+  );
+  const targetBox = el("div", { className: "field target-box" });
+  const runBox = el("div", { className: "field run-box" });
+  const panelBox = el("div", { className: "panel-box" });
+  const sidebar = el("div", { className: "map-sidebar" }, targetBox, runBox, panelBox, paramsBox);
+  const layout = el("div", { className: "solve-layout" }, wrap, sidebar);
+
+  app.append(header, caption, layout);
+
+  const { data: radarData, error: radarError } = await fetchRadar(map);
+  if (radarError !== undefined) {
+    caption.className = "status status-error";
+    caption.textContent = radarError ?? strings.errors.serverDown;
     return;
+  }
+
+  // ---- per-screen solve state ----
+  const solveState = {
+    target: null, // { x, y, z, label }
+    origin: null, // { x, y, reach }
+    params: { scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false, types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [] },
+    running: false,
+    controller: null,
+  };
+  let pendingLevels = null; // { x, y, levels }
+  let mapView = null;
+  let originStatusBox = null;
+  let runRefs = null;
+  let scopeSelectRef = null;
+
+  // AMBER-12: a right-click origin must be reflected in the "where to throw from" select, not
+  // just on the map - otherwise the control keeps reading "по всей карте" while the request
+  // actually carries an origin, and there is no single action that clears it.
+  function syncScopeSelect() {
+    if (!scopeSelectRef) {
+      return;
+    }
+    const pointOption = scopeSelectRef.querySelector('option[value="point"]');
+    if (solveState.origin && !pointOption) {
+      scopeSelectRef.append(el("option", { value: "point", textContent: strings.solveParams.scopePointOption }));
+    } else if (!solveState.origin && pointOption) {
+      pointOption.remove();
+    }
+    scopeSelectRef.value = solveState.origin ? "point" : solveState.params.scope;
+  }
+
+  const panel = createPanel(panelBox, {
+    onSelect: (id) => mapView?.setSelected(id),
+    onHoverEnter: (id) => mapView?.setHover(id),
+    onHoverLeave: () => mapView?.setHover(null),
+  });
+
+  function applyTarget(t) {
+    solveState.target = t;
+    pendingLevels = null;
+    mapView?.setTarget(t);
+    renderTargetBox();
+  }
+
+  // RED-2: a click that only narrows down to a level choice must not leave the previous
+  // target (and its cross on the map) in place - otherwise "run" solves for the old point.
+  function clearTarget() {
+    solveState.target = null;
+    mapView?.clearTarget();
+  }
+
+  async function handleMapClick(wx, wy) {
+    const { data, error } = await fetchLevels(map, wx, wy);
+    if (error !== undefined) {
+      caption.className = "status status-error";
+      caption.textContent = error ?? strings.errors.serverDown;
+      return;
+    }
+    const levels = data.levels ?? [];
+    if (levels.length === 0) {
+      // AMBER-11: no nav mesh here - inventing z=0 would put the target in mid-air (and, on a
+      // map whose geometry sits far from the origin, feed it straight into the server crash).
+      clearTarget();
+      pendingLevels = null;
+      caption.className = "status status-error";
+      caption.textContent = strings.mapScreen.noFloorHere;
+      renderTargetBox();
+      return;
+    }
+    caption.textContent = "";
+    if (levels.length === 1) {
+      applyTarget({ x: wx, y: wy, z: levels[0].z, label: levels[0].name ?? null });
+    } else {
+      clearTarget();
+      pendingLevels = { x: wx, y: wy, levels };
+      renderTargetBox();
+    }
+  }
+
+  function updateOriginStatus() {
+    if (!originStatusBox) {
+      return;
+    }
+    originStatusBox.textContent = solveState.origin
+      ? `${strings.solveParams.scopePoint}: ${solveState.origin.x.toFixed(0)}, ${solveState.origin.y.toFixed(0)} (±${solveState.origin.reach})`
+      : "";
+  }
+
+  function handleOriginClick(wx, wy) {
+    solveState.origin = { x: wx, y: wy, reach: solveState.params.originReach };
+    mapView?.setOrigin(solveState.origin);
+    updateOriginStatus();
+    syncScopeSelect();
+  }
+
+  function toggleInArray(arr, value, checked) {
+    const i = arr.indexOf(value);
+    if (checked && i < 0) {
+      arr.push(value);
+    } else if (!checked && i >= 0) {
+      arr.splice(i, 1);
+    }
+  }
+
+  function renderParamsBox() {
+    paramsContent.replaceChildren();
+
+    const grenadeOptions = [
+      ["smoke", strings.solveParams.grenadeSmoke, true],
+      ["flash", strings.solveParams.grenadeFlash, false],
+      ["he", strings.solveParams.grenadeHe, false],
+      ["molotov", strings.solveParams.grenadeMolotov, false],
+      ["decoy", strings.solveParams.grenadeDecoy, false],
+    ];
+    const grenadeRow = el("div", { className: "field-row", role: "radiogroup", "aria-label": strings.solveParams.grenadeLabel });
+    for (const [value, label, enabled] of grenadeOptions) {
+      const id = `grenade-${value}`;
+      const input = el("input", { type: "radio", name: "grenade", id, value, checked: value === "smoke", disabled: !enabled });
+      const text = enabled ? label : `${label} (${strings.solveParams.grenadeComingSoon})`;
+      grenadeRow.append(el("span", { className: "radio-item" }, input, el("label", { htmlFor: id, textContent: text })));
+    }
+    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.grenadeLabel }), grenadeRow);
+
+    const scopeSelect = el("select", { id: "scope-select" });
+    scopeSelect.append(
+      el("option", { value: "all", textContent: strings.solveParams.scopeAll }),
+      el("option", { value: "spawns", textContent: strings.solveParams.scopeSpawns }),
+    );
+    scopeSelectRef = scopeSelect;
+    syncScopeSelect();
+    scopeSelect.addEventListener("change", () => {
+      // The "point" option only ever exists while `solveState.origin` is set (`syncScopeSelect`
+      // adds/removes it) - picking any other option is how the placed origin gets removed.
+      solveState.params.scope = scopeSelect.value;
+      if (solveState.origin) {
+        solveState.origin = null;
+        mapView?.clearOrigin();
+        updateOriginStatus();
+        syncScopeSelect();
+      }
+    });
+    paramsContent.append(
+      el("label", { htmlFor: "scope-select", textContent: strings.solveParams.scopeLabel }),
+      scopeSelect,
+      el("p", { className: "hint", textContent: strings.solveParams.scopePoint }),
+    );
+
+    const originReachInput = el("input", { id: "origin-reach", type: "number", min: 16, max: 4000, value: solveState.params.originReach });
+    originReachInput.addEventListener("input", () => {
+      const v = parseFloat(originReachInput.value);
+      if (!Number.isFinite(v)) {
+        return;
+      }
+      solveState.params.originReach = v;
+      if (solveState.origin) {
+        solveState.origin.reach = v;
+        mapView?.setOrigin(solveState.origin);
+        updateOriginStatus();
+      }
+    });
+    paramsContent.append(
+      el("div", { className: "field-row" }, el("label", { htmlFor: "origin-reach", textContent: strings.solveParams.originReachLabel }), originReachInput),
+    );
+    originStatusBox = el("p", { className: "hint" });
+    paramsContent.append(originStatusBox);
+    updateOriginStatus();
+
+    const tolInput = el("input", { id: "tolerance-input", type: "number", min: 1, max: 512, value: solveState.params.tolerance });
+    tolInput.addEventListener("input", () => {
+      const v = parseFloat(tolInput.value);
+      if (Number.isFinite(v)) {
+        solveState.params.tolerance = v;
+      }
+    });
+    paramsContent.append(
+      el("div", { className: "field-row" }, el("label", { htmlFor: "tolerance-input", textContent: strings.solveParams.toleranceLabel }), tolInput),
+    );
+
+    const stabInput = el("input", { id: "stability-input", type: "number", min: 0.05, max: 1, step: 0.05, value: solveState.params.minStability });
+    stabInput.addEventListener("input", () => {
+      const v = parseFloat(stabInput.value);
+      if (Number.isFinite(v)) {
+        solveState.params.minStability = v;
+      }
+    });
+    paramsContent.append(
+      el("div", { className: "field-row" }, el("label", { htmlFor: "stability-input", textContent: strings.solveParams.minStabilityLabel }), stabInput),
+    );
+
+    const fineCb = el("input", { type: "checkbox", id: "fine-scan", checked: solveState.params.fineScan });
+    fineCb.addEventListener("change", () => {
+      solveState.params.fineScan = fineCb.checked;
+    });
+    paramsContent.append(el("label", { htmlFor: "fine-scan" }, fineCb, ` ${strings.solveParams.fineScanLabel}`));
+
+    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.typesLabel }));
+    const typesRow = el("div", { className: "field-row" });
+    for (const t of ALL_TYPES) {
+      const id = `type-${t}`;
+      const cb = el("input", { type: "checkbox", id, checked: solveState.params.types.includes(t) });
+      cb.addEventListener("change", () => toggleInArray(solveState.params.types, t, cb.checked));
+      typesRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: id, textContent: TYPE_LABELS[t] })));
+    }
+    paramsContent.append(typesRow);
+
+    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.strengthsLabel }));
+    const strengthsRow = el("div", { className: "field-row" });
+    const strengthDefs = [
+      [1, strings.solveParams.strength1],
+      [0.5, strings.solveParams.strengthHalf],
+      [0, strings.solveParams.strength0],
+    ];
+    for (const [val, label] of strengthDefs) {
+      const id = `strength-${val}`;
+      const cb = el("input", { type: "checkbox", id, checked: solveState.params.strengths.includes(val) });
+      cb.addEventListener("change", () => toggleInArray(solveState.params.strengths, val, cb.checked));
+      strengthsRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: id, textContent: label })));
+    }
+    paramsContent.append(strengthsRow);
+
+    if (mapSummary.hasGlass || mapSummary.hasDoors) {
+      paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.brokenLabel }));
+      const brokenRow = el("div", { className: "field-row" });
+      if (mapSummary.hasGlass) {
+        const cb = el("input", { type: "checkbox", id: "broken-glass", checked: solveState.params.broken.includes("glass") });
+        cb.addEventListener("change", () => toggleInArray(solveState.params.broken, "glass", cb.checked));
+        brokenRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: "broken-glass", textContent: strings.solveParams.brokenGlass })));
+      }
+      if (mapSummary.hasDoors) {
+        const cb = el("input", { type: "checkbox", id: "broken-doors", checked: solveState.params.broken.includes("doors") });
+        cb.addEventListener("change", () => toggleInArray(solveState.params.broken, "doors", cb.checked));
+        brokenRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: "broken-doors", textContent: strings.solveParams.brokenDoors })));
+      }
+      paramsContent.append(brokenRow);
+    }
+  }
+
+  function renderTargetBox() {
+    targetBox.replaceChildren();
+    targetBox.append(el("h2", { textContent: strings.mapScreen.targetLabel }));
+    if (solveState.target) {
+      const t = solveState.target;
+      const label = t.label ? ` (${t.label})` : "";
+      targetBox.append(el("p", { textContent: `${t.x.toFixed(0)}, ${t.y.toFixed(0)}, ${t.z.toFixed(0)}${label}` }));
+    } else {
+      targetBox.append(el("p", { className: "hint", textContent: strings.mapScreen.targetNone }));
+    }
+    targetBox.append(el("p", { className: "hint", textContent: strings.mapScreen.targetHint }));
+
+    const manualInput = el("input", { id: "manual-setpos", type: "text", placeholder: strings.mapScreen.manualPlaceholder });
+    const manualBtn = el("button", { type: "button", textContent: strings.mapScreen.manualButton });
+    const manualStatus = el("p", { className: "status" });
+    manualBtn.addEventListener("click", () => {
+      const parsed = parseSetpos(manualInput.value);
+      if (!parsed) {
+        manualStatus.className = "status status-error";
+        manualStatus.textContent = strings.mapScreen.manualBad;
+        return;
+      }
+      manualStatus.className = "status";
+      manualStatus.textContent = "";
+      applyTarget({ x: parsed.x, y: parsed.y, z: parsed.z, label: null });
+    });
+    targetBox.append(
+      el("label", { htmlFor: "manual-setpos", textContent: strings.mapScreen.manualLabel }),
+      el("div", { className: "field-row" }, manualInput, manualBtn),
+      manualStatus,
+    );
+
+    if (pendingLevels) {
+      const chooser = el("div", { className: "level-chooser" });
+      chooser.append(el("p", { textContent: strings.mapScreen.levelsHeading }));
+      for (const lvl of pendingLevels.levels) {
+        const btn = el("button", {
+          type: "button",
+          textContent: `${lvl.name ?? strings.mapScreen.levelUnnamed} (z=${lvl.z.toFixed(0)})`,
+        });
+        btn.addEventListener("click", () => {
+          applyTarget({ x: pendingLevels.x, y: pendingLevels.y, z: lvl.z, label: lvl.name });
+        });
+        chooser.append(btn);
+      }
+      targetBox.append(chooser);
+    }
+  }
+
+  function paintProgress(refs, lastPhase, startedAt, checkedTotal, verifiedTotal) {
+    const elapsed = (Date.now() - startedAt) / 1000;
+    const label = strings.solve.phases[lastPhase] ?? lastPhase;
+    refs.status.className = "status";
+    refs.status.textContent = `${label} - ${strings.solve.elapsed(elapsed)} - ${strings.solve.checkedCount(checkedTotal)}, ${strings.solve.verifiedCount(verifiedTotal)}`;
+  }
+
+  function applyResult(data, cameFromCache) {
+    const lineups = data.lineups ?? [];
+    // AMBER-5: the progress cloud has done its job once a result is in - leaving it drawn just
+    // buries the result overlays under however many search points were streamed.
+    mapView?.clearPoints();
+    mapView?.setLineups(lineups.map((l) => ({ id: l.id, feet: l.feet, rest: l.rest })));
+    // BLUE-19: use the server's own settled target (it can differ from the clicked point by a
+    // few units), not `solveState.target`.
+    const settledTarget = data.target ? { x: data.target[0], y: data.target[1], z: data.target[2] } : solveState.target;
+    panel.setResult(lineups, settledTarget);
+    const cachedNote = cameFromCache ? `${strings.solve.cachedResult} ` : "";
+    if (lineups.length === 0) {
+      runRefs.status.className = "status";
+      runRefs.status.textContent = `${cachedNote}${data.emptyReason ?? ""} ${strings.solve.emptyHint}`.trim();
+    } else {
+      runRefs.status.className = "status status-ok";
+      runRefs.status.textContent = `${cachedNote}${strings.panel.count(lineups.length)}`.trim();
+    }
+    // RED-1: scroll the results into view - after a long solve the sidebar may still be
+    // showing the run box (or an empty results box) from before the page had anything to show.
+    panelBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function startSolve(bodyOverride) {
+    if (!solveState.target) {
+      runRefs.status.className = "status status-error";
+      runRefs.status.textContent = strings.solve.needTarget;
+      return;
+    }
+    // AMBER-9: an empty types/strengths selection is indistinguishable, once serialised, from
+    // "use every default" - the server would then silently solve with all of them.
+    const selErr = selectionError(solveState.params);
+    if (selErr) {
+      runRefs.status.className = "status status-error";
+      runRefs.status.textContent = selErr === "types" ? strings.solve.needTypes : strings.solve.needStrengths;
+      return;
+    }
+    if (solveState.running) {
+      return;
+    }
+    solveState.running = true;
+    mapView?.clearPoints();
+    mapView?.setLineups([]);
+    mapView?.setSelected(null);
+    panel.clear();
+    runRefs.runBtn.disabled = true;
+    runRefs.cancelBtn.hidden = false;
+    runRefs.status.className = "status";
+    runRefs.status.textContent = strings.solve.phases.queued;
+
+    const body = bodyOverride ?? buildQuery(map, solveState.target, solveState.origin, solveState.params);
+    syncHash(body);
+
+    const startedAt = Date.now();
+    let lastPhase = "queued";
+    let checkedTotal = 0;
+    let verifiedTotal = 0;
+    const timer = setInterval(() => paintProgress(runRefs, lastPhase, startedAt, checkedTotal, verifiedTotal), 1000);
+
+    function finish() {
+      clearInterval(timer);
+      solveState.running = false;
+      solveState.controller = null;
+      runRefs.runBtn.disabled = false;
+      runRefs.cancelBtn.hidden = true;
+    }
+
+    solveState.controller = runSolve(body, {
+      onLine: (msg) => {
+        if (msg.phase) {
+          lastPhase = msg.phase;
+          paintProgress(runRefs, lastPhase, startedAt, checkedTotal, verifiedTotal);
+          return;
+        }
+        if (msg.checked) {
+          checkedTotal += msg.checked.length;
+          mapView?.addCheckedPoints(msg.checked.map((p) => ({ x: p[0], y: p[1] })));
+        } else if (msg.verified) {
+          verifiedTotal += msg.verified.length;
+          // AMBER-4: `ok` (index 3) tells a verified-and-failed candidate apart from a real find
+          // - painting both in the bright "found" colour would misrepresent the search.
+          mapView?.addVerifiedPoints(msg.verified.map((p) => ({ x: p[0], y: p[1], ok: !!p[3] })));
+        }
+      },
+      onResult: (data, streamed) => {
+        finish();
+        // AMBER-8: "came from cache" is whether the stream reader ever saw a non-terminal line,
+        // not whether any points happened to land on the map - a first solve that streams
+        // nothing (a target inside solid geometry) is not a cache hit.
+        applyResult(data, !streamed);
+      },
+      onError: (message) => {
+        finish();
+        runRefs.status.className = "status status-error";
+        runRefs.status.textContent = message ?? strings.errors.serverDown;
+      },
+      onCancelled: () => {
+        finish();
+        runRefs.status.className = "status";
+        runRefs.status.textContent = "";
+      },
+    });
+  }
+
+  function renderRunBox() {
+    runBox.replaceChildren();
+    const runBtn = el("button", { type: "button", className: "primary", textContent: strings.solve.runButton });
+    const cancelBtn = el("button", { type: "button", textContent: strings.solve.cancelButton, hidden: true });
+    const status = el("p", { className: "status", role: "status" });
+    runBtn.addEventListener("click", () => startSolve());
+    cancelBtn.addEventListener("click", () => solveState.controller?.cancel());
+    runBox.append(el("div", { className: "field-row" }, runBtn, cancelBtn), status);
+    runRefs = { runBtn, cancelBtn, status };
+  }
+
+  function applyAutoBody(body) {
+    applyTarget({ x: body.target[0], y: body.target[1], z: body.target[2], label: null });
+    if (body.origin) {
+      solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
+      mapView?.setOrigin(solveState.origin);
+    }
+    if (body.scope) {
+      solveState.params.scope = body.scope;
+    }
+    if (body.tolerance != null) {
+      solveState.params.tolerance = body.tolerance;
+    }
+    if (body.minStability != null) {
+      solveState.params.minStability = body.minStability;
+    }
+    if (body.fineScan) {
+      solveState.params.fineScan = true;
+    }
+    if (body.types) {
+      solveState.params.types = body.types;
+    }
+    if (body.strengths) {
+      solveState.params.strengths = body.strengths;
+    }
+    if (body.broken) {
+      solveState.params.broken = body.broken;
+    }
   }
 
   const img = new Image();
   img.onload = () => {
-    radarView = setupRadarCanvas(canvas, img);
+    mapView = createMapView(canvas, radarData, img, state.theme);
+    radarView = mapView;
+    currentMapView = mapView;
+    mapView.onClick((wx, wy) => handleMapClick(wx, wy));
+    mapView.onRightClick((wx, wy) => handleOriginClick(wx, wy));
+    if (opts.autoBody) {
+      applyAutoBody(opts.autoBody);
+    }
+    renderParamsBox();
+    renderTargetBox();
+    renderRunBox();
+    if (opts.autoBody) {
+      startSolve(opts.autoBody);
+    }
   };
   img.onerror = () => {
+    caption.className = "status status-error";
     caption.textContent = strings.errors.genericPrefix;
   };
-  img.src = radarPngUrl(map) + `?v=${encodeURIComponent(data.build ?? "0")}`;
-}
-
-// R = class (0 floor, 128 low cover, 255 wall), G = floor height tint, A = nav coverage. The
-// boundary outline is written as pure red ([255,0,0,255]) - the same bytes a wall pixel with a
-// zero height-tint would already have, so no special case is needed: it just paints as "wall".
-const PALETTES = {
-  light: { floorLo: [214, 217, 222], floorHi: [236, 238, 241], cover: [176, 182, 192], wall: [46, 50, 58] },
-  dark: { floorLo: [36, 40, 48], floorHi: [58, 64, 76], cover: [86, 94, 108], wall: [214, 219, 227] },
-};
-
-function lerp(a, b, t) {
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
-  ];
-}
-
-function recolor(img, theme) {
-  const off = document.createElement("canvas");
-  off.width = img.naturalWidth;
-  off.height = img.naturalHeight;
-  const octx = off.getContext("2d");
-  octx.drawImage(img, 0, 0);
-  const imageData = octx.getImageData(0, 0, off.width, off.height);
-  const d = imageData.data;
-  const palette = PALETTES[theme] ?? PALETTES.light;
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i];
-    const g = d[i + 1];
-    const a = d[i + 3];
-    if (a === 0) {
-      d[i + 3] = 0;
-      continue;
-    }
-    let color;
-    if (r >= 192) {
-      color = palette.wall;
-    } else if (r >= 64) {
-      color = palette.cover;
-    } else {
-      color = lerp(palette.floorLo, palette.floorHi, g / 255);
-    }
-    d[i] = color[0];
-    d[i + 1] = color[1];
-    d[i + 2] = color[2];
-    d[i + 3] = 255;
-  }
-  octx.putImageData(imageData, 0, 0);
-  return off;
-}
-
-function setupRadarCanvas(canvas, img) {
-  const ctx = canvas.getContext("2d");
-  let source = recolor(img, state.theme);
-  let userScale = 1;
-  const offset = { x: 0, y: 0 };
-
-  function fitScale() {
-    const rect = canvas.parentElement.getBoundingClientRect();
-    return Math.min(rect.width / source.width, rect.height / source.height);
-  }
-
-  function draw() {
-    const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.parentElement.getBoundingClientRect();
-    canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    canvas.height = Math.max(1, Math.round(rect.height * dpr));
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, rect.width, rect.height);
-    const scale = fitScale() * userScale;
-    // The default view downscales the source (e.g. 2056x1752 into ~920x630); nearest-neighbour
-    // there aliases thin walls away. Only go nearest when magnifying past 1:1.
-    ctx.imageSmoothingEnabled = scale < 1;
-    if (scale < 1) {
-      ctx.imageSmoothingQuality = "high";
-    }
-    const dw = source.width * scale;
-    const dh = source.height * scale;
-    const cx = rect.width / 2 + offset.x;
-    const cy = rect.height / 2 + offset.y;
-    ctx.drawImage(source, cx - dw / 2, cy - dh / 2, dw, dh);
-  }
-
-  function zoomAt(clientX, clientY, factor) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = clientX - rect.left;
-    const my = clientY - rect.top;
-    const oldScale = fitScale() * userScale;
-    const cx = rect.width / 2 + offset.x;
-    const cy = rect.height / 2 + offset.y;
-    const imgX = (mx - cx) / oldScale;
-    const imgY = (my - cy) / oldScale;
-    userScale = Math.min(8, Math.max(0.5, userScale * factor));
-    const newScale = fitScale() * userScale;
-    offset.x = mx - imgX * newScale - rect.width / 2;
-    offset.y = my - imgY * newScale - rect.height / 2;
-    draw();
-  }
-
-  canvas.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1 / 1.1);
-    },
-    { passive: false },
-  );
-
-  // Pointer tracking doubles as drag-to-pan (one pointer) and pinch-to-zoom (two pointers);
-  // `touch-action: none` in app.css hands both gestures to us instead of the browser.
-  const pointers = new Map();
-  let dragging = false;
-  let last = null;
-  let pinchStartDist = null;
-  let pinchStartScale = null;
-
-  canvas.addEventListener("pointerdown", (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 1) {
-      dragging = true;
-      last = { x: e.clientX, y: e.clientY };
-    } else if (pointers.size === 2) {
-      dragging = false;
-      const [a, b] = [...pointers.values()];
-      pinchStartDist = Math.hypot(a.x - b.x, a.y - b.y);
-      pinchStartScale = userScale;
-    }
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (!pointers.has(e.pointerId)) {
-      return;
-    }
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2) {
-      const [a, b] = [...pointers.values()];
-      const dist = Math.hypot(a.x - b.x, a.y - b.y);
-      if (pinchStartDist) {
-        userScale = Math.min(8, Math.max(0.5, pinchStartScale * (dist / pinchStartDist)));
-        draw();
-      }
-      return;
-    }
-    if (!dragging) {
-      return;
-    }
-    offset.x += e.clientX - last.x;
-    offset.y += e.clientY - last.y;
-    last = { x: e.clientX, y: e.clientY };
-    draw();
-  });
-  const releasePointer = (e) => {
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) {
-      pinchStartDist = null;
-    }
-    if (pointers.size === 1) {
-      const [p] = pointers.values();
-      dragging = true;
-      last = { x: p.x, y: p.y };
-    } else {
-      dragging = false;
-    }
-  };
-  canvas.addEventListener("pointerup", releasePointer);
-  canvas.addEventListener("pointercancel", releasePointer);
-
-  canvas.tabIndex = 0;
-  canvas.addEventListener("keydown", (e) => {
-    const step = 40;
-    switch (e.key) {
-      case "ArrowLeft":
-        offset.x += step;
-        break;
-      case "ArrowRight":
-        offset.x -= step;
-        break;
-      case "ArrowUp":
-        offset.y += step;
-        break;
-      case "ArrowDown":
-        offset.y -= step;
-        break;
-      case "+":
-      case "=":
-        userScale = Math.min(8, userScale * 1.1);
-        break;
-      case "-":
-        userScale = Math.max(0.5, userScale / 1.1);
-        break;
-      default:
-        return;
-    }
-    e.preventDefault();
-    draw();
-  });
-
-  const resizeObserver = new ResizeObserver(draw);
-  resizeObserver.observe(canvas.parentElement);
-
-  // `resize`/ResizeObserver only fire on a CSS-box change; moving the window to a monitor with a
-  // different scale factor leaves the same box but a different `devicePixelRatio`, which needs
-  // its own watch (the standard `matchMedia(resolution)` idiom - it fires once, so re-arm it).
-  function watchDpr() {
-    const mql = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    mql.addEventListener(
-      "change",
-      () => {
-        draw();
-        watchDpr();
-      },
-      { once: true },
-    );
-  }
-  watchDpr();
-
-  draw();
-
-  return {
-    recolor() {
-      source = recolor(img, state.theme);
-      draw();
-    },
-  };
+  img.src = radarPngUrl(map) + `?v=${encodeURIComponent(radarData.build ?? "0")}`;
 }

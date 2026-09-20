@@ -59,6 +59,86 @@ export function radarPngUrl(map) {
   return `/data/maps/${encodeURIComponent(map)}/viewer-map.png`;
 }
 
+export async function fetchLevels(map, x, y) {
+  return getJson(`/api/levels?map=${encodeURIComponent(map)}&x=${x}&y=${y}`);
+}
+
+// Runs `POST /api/lineup` and reads its NDJSON stream. `onLine(msg)` fires for every progress
+// line (`phase`/`checked`/`verified`); the terminal `result`/`error` line is not passed to it -
+// it becomes this function's own resolution instead. `signal` aborts the fetch and the read loop
+// together (the server notices the dropped connection and stops the solve on its own).
+export async function solveLineup(body, onLine, signal) {
+  let res;
+  try {
+    res = await fetch("/api/lineup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    if (e.name === "AbortError") {
+      return { aborted: true };
+    }
+    return { error: null };
+  }
+  if (!res.ok) {
+    return { error: await readError(res) };
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let result;
+  let error;
+  // Whether any non-terminal line was actually read - the caller uses this (not "no points were
+  // drawn") to tell a genuine first solve that streamed nothing (e.g. a target inside solid
+  // geometry) apart from a cache hit answered in a single line.
+  let streamed = false;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      buf += decoder.decode(chunk.value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) {
+          continue;
+        }
+        let msg;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg.result !== undefined) {
+          result = msg.result;
+        } else if (msg.error !== undefined) {
+          error = msg.error;
+        } else {
+          streamed = true;
+          onLine(msg);
+        }
+      }
+    }
+  } catch (e) {
+    if (e.name === "AbortError" || signal?.aborted) {
+      return { aborted: true };
+    }
+    return { error: null };
+  }
+  if (error !== undefined) {
+    return { error };
+  }
+  if (result !== undefined) {
+    return { data: result, streamed };
+  }
+  return { error: null };
+}
+
 const JOB_KINDS = { extract: "extract", standspots: "standspots", viewerdata: "viewerdata" };
 
 export async function postJob(kind, map) {

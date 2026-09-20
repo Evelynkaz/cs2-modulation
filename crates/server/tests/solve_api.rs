@@ -237,6 +237,46 @@ async fn validation_errors_are_400_with_expected_text() {
     }
 }
 
+/// A target far below the mesh used to abort the whole process (negative voxel-grid `nz`
+/// wrapping the cell-count product); it must now be a plain 400.
+#[tokio::test]
+async fn target_far_below_mesh_z_is_400() {
+    let cache_root = sample_cache_dir("below_z");
+    let router = router_over("below_z", cache_root);
+    let (status, bytes) = post_lineup(
+        &router,
+        &json!({ "map": "de_test", "target": [0.0, 0.0, -1400.0] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap()
+            .contains("target z is outside the map bounds"),
+        "{value}"
+    );
+}
+
+/// A target just inside the widened z range (mesh z is 0 on the flat floor, margin is 512)
+/// still solves normally, not rejected by the z check.
+#[tokio::test]
+async fn target_just_inside_the_z_margin_still_solves() {
+    let cache_root = sample_cache_dir("inside_z");
+    let router = router_over("inside_z", cache_root);
+    let (status, bytes) = post_lineup(
+        &router,
+        &json!({ "map": "de_test", "target": [0.0, 0.0, -500.0] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let last_line = text.lines().rfind(|l| !l.is_empty()).unwrap();
+    let last: Value = serde_json::from_str(last_line).unwrap();
+    assert!(last.get("result").is_some(), "solve failed: {last}");
+}
+
 #[tokio::test]
 async fn oversized_non_json_and_wrong_content_type() {
     let cache_root = sample_cache_dir("bad_bodies");

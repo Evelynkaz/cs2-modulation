@@ -119,6 +119,20 @@ impl Default for SolveQuery {
     }
 }
 
+/// `TargetSolver.SolveForTarget`'s progress/diagnostics callbacks
+/// (`TargetSolver.cs:80-100`'s `onPhase`/`onOrigin`/`onCandidate`
+/// parameters), grouped so a caller wanting only phase progress does not
+/// have to name the other two `None`s inline at every call site.
+pub struct SolveHooks<'a> {
+    pub progress: &'a dyn Fn(Phase, usize),
+    /// `sweep::SweepOptions::on_origin`: once per swept origin, with the
+    /// number of throws it landed in the zone.
+    pub on_origin: Option<&'a (dyn Fn(V3, usize) + Sync)>,
+    /// `verify::VerifyOptions::on_candidate`: once per verified candidate,
+    /// with whether it survived verification.
+    pub on_candidate: Option<&'a (dyn Fn(V3, bool) + Sync)>,
+}
+
 /// `onPhase` phase names (`TargetSolver.cs`'s string literals).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -557,9 +571,10 @@ pub fn solve_for_target(
     map: &MapData,
     q: &SolveQuery,
     k: &ThrowConstants,
-    progress: &dyn Fn(Phase, usize),
+    hooks: &SolveHooks<'_>,
     cancel: &AtomicBool,
 ) -> TargetSolve {
+    let progress = hooks.progress;
     let mut target = q.target;
     let has_origin = q.origin_click.is_some();
     let origin_click = q.origin_click.unwrap_or([target.x, target.y]);
@@ -891,7 +906,7 @@ pub fn solve_for_target(
         measured_weak_click_reach: has_origin,
         on_pruned: on_pruned_ref,
         coverage: Some(&coverage_map),
-        on_origin: None,
+        on_origin: hooks.on_origin,
         cancel: Some(cancel),
     };
     let candidates = sweep::solve(
@@ -918,7 +933,7 @@ pub fn solve_for_target(
         aim_target: Some(target),
         tolerance: Some(q.tolerance),
         collider_glass_gone: collider_glass_gone.as_ref(),
-        on_candidate: None,
+        on_candidate: hooks.on_candidate,
         cancel: Some(cancel),
     };
     let mut verified =
@@ -1501,7 +1516,12 @@ mod tests {
         };
         let k = ThrowConstants::default();
         let cancel = AtomicBool::new(false);
-        let solve = solve_for_target(&map, &q, &k, &|_, _| {}, &cancel);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
         assert!(solve.lineups.is_empty());
         assert!(solve.empty_reason.is_some());
     }

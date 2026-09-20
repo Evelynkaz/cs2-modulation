@@ -14,7 +14,7 @@ use geom::math::V3;
 use sim::ThrowType;
 use solver::rank;
 use solver::standspots::{self, Stance};
-use solver::target::{MapData, Phase, SolveQuery, StandSpotOrigin, solve_for_target};
+use solver::target::{MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, solve_for_target};
 
 use crate::cmd_extract::load_or_extract_mesh;
 use crate::constants::resolve_constants;
@@ -412,7 +412,12 @@ pub fn solve(
         println!("  -> {phase:?} ({count})");
         *last = (Instant::now(), Some(phase));
     };
-    let solve = solve_for_target(&map_data, &query, &constants, &progress, &cancel);
+    let hooks = SolveHooks {
+        progress: &progress,
+        on_origin: None,
+        on_candidate: None,
+    };
+    let solve = solve_for_target(&map_data, &query, &constants, &hooks, &cancel);
     let total = started.elapsed();
     {
         let (last_time, last_phase) = *last.lock().unwrap();

@@ -282,7 +282,7 @@ async fn non_smoke_grenade_is_501() {
 }
 
 /// Every line is valid JSON; the first is a `phase`, the last is `result`, and everything between
-/// is a `phase` (`checked`/`verified` never fire - see `solve.rs`'s module doc).
+/// is a `phase`/`checked`/`verified`/`progress-truncated` line (all numbers finite).
 fn assert_well_formed_ndjson(bytes: &[u8]) -> Value {
     let text = String::from_utf8(bytes.to_vec()).unwrap();
     let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
@@ -290,13 +290,29 @@ fn assert_well_formed_ndjson(bytes: &[u8]) -> Value {
         lines.len() >= 2,
         "expected at least a phase and a result line, got {lines:?}"
     );
+    let mut saw_checked = false;
+    let mut saw_verified = false;
     for line in &lines {
         let v: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("{line}: {e}"));
         assert!(
-            v.get("phase").is_some() || v.get("result").is_some() || v.get("error").is_some(),
+            v.get("phase").is_some()
+                || v.get("result").is_some()
+                || v.get("error").is_some()
+                || v.get("checked").is_some()
+                || v.get("verified").is_some(),
             "unexpected line shape: {line}"
         );
+        if let Some(points) = v.get("checked").and_then(Value::as_array) {
+            saw_checked = true;
+            assert_finite_points(points, line);
+        }
+        if let Some(points) = v.get("verified").and_then(Value::as_array) {
+            saw_verified = true;
+            assert_finite_points(points, line);
+        }
     }
+    assert!(saw_checked, "expected at least one checked line");
+    assert!(saw_verified, "expected at least one verified line");
     let first: Value = serde_json::from_str(lines[0]).unwrap();
     assert!(first.get("phase").is_some(), "first line was {first}");
     let last: Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
@@ -304,7 +320,29 @@ fn assert_well_formed_ndjson(bytes: &[u8]) -> Value {
         last.get("result").is_some() || last.get("error").is_some(),
         "last line was {last}"
     );
+    // Every `checked`/`verified` (and `phase`) line comes before `result`/`error`.
+    let last_idx = lines.len() - 1;
+    for (i, line) in lines.iter().enumerate().take(last_idx) {
+        let v: Value = serde_json::from_str(line).unwrap();
+        assert!(
+            v.get("result").is_none() && v.get("error").is_none(),
+            "line {i} was a result/error before the last line: {line}"
+        );
+    }
     last
+}
+
+fn assert_finite_points(points: &[Value], line: &str) {
+    for p in points {
+        let arr = p
+            .as_array()
+            .unwrap_or_else(|| panic!("{line}: not an array"));
+        assert_eq!(arr.len(), 4, "{line}: expected [x,y,z,n]");
+        for n in arr {
+            let f = n.as_f64().unwrap_or_else(|| panic!("{line}: not a number"));
+            assert!(f.is_finite(), "{line}: non-finite number");
+        }
+    }
 }
 
 #[tokio::test]
@@ -345,6 +383,38 @@ async fn successful_stream_then_cache_hit_then_distinct_key_on_tolerance() {
     assert_eq!(status3, StatusCode::OK);
     assert_well_formed_ndjson(&bytes3);
     assert_eq!(count_cache_files(&cache_root), 2);
+}
+
+/// `s6e_progress_jobs.md`'s memory-bound requirement: even a slow reader cannot make the
+/// `checked`/`verified` queue grow without limit, because the producer side (`solve.rs`'s
+/// `on_origin`/`on_candidate`) itself stops sending past a fixed per-solve point budget
+/// (`MAX_STREAM_POINTS`, 200_000) - checked here structurally, by counting every point actually
+/// emitted on a synthetic map's own (small) solve and asserting it stays far under that budget.
+#[tokio::test]
+async fn progress_point_stream_is_bounded() {
+    let cache_root = sample_cache_dir("bounded");
+    let router = router_over("bounded", cache_root);
+
+    let mut body = base_target();
+    body["tolerance"] = json!(300.0);
+    let (status, bytes) = post_lineup(&router, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let mut total_points = 0usize;
+    for line in text.lines().filter(|l| !l.is_empty()) {
+        let v: Value = serde_json::from_str(line).unwrap();
+        if let Some(points) = v.get("checked").and_then(Value::as_array) {
+            total_points += points.len();
+        }
+        if let Some(points) = v.get("verified").and_then(Value::as_array) {
+            total_points += points.len();
+        }
+    }
+    assert!(total_points > 0, "expected at least one progress point");
+    assert!(
+        total_points <= 200_000,
+        "progress stream sent {total_points} points, over the per-solve budget"
+    );
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ use server::AppState;
 use server::config::AppConfig;
 use sim::ThrowConstants;
 use solver::rank;
-use solver::target::{MapData, SolveQuery, StandSpotOrigin, solve_for_target};
+use solver::target::{MapData, SolveHooks, SolveQuery, StandSpotOrigin, solve_for_target};
 use std::sync::atomic::AtomicBool;
 
 const SINGLE_TARGET_DEFAULT_ATTRS: [&str; 3] = ["Default", "default", "EntitySolid"];
@@ -136,7 +136,12 @@ fn direct_solve_first_ranked() -> rank::RankedLineup {
     };
     let constants = ThrowConstants::default();
     let cancel = AtomicBool::new(false);
-    let solve = solve_for_target(&map_data, &query, &constants, &|_, _| {}, &cancel);
+    let hooks = SolveHooks {
+        progress: &|_, _| {},
+        on_origin: None,
+        on_candidate: None,
+    };
+    let solve = solve_for_target(&map_data, &query, &constants, &hooks, &cancel);
     let ranked = rank::ranked(&solve, None);
     ranked.into_iter().next().expect("at least one lineup")
 }

@@ -2,16 +2,13 @@
 //! contract from `cs2-smoke-solver/src/Cli/Services/LineupApi.cs` (`ValidateLineupQuery`,
 //! `QueryCacheKey`, `RunTargetQuery`, `Ranked`/`Rank`) and
 //! `src/Cli/Commands/ServeCommand.cs:1504-1811` (`POST /api/lineup`, `DrainProgress`). The
-//! solver itself is called exactly as `crates/cli/src/cmd_solver.rs::solve` calls it
-//! (`solver::target::solve_for_target(&map_data, &query, &constants, &progress, &cancel)`); that
-//! signature has no per-origin/per-candidate progress hook, so unlike the reference this stream
-//! never emits `checked`/`verified` lines - only `phase`/`queued`/`result`/`error` ones (see
-//! `notes` in the s6d receipt).
+//! solver is driven through `solver::target::SolveHooks`, whose `on_origin`/`on_candidate`
+//! feed this module's `checked`/`verified` batching (`ServeCommand.cs:1694-1707,1780-1811`).
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
@@ -25,7 +22,7 @@ use sha2::{Digest, Sha256};
 use geom::math::V3;
 use sim::{ThrowConstants, ThrowType};
 use solver::rank::{self, RankedLineup};
-use solver::target::{self, MapData, Phase, SolveQuery, StandSpotOrigin, TargetSolve};
+use solver::target::{self, MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve};
 
 use crate::AppState;
 use crate::registry::MapEntry;
@@ -38,6 +35,16 @@ const SINGLE_TARGET_DEFAULT_ATTRS_STR: &str = "Default,default,EntitySolid";
 
 pub(crate) const MAX_LINEUP_BODY: usize = 4 * 1024;
 const MAX_QUEUED_SOLVES: usize = 16;
+
+/// `s6e_progress_jobs.md`'s per-line and per-solve caps on `checked`/`verified` progress points:
+/// past `MAX_STREAM_POINTS` for one solve, further points are simply dropped (the solve itself is
+/// untouched) and a single `{"phase":"progress-truncated"}` line tells the client why the stream
+/// went quiet on points.
+const MAX_POINTS_PER_LINE: usize = 512;
+const MAX_STREAM_POINTS: usize = 200_000;
+/// How often buffered `checked`/`verified` points are drained into the stream
+/// (`ServeCommand.cs`'s own `Task.Delay(100)` poll).
+const PROGRESS_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 
 const MAP_BOUNDS_MARGIN: f32 = 512.0;
 const MIN_ORIGIN_REACH: f32 = 16.0;
@@ -674,6 +681,100 @@ async fn send_line(tx: &LineSender, mut line: String) -> Result<(), ()> {
     tx.send(Ok(Bytes::from(line))).await.map_err(|_| ())
 }
 
+/// One `SolveHooks` callback firing, tagged so the drain loop below can batch consecutive
+/// same-kind events into one line without losing their order relative to phase changes
+/// (`ServeCommand.cs`'s `DrainProgress`).
+enum SolveEvent {
+    Phase(Phase, usize),
+    /// `on_origin`: feet (rounded) and the number of throws that landed in the zone.
+    Origin(i64, i64, i64, i64),
+    /// `on_candidate`: feet (rounded) and whether it survived verification (0/1).
+    Candidate(i64, i64, i64, i64),
+}
+
+fn round_i64(v: f32) -> i64 {
+    v.round_ties_even() as i64
+}
+
+/// `{"checked":[[x,y,z,hits], ...]}` / `{"verified":[[x,y,z,ok], ...]}`.
+fn points_line(kind: &str, points: &[[i64; 4]]) -> String {
+    let mut s = format!("{{\"{kind}\":[");
+    for (i, p) in points.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("[{},{},{},{}]", p[0], p[1], p[2], p[3]));
+    }
+    s.push_str("]}");
+    s
+}
+
+async fn flush_batch(tx: &LineSender, cancel: &AtomicBool, kind: &str, batch: &mut Vec<[i64; 4]>) {
+    for chunk in batch.chunks(MAX_POINTS_PER_LINE) {
+        if send_line(tx, points_line(kind, chunk)).await.is_err() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    batch.clear();
+}
+
+/// Drains every `SolveEvent` currently queued, sending a `phase` line per phase event and
+/// batching consecutive `Origin`/`Candidate` runs into `checked`/`verified` lines
+/// (`ServeCommand.cs:1780-1811`). Called on a ~100ms tick and once more after the solve finishes.
+async fn drain_events(
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<SolveEvent>,
+    tx: &LineSender,
+    cancel: &AtomicBool,
+    truncated: &AtomicBool,
+    truncated_sent: &mut bool,
+) {
+    let mut batch_kind: Option<&'static str> = None;
+    let mut batch: Vec<[i64; 4]> = Vec::new();
+    while let Ok(ev) = event_rx.try_recv() {
+        match ev {
+            SolveEvent::Phase(phase, count) => {
+                if let Some(k) = batch_kind.take() {
+                    flush_batch(tx, cancel, k, &mut batch).await;
+                }
+                let line = format!("{{\"phase\":\"{}\",\"count\":{count}}}", phase_name(phase));
+                if send_line(tx, line).await.is_err() {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            SolveEvent::Origin(x, y, z, hits) => {
+                if batch_kind != Some("checked") {
+                    if let Some(k) = batch_kind.take() {
+                        flush_batch(tx, cancel, k, &mut batch).await;
+                    }
+                    batch_kind = Some("checked");
+                }
+                batch.push([x, y, z, hits]);
+            }
+            SolveEvent::Candidate(x, y, z, ok) => {
+                if batch_kind != Some("verified") {
+                    if let Some(k) = batch_kind.take() {
+                        flush_batch(tx, cancel, k, &mut batch).await;
+                    }
+                    batch_kind = Some("verified");
+                }
+                batch.push([x, y, z, ok]);
+            }
+        }
+    }
+    if let Some(k) = batch_kind.take() {
+        flush_batch(tx, cancel, k, &mut batch).await;
+    }
+    if truncated.load(Ordering::Relaxed) && !*truncated_sent {
+        *truncated_sent = true;
+        if send_line(tx, "{\"phase\":\"progress-truncated\"}".to_string())
+            .await
+            .is_err()
+        {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
 /// Reads `<cache>/<key>.json` if present.
 async fn read_cache(cache_dir: &Path, key: &str) -> Option<String> {
     tokio::fs::read_to_string(cache_dir.join(format!("{key}.json")))
@@ -753,28 +854,86 @@ async fn run_solve_and_stream(
     tx: LineSender,
     cancel: Arc<AtomicBool>,
 ) {
-    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<(Phase, usize)>();
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SolveEvent>();
+    let total_points = Arc::new(AtomicUsize::new(0));
+    let truncated = Arc::new(AtomicBool::new(false));
+    let truncated_for_drain = truncated.clone();
     let cancel_for_blocking = cancel.clone();
     let handle = tokio::task::spawn_blocking(move || {
+        let progress_tx = event_tx.clone();
         let progress = move |phase: Phase, count: usize| {
-            let _ = progress_tx.send((phase, count));
+            let _ = progress_tx.send(SolveEvent::Phase(phase, count));
         };
-        target::solve_for_target(
-            &map_data,
-            &query,
-            &constants,
-            &progress,
-            &cancel_for_blocking,
-        )
+        let origin_tx = event_tx.clone();
+        let total_points_o = total_points.clone();
+        let truncated_o = truncated.clone();
+        let on_origin = move |feet: V3, hits: usize| {
+            if truncated_o.load(Ordering::Relaxed) {
+                return;
+            }
+            if total_points_o.fetch_add(1, Ordering::Relaxed) >= MAX_STREAM_POINTS {
+                truncated_o.store(true, Ordering::Relaxed);
+                return;
+            }
+            let _ = origin_tx.send(SolveEvent::Origin(
+                round_i64(feet.x),
+                round_i64(feet.y),
+                round_i64(feet.z),
+                hits as i64,
+            ));
+        };
+        let candidate_tx = event_tx.clone();
+        let total_points_c = total_points.clone();
+        let truncated_c = truncated.clone();
+        let on_candidate = move |feet: V3, ok: bool| {
+            if truncated_c.load(Ordering::Relaxed) {
+                return;
+            }
+            if total_points_c.fetch_add(1, Ordering::Relaxed) >= MAX_STREAM_POINTS {
+                truncated_c.store(true, Ordering::Relaxed);
+                return;
+            }
+            let _ = candidate_tx.send(SolveEvent::Candidate(
+                round_i64(feet.x),
+                round_i64(feet.y),
+                round_i64(feet.z),
+                i64::from(ok),
+            ));
+        };
+        let hooks = SolveHooks {
+            progress: &progress,
+            on_origin: Some(&on_origin),
+            on_candidate: Some(&on_candidate),
+        };
+        target::solve_for_target(&map_data, &query, &constants, &hooks, &cancel_for_blocking)
     });
 
-    while let Some((phase, count)) = progress_rx.recv().await {
-        let line = format!("{{\"phase\":\"{}\",\"count\":{count}}}", phase_name(phase));
-        if send_line(&tx, line).await.is_err() {
-            cancel.store(true, Ordering::Relaxed);
+    let mut handle = handle;
+    let mut handle_done = false;
+    let mut solve_result = None;
+    let mut ticker = tokio::time::interval(PROGRESS_DRAIN_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut truncated_sent = false;
+    while !handle_done {
+        tokio::select! {
+            res = &mut handle, if !handle_done => {
+                solve_result = Some(res);
+                handle_done = true;
+            }
+            _ = ticker.tick() => {
+                drain_events(&mut event_rx, &tx, &cancel, &truncated_for_drain, &mut truncated_sent).await;
+            }
         }
     }
-    let solve_result = handle.await;
+    drain_events(
+        &mut event_rx,
+        &tx,
+        &cancel,
+        &truncated_for_drain,
+        &mut truncated_sent,
+    )
+    .await;
+    let solve_result = solve_result.expect("handle awaited exactly once above");
 
     match solve_result {
         Ok(solve) => {

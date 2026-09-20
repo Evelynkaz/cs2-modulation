@@ -20,7 +20,9 @@ use extract::game::GameInstall;
 use geom::filter::names_mask;
 use geom::math::V3;
 use sim::{ThrowConstants, ThrowSpec, Trace, eye_height, simulate_exact};
-use solver::target::{MapData, Phase, SolveQuery, StandSpotOrigin, TargetSolve, solve_for_target};
+use solver::target::{
+    MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve, solve_for_target,
+};
 use solver::verify::within_tolerance;
 
 /// The target solver's own hardcoded voxel cell size (`TargetSolver.cs:142`,
@@ -130,7 +132,12 @@ fn de_mirage_three_target_queries() {
             ..Default::default()
         };
         let start = Instant::now();
-        let solve = solve_for_target(&map, &q, &k, &|_, _| {}, &cancel);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
         println!(
             "(a, reach 300) {} origins, {} lineups in {:.2}s",
             solve.origins,
@@ -153,7 +160,12 @@ fn de_mirage_three_target_queries() {
             ..Default::default()
         };
         let start = Instant::now();
-        let solve = solve_for_target(&map, &q, &k, &|_, _| {}, &cancel);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
         println!(
             "(c) {} origins, {} lineups in {:.2}s",
             solve.origins,
@@ -175,15 +187,14 @@ fn de_mirage_three_target_queries() {
             ..Default::default()
         };
         let start = Instant::now();
-        let solve = solve_for_target(
-            &map,
-            &q,
-            &k,
-            &|phase: Phase, count: usize| {
+        let hooks = SolveHooks {
+            progress: &|phase: Phase, count: usize| {
                 println!("    phase {phase:?} ({count})");
             },
-            &cancel,
-        );
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
         println!(
             "(c3) {} origins, {} lineups in {:.2}s",
             solve.origins,

@@ -11,9 +11,8 @@ use extract::{StandSpotFile, StandSpotJson, StandSpotsState};
 use geom::filter::{names_mask, player_mask};
 use geom::grid::UniformGrid;
 use geom::math::V3;
-use serde::Serialize;
 use sim::ThrowType;
-use solver::rank::{self, RankedLineup};
+use solver::rank;
 use solver::standspots::{self, Stance};
 use solver::target::{MapData, Phase, SolveQuery, StandSpotOrigin, solve_for_target};
 
@@ -476,7 +475,7 @@ pub fn solve(
     }
 
     if let Some(out) = json_out {
-        let json = json_payload(&solve, &ranked_list);
+        let json = server::solve::json_payload(&solve, &ranked_list);
         let tmp = out.with_extension("json.tmp");
         fs::write(&tmp, serde_json::to_string(&json)?)
             .with_context(|| format!("failed to write {}", tmp.display()))?;
@@ -485,160 +484,6 @@ pub fn solve(
     }
 
     Ok(())
-}
-
-#[derive(Serialize)]
-struct AimRefJson {
-    tier: &'static str,
-    sky: f32,
-    // `LineupApi.cs:679-691`: these three are nullable C# properties
-    // (`float?`), serialized as JSON `null` when absent, not omitted.
-    #[serde(rename = "edgeDeg")]
-    edge_deg: Option<f32>,
-    #[serde(rename = "reticleDeg")]
-    reticle_deg: Option<f32>,
-    band: i32,
-    #[serde(rename = "marginDeg")]
-    margin_deg: Option<f32>,
-}
-
-#[derive(Serialize)]
-struct LineupJson {
-    id: String,
-    feet: [f32; 3],
-    yaw: f32,
-    pitch: f32,
-    #[serde(rename = "type")]
-    type_: &'static str,
-    how: String,
-    strength: f32,
-    click: &'static str,
-    #[serde(rename = "runDeg")]
-    run_deg: f32,
-    rest: [f32; 3],
-    // `LineupApi.cs:655`: `l.Bounces,` (anonymous-object shorthand) keeps
-    // the record property's own PascalCase name, unlike the deliberately
-    // camelCase fields around it.
-    #[serde(rename = "Bounces")]
-    bounces: u32,
-    #[serde(rename = "flightTime")]
-    flight_time: f32,
-    stability: f32,
-    scatter: f32,
-    pin: Option<&'static str>,
-    #[serde(rename = "wallGap")]
-    wall_gap: Option<f32>,
-    exposed: bool,
-    glass: u32,
-    #[serde(rename = "restIfBroken")]
-    rest_if_broken: Option<[f32; 3]>,
-    #[serde(rename = "stateDependent")]
-    state_dependent: bool,
-    #[serde(rename = "humanError")]
-    human_error: f32,
-    #[serde(rename = "aimRef")]
-    aim_ref: AimRefJson,
-    console: String,
-}
-
-#[derive(Serialize)]
-struct SolveJson {
-    target: [f32; 3],
-    origins: usize,
-    #[serde(rename = "emptyReason")]
-    empty_reason: Option<String>,
-    // `LineupApi.cs:634-635`: `[x, y, raw count, verified-here, pin class]`.
-    coverage: Vec<[i32; 5]>,
-    lineups: Vec<LineupJson>,
-}
-
-fn type_name(t: ThrowType) -> &'static str {
-    match t {
-        ThrowType::Stand => "Stand",
-        ThrowType::Crouch => "Crouch",
-        ThrowType::JumpThrow => "JumpThrow",
-        ThrowType::CrouchJumpThrow => "CrouchJumpThrow",
-        ThrowType::RunJumpThrow => "RunJumpThrow",
-    }
-}
-
-fn json_payload(solve: &solver::target::TargetSolve, ranked_list: &[RankedLineup]) -> SolveJson {
-    // `LineupApi.cs:559-561`: whether a verified lineup actually stands at
-    // this origin cell, distinct from the raw sweep option count.
-    let verified_at: std::collections::HashSet<(i32, i32)> = solve
-        .lineups
-        .iter()
-        .map(|l| {
-            (
-                l.feet.x.round_ties_even() as i32,
-                l.feet.y.round_ties_even() as i32,
-            )
-        })
-        .collect();
-    SolveJson {
-        target: [solve.target.x, solve.target.y, solve.target.z],
-        origins: solve.origins,
-        empty_reason: solve.empty_reason.clone(),
-        coverage: solve
-            .coverage
-            .iter()
-            .map(|c| {
-                let verified_here = verified_at.contains(&(c[0], c[1])) as i32;
-                [c[0], c[1], c[2], verified_here, c[3]]
-            })
-            .collect(),
-        lineups: ranked_list
-            .iter()
-            .take(400)
-            .map(|rl| {
-                let l = &rl.lineup;
-                LineupJson {
-                    id: rl.id.clone(),
-                    feet: [l.feet.x, l.feet.y, l.feet.z],
-                    yaw: l.yaw_deg,
-                    pitch: l.pitch_deg,
-                    type_: type_name(l.throw_type),
-                    how: rl.describe.clone(),
-                    strength: l.strength,
-                    click: rl.click,
-                    run_deg: l.run_yaw_offset_deg,
-                    rest: [l.rest_point.x, l.rest_point.y, l.rest_point.z],
-                    bounces: l.bounces,
-                    flight_time: l.flight_time,
-                    stability: l.stability,
-                    scatter: l.rest_scatter,
-                    pin: match rl.pin {
-                        2 => Some("corner"),
-                        1 => Some("wall"),
-                        _ => None,
-                    },
-                    wall_gap: rl.wall_gap,
-                    exposed: l.direct_los,
-                    glass: l.glass_breaks,
-                    rest_if_broken: l.rest_if_broken.map(|v| [v.x, v.y, v.z]),
-                    state_dependent: rank::state_dependent(l),
-                    human_error: rl.human_error,
-                    aim_ref: AimRefJson {
-                        tier: rl.aim_ref.tier(),
-                        sky: rl.aim_ref.sky_fraction,
-                        edge_deg: rl
-                            .aim_ref
-                            .nearest_silhouette_deg
-                            .is_finite()
-                            .then_some(rl.aim_ref.nearest_silhouette_deg),
-                        reticle_deg: rl
-                            .aim_ref
-                            .nearest_reticle_deg
-                            .is_finite()
-                            .then_some(rl.aim_ref.nearest_reticle_deg),
-                        band: rl.aim_ref.band(),
-                        margin_deg: rl.aim_ref.margin_deg(),
-                    },
-                    console: rl.console.clone(),
-                }
-            })
-            .collect(),
-    }
 }
 
 #[cfg(test)]

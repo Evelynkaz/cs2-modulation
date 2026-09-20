@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Path as AxPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -20,10 +20,12 @@ use geom::math::V3;
 
 use crate::AppState;
 use crate::config::{self, AppConfig};
+use crate::physics;
 use crate::registry::{MapEntry, RegistryError};
+use crate::solve;
 
 /// `ServeCommand.cs:244`: the exact text every "no such map" 404 uses.
-const UNKNOWN_MAP_ERROR: &str = "unknown map (see /api/maps)";
+pub(crate) const UNKNOWN_MAP_ERROR: &str = "unknown map (see /api/maps)";
 /// `/api/config`'s `PUT` body: a settings patch, not a solve query, so this is generous but not
 /// unbounded.
 const MAX_CONFIG_BODY: usize = 4 * 1024;
@@ -52,6 +54,16 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/levels", get(get_levels))
         .route("/api/mesh", get(get_mesh))
         .route("/api/radar", get(get_radar))
+        .route(
+            "/api/lineup",
+            post(post_lineup)
+                .layer(DefaultBodyLimit::max(solve::MAX_LINEUP_BODY))
+                .layer(middleware::from_fn(lineup_body_limit_error)),
+        )
+        .route("/api/trajectory", get(physics::get_trajectory))
+        .route("/api/lineup-one", get(physics::get_lineup_one))
+        .route("/api/slack", get(physics::get_slack))
+        .route("/api/smoke", get(physics::get_smoke))
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
         .route("/", get(get_index))
         .route("/viewer/{*rest}", get(get_viewer_asset))
@@ -83,11 +95,21 @@ async fn config_body_limit_error(req: axum::extract::Request, next: Next) -> Res
     resp
 }
 
-fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
+/// Same rewrite as `config_body_limit_error`, but `s6d_solve_api.md` wants `POST /api/lineup`'s
+/// oversized body to read 400, not axum's default 413.
+async fn lineup_body_limit_error(req: axum::extract::Request, next: Next) -> Response {
+    let resp = next.run(req).await;
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return api_error(StatusCode::BAD_REQUEST, "request body too large");
+    }
+    resp
+}
+
+pub(crate) fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
-fn unknown_map_error() -> Response {
+pub(crate) fn unknown_map_error() -> Response {
     api_error(StatusCode::NOT_FOUND, UNKNOWN_MAP_ERROR)
 }
 
@@ -100,19 +122,74 @@ fn registry_error_response(e: RegistryError) -> Response {
 
 /// This run's game directory: the CLI's `--game` override if given, else the persisted config's,
 /// as used to pick the current build (`registry::MapRegistry`) and to compute `configured`.
-fn effective_game_dir(state: &AppState) -> Option<PathBuf> {
+pub(crate) fn effective_game_dir(state: &AppState) -> Option<PathBuf> {
     state
         .game_override
         .clone()
         .or_else(|| state.config.lock().unwrap().game_dir.clone())
 }
 
-fn get_entry(state: &AppState, map: &str) -> Result<Arc<MapEntry>, Box<Response>> {
+pub(crate) fn get_entry(state: &AppState, map: &str) -> Result<Arc<MapEntry>, Box<Response>> {
     let game_dir = effective_game_dir(state);
     state
         .registry
         .get(map, game_dir.as_deref())
         .map_err(|e| Box::new(registry_error_response(e)))
+}
+
+// ---- /api/lineup ---------------------------------------------------------------------------------
+
+/// Whether `<cache>/maps` has at least one subdirectory - a cheap stand-in for "some map is
+/// extracted" that does not touch the VPKs (unlike `MapRegistry::maps`, which sha256's every
+/// cached map's VPK through `cache::find_cached` to build its list).
+fn has_extracted_maps(state: &AppState) -> bool {
+    let Ok(read) = std::fs::read_dir(state.registry.cache_root().join("maps")) else {
+        return false;
+    };
+    read.flatten().any(|e| e.path().is_dir())
+}
+
+/// Everything before the NDJSON stream starts (`s6d_solve_api.md`'s pre-stream status codes):
+/// no maps extracted yet, wrong content type, an oversized/non-JSON body (the size cap is the
+/// `DefaultBodyLimit` layer above), an unknown map or one without nav data. `solve::post_lineup`
+/// takes over from validation onward.
+async fn post_lineup(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let game_dir = effective_game_dir(&state);
+    // The cheap check covers the common case (some map is extracted); only fall back to the
+    // expensive, VPK-hashing `maps()` when it says there is nothing, so a request that is about
+    // to be served entirely from the solve cache never pays for it.
+    if !has_extracted_maps(&state) && state.registry.maps(game_dir.as_deref()).is_empty() {
+        return api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no maps extracted yet - run `cs2mod extract <map>` first",
+        );
+    }
+    let content_type_ok = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().starts_with("application/json"));
+    if !content_type_ok {
+        return api_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Content-Type must be application/json",
+        );
+    }
+    let body_json: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => return api_error(StatusCode::BAD_REQUEST, "body must be valid JSON"),
+    };
+    let Some(map) = body_json.get("map").and_then(|v| v.as_str()) else {
+        return unknown_map_error();
+    };
+    let entry = match get_entry(&state, map) {
+        Ok(e) => e,
+        Err(r) => return *r,
+    };
+    solve::post_lineup(state, entry, body_json).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,7 +204,7 @@ struct LevelsQuery {
     y: Option<String>,
 }
 
-fn parse_finite(s: Option<&str>) -> Option<f32> {
+pub(crate) fn parse_finite(s: Option<&str>) -> Option<f32> {
     let v: f32 = s?.trim().parse().ok()?;
     v.is_finite().then_some(v)
 }
@@ -468,7 +545,7 @@ fn file_identity_etag(path: &Path) -> Option<String> {
     Some(format!("\"{millis:x}-{:x}\"", meta.len()))
 }
 
-fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
+pub(crate) fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

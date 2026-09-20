@@ -3,14 +3,21 @@
 
 pub mod config;
 pub mod mesh_payload;
+pub mod physics;
 pub mod registry;
 pub mod routes;
+pub mod solve;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
 use config::AppConfig;
 use registry::MapRegistry;
+use sim::ThrowConstants;
+
+/// At most this many solves run at once (`s6d_solve_api.md`: `tokio::sync::Semaphore`, 2).
+const MAX_CONCURRENT_SOLVES: usize = 2;
 
 /// What `serve` needs to start: the CLI's `--port`/`--open`/`--game`/`--cache` flags. `game`/
 /// `cache`/`port`, if given, override whatever the persisted config already has for this run
@@ -34,6 +41,8 @@ pub enum ServerError {
     },
     #[error("server error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("{0}")]
+    BadConstants(String),
 }
 
 /// Shared state for every route: the persisted config (mutable, guarded by a mutex since `PUT
@@ -48,6 +57,18 @@ pub struct AppState {
     pub game_override: Option<PathBuf>,
     pub cache_override: Option<PathBuf>,
     pub port_override: Option<u16>,
+    /// Bounds how many solves run at once (`solve::run_lineup_stream`); acquired for the
+    /// duration of one `solve_for_target` call.
+    pub solve_semaphore: tokio::sync::Semaphore,
+    /// How many `POST /api/lineup` requests are currently waiting for a semaphore permit
+    /// (not counting ones already solving); `> 16` of these is a 429.
+    pub solve_queue: AtomicUsize,
+    /// Throw constants, resolved once (`solve::load_constants`) rather than re-read from disk on
+    /// every request; defaults to `ThrowConstants::default()` until `with_constants` sets it
+    /// (only `serve()` validates and does that - direct `AppState::new` callers, like the test
+    /// harnesses, get the built-in defaults, matching the old per-request fallback when
+    /// `data/throw-constants.json` is absent).
+    pub constants: ThrowConstants,
 }
 
 impl AppState {
@@ -65,7 +86,16 @@ impl AppState {
             game_override: None,
             cache_override: None,
             port_override: None,
+            solve_semaphore: tokio::sync::Semaphore::new(MAX_CONCURRENT_SOLVES),
+            solve_queue: AtomicUsize::new(0),
+            constants: ThrowConstants::default(),
         }
+    }
+
+    /// `<cache root>/solves`, where `POST /api/lineup` caches solved queries
+    /// (`s6d_solve_api.md`: `<cache>/solves/<20 hex>.json`).
+    pub fn solve_cache_dir(&self) -> PathBuf {
+        self.registry.cache_root().join("solves")
     }
 
     /// Attaches this run's CLI overrides (`--game`/`--cache`/`--port`), which response
@@ -79,6 +109,13 @@ impl AppState {
         self.game_override = game_override;
         self.cache_override = cache_override;
         self.port_override = port_override;
+        self
+    }
+
+    /// Sets the throw constants this run actually resolved at startup (`serve()`, after
+    /// `solve::load_constants` succeeded); left at `ThrowConstants::default()` otherwise.
+    pub fn with_constants(mut self, constants: ThrowConstants) -> Self {
+        self.constants = constants;
         self
     }
 }
@@ -146,13 +183,14 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), ServerError> {
         .unwrap_or_else(default_cache_dir);
     let viewer_dir = find_viewer_dir();
     let port = cfg.port.unwrap_or(app_config.port);
+    let constants = solve::load_constants().map_err(ServerError::BadConstants)?;
     let state = Arc::new(
-        AppState::new(config_path, app_config, cache_root, viewer_dir).with_overrides(
-            cfg.game.clone(),
-            cfg.cache.clone(),
-            cfg.port,
-        ),
+        AppState::new(config_path, app_config, cache_root, viewer_dir)
+            .with_overrides(cfg.game.clone(), cfg.cache.clone(), cfg.port)
+            .with_constants(constants),
     );
+
+    solve::prune_cache(&state.solve_cache_dir());
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr)

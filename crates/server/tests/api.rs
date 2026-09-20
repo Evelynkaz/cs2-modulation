@@ -120,9 +120,9 @@ fn sample_cache_dir(
     (root, cache_root, dir)
 }
 
-fn router_over(cache_root: PathBuf) -> Router {
-    let config_path = temp_dir("config").join("config.json");
-    let viewer_dir = temp_dir("viewer_empty");
+fn router_over(name: &str, cache_root: PathBuf) -> Router {
+    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
+    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
     let state = Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
@@ -153,7 +153,7 @@ async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn config_starts_unconfigured_and_maps_empty_on_empty_cache() {
     let cache_root = temp_dir("empty_cache");
-    let router = router_over(cache_root);
+    let router = router_over("empty_cache", cache_root);
 
     let (status, body) = get(&router, "/api/config").await;
     assert_eq!(status, StatusCode::OK);
@@ -271,7 +271,7 @@ async fn put_config_with_good_game_dir_200_and_written_to_disk() {
 #[tokio::test]
 async fn unknown_map_is_404_everywhere() {
     let cache_root = temp_dir("unknown_map_cache");
-    let router = router_over(cache_root);
+    let router = router_over("unknown_map", cache_root);
 
     for uri in [
         "/api/spawns?map=nope",
@@ -290,7 +290,7 @@ async fn unknown_map_is_404_everywhere() {
 #[tokio::test]
 async fn mesh_header_and_conditional_304() {
     let (_root, cache_root, _dir) = sample_cache_dir("mesh", one_triangle_mesh(), None, Vec::new());
-    let router = router_over(cache_root);
+    let router = router_over("mesh", cache_root);
 
     let resp = router
         .clone()
@@ -389,7 +389,7 @@ async fn static_traversal_outside_viewer_dir_is_404_not_a_file() {
 #[tokio::test]
 async fn missing_index_html_serves_stub() {
     let cache_root = temp_dir("stub_cache");
-    let router = router_over(cache_root);
+    let router = router_over("stub", cache_root);
     let resp = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
@@ -468,7 +468,7 @@ async fn put_config_body_too_large_is_413_with_json_error() {
 async fn security_headers_present_on_json_binary_and_404() {
     let (_root, cache_root, _dir) =
         sample_cache_dir("headers", one_triangle_mesh(), None, Vec::new());
-    let router = router_over(cache_root);
+    let router = router_over("headers", cache_root);
 
     for uri in ["/api/maps", "/api/mesh?map=de_test", "/api/spawns?map=nope"] {
         let resp = router
@@ -498,7 +498,7 @@ async fn security_headers_present_on_json_binary_and_404() {
 async fn mesh_mismatched_etag_is_200_and_distinct_meshes_have_distinct_etags() {
     let (_root, cache_root, _dir) =
         sample_cache_dir("etag_a", one_triangle_mesh(), None, Vec::new());
-    let router = router_over(cache_root);
+    let router = router_over("etag_a", cache_root);
 
     let resp = router
         .clone()
@@ -549,7 +549,7 @@ async fn mesh_mismatched_etag_is_200_and_distinct_meshes_have_distinct_etags() {
         )
         .unwrap();
     let (_root_b, cache_root_b, _dir_b) = sample_cache_dir("etag_b", other_mesh, None, Vec::new());
-    let router_b = router_over(cache_root_b);
+    let router_b = router_over("etag_b", cache_root_b);
     let resp_b = router_b
         .oneshot(
             Request::builder()
@@ -612,7 +612,7 @@ async fn radar_png_success_path() {
     let (_root, cache_root, dir) =
         sample_cache_dir("radarpng", one_triangle_mesh(), None, Vec::new());
     fs::write(dir.join("viewer-map.png"), b"fake png bytes").unwrap();
-    let router = router_over(cache_root);
+    let router = router_over("radarpng", cache_root);
 
     let resp = router
         .oneshot(
@@ -645,7 +645,7 @@ async fn levels_two_stacked_floors_bottom_to_top() {
     };
     let (_root, cache_root, _dir) =
         sample_cache_dir("levels", CollisionMesh::new(), Some(nav), Vec::new());
-    let router = router_over(cache_root);
+    let router = router_over("levels", cache_root);
 
     let (status, body) = get(&router, "/api/levels?map=de_test&x=0&y=0").await;
     assert_eq!(status, StatusCode::OK);

@@ -2,6 +2,7 @@
 //! solve jobs.
 
 pub mod config;
+pub mod jobs;
 pub mod mesh_payload;
 pub mod physics;
 pub mod registry;
@@ -69,6 +70,15 @@ pub struct AppState {
     /// harnesses, get the built-in defaults, matching the old per-request fallback when
     /// `data/throw-constants.json` is absent).
     pub constants: ThrowConstants,
+    /// Background `extract`/`standspots`/`viewerdata` jobs (`jobs.rs`).
+    pub jobs: jobs::JobsState,
+    /// Per-solve cap on `checked`/`verified` progress points sent to a `POST /api/lineup`
+    /// stream before it switches to `{"phase":"progress-truncated"}` (`solve::MAX_STREAM_POINTS`'
+    /// default); overridable so tests can exercise truncation without a real 200k-point sweep.
+    pub max_stream_points: usize,
+    /// Per-line cap on progress points batched into one `checked`/`verified` line
+    /// (`solve::MAX_POINTS_PER_LINE`'s default); overridable for the same reason.
+    pub max_points_per_line: usize,
 }
 
 impl AppState {
@@ -89,6 +99,9 @@ impl AppState {
             solve_semaphore: tokio::sync::Semaphore::new(MAX_CONCURRENT_SOLVES),
             solve_queue: AtomicUsize::new(0),
             constants: ThrowConstants::default(),
+            jobs: jobs::JobsState::new(),
+            max_stream_points: solve::MAX_STREAM_POINTS,
+            max_points_per_line: solve::MAX_POINTS_PER_LINE,
         }
     }
 

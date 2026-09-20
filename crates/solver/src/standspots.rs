@@ -192,14 +192,17 @@ pub fn point_in_polygon(corners: &[V3], x: f32, y: f32) -> bool {
 /// Every reachable stand spot in the region, seeded from the nav mesh and
 /// grown outward across the geometry by walking, jumping and dropping.
 /// `StandSpots.cs:210-329`. `nav_areas` is each area's corner ring
-/// (`float[][]` in the reference).
+/// (`float[][]` in the reference). `on_progress` is called once per scanned
+/// row; returning `false` aborts the scan early (the partial result is
+/// discarded by every caller that cancels, so what's returned in that case
+/// is unspecified beyond "not a panic").
 pub fn compute(
     collider: &dyn Collider,
     nav_areas: &[Vec<V3>],
     region_min: V3,
     region_max: V3,
     step: f32,
-    mut on_progress: Option<&mut dyn FnMut(i32, i32)>,
+    mut on_progress: Option<&mut dyn FnMut(i32, i32) -> bool>,
 ) -> Vec<Spot> {
     let origin_x = (region_min.x / step).ceil() * step;
     let origin_y = (region_min.y / step).ceil() * step;
@@ -269,8 +272,10 @@ pub fn compute(
             }
         }
         done += 1;
-        if let Some(cb) = on_progress.as_deref_mut() {
-            cb(done, nx);
+        if let Some(cb) = on_progress.as_deref_mut()
+            && !cb(done, nx)
+        {
+            break;
         }
     }
 

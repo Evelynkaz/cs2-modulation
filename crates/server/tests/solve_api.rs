@@ -137,6 +137,22 @@ fn router_over(name: &str, cache_root: PathBuf) -> Router {
     server::routes::router(state)
 }
 
+/// Like `router_over`, but with the progress-stream caps overridden - used to exercise
+/// truncation without a real 200k-point sweep.
+fn router_over_with_limits(
+    name: &str,
+    cache_root: PathBuf,
+    max_stream_points: usize,
+    max_points_per_line: usize,
+) -> Router {
+    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
+    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
+    let mut state = AppState::new(config_path, AppConfig::default(), cache_root, viewer_dir);
+    state.max_stream_points = max_stream_points;
+    state.max_points_per_line = max_points_per_line;
+    server::routes::router(Arc::new(state))
+}
+
 async fn post_lineup(router: &Router, body: &Value) -> (StatusCode, Vec<u8>) {
     let resp = router
         .clone()
@@ -387,33 +403,62 @@ async fn successful_stream_then_cache_hit_then_distinct_key_on_tolerance() {
 
 /// `s6e_progress_jobs.md`'s memory-bound requirement: even a slow reader cannot make the
 /// `checked`/`verified` queue grow without limit, because the producer side (`solve.rs`'s
-/// `on_origin`/`on_candidate`) itself stops sending past a fixed per-solve point budget
-/// (`MAX_STREAM_POINTS`, 200_000) - checked here structurally, by counting every point actually
-/// emitted on a synthetic map's own (small) solve and asserting it stays far under that budget.
+/// `on_origin`/`on_candidate`) itself stops sending past a fixed per-solve point budget and a
+/// fixed per-line cap - checked here with both caps set to something a synthetic map's own solve
+/// actually exceeds (10 points total, 4 per line), so the test would fail if either cap were
+/// removed. The truncated run's `result` still matches an unbounded run's, proving the caps never
+/// touch the solve itself.
 #[tokio::test]
 async fn progress_point_stream_is_bounded() {
-    let cache_root = sample_cache_dir("bounded");
-    let router = router_over("bounded", cache_root);
-
     let mut body = base_target();
     body["tolerance"] = json!(300.0);
+
+    let unbounded_cache_root = sample_cache_dir("bounded_reference");
+    let unbounded_router = router_over("bounded_reference", unbounded_cache_root);
+    let (status, unbounded_bytes) = post_lineup(&unbounded_router, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let unbounded_last = assert_well_formed_ndjson(&unbounded_bytes);
+    let unbounded_lineups = &unbounded_last["result"]["lineups"];
+
+    let cache_root = sample_cache_dir("bounded");
+    let router = router_over_with_limits("bounded", cache_root, 10, 4);
     let (status, bytes) = post_lineup(&router, &body).await;
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8(bytes.to_vec()).unwrap();
+
     let mut total_points = 0usize;
+    let mut truncated_lines = 0usize;
+    let mut result_lineups = None;
     for line in text.lines().filter(|l| !l.is_empty()) {
         let v: Value = serde_json::from_str(line).unwrap();
         if let Some(points) = v.get("checked").and_then(Value::as_array) {
+            assert!(points.len() <= 4, "{line}: more than 4 points in one line");
             total_points += points.len();
         }
         if let Some(points) = v.get("verified").and_then(Value::as_array) {
+            assert!(points.len() <= 4, "{line}: more than 4 points in one line");
             total_points += points.len();
+        }
+        if v.get("phase").and_then(Value::as_str) == Some("progress-truncated") {
+            truncated_lines += 1;
+        }
+        if let Some(result) = v.get("result") {
+            result_lineups = Some(result["lineups"].clone());
         }
     }
     assert!(total_points > 0, "expected at least one progress point");
     assert!(
-        total_points <= 200_000,
+        total_points <= 10,
         "progress stream sent {total_points} points, over the per-solve budget"
+    );
+    assert_eq!(
+        truncated_lines, 1,
+        "expected exactly one progress-truncated line"
+    );
+    assert_eq!(
+        result_lineups.expect("expected a result line"),
+        *unbounded_lineups,
+        "truncating progress points must not change the solved result"
     );
 }
 

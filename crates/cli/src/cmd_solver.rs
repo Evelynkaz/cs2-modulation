@@ -98,6 +98,7 @@ pub fn standspots(
                 last_percent = percent;
                 print!("\r  columns {percent}%   ");
             }
+            true
         }),
     );
     let elapsed = start.elapsed();

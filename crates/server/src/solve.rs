@@ -40,8 +40,8 @@ const MAX_QUEUED_SOLVES: usize = 16;
 /// past `MAX_STREAM_POINTS` for one solve, further points are simply dropped (the solve itself is
 /// untouched) and a single `{"phase":"progress-truncated"}` line tells the client why the stream
 /// went quiet on points.
-const MAX_POINTS_PER_LINE: usize = 512;
-const MAX_STREAM_POINTS: usize = 200_000;
+pub(crate) const MAX_POINTS_PER_LINE: usize = 512;
+pub(crate) const MAX_STREAM_POINTS: usize = 200_000;
 /// How often buffered `checked`/`verified` points are drained into the stream
 /// (`ServeCommand.cs`'s own `Task.Delay(100)` poll).
 const PROGRESS_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -665,7 +665,7 @@ fn phase_name(p: Phase) -> &'static str {
 /// drive it; a disconnect (the client leaving) drops the `Body`, which drops this and the
 /// `Receiver` inside it, which is what turns a subsequent `Sender::send` on the writer side into
 /// an error - the signal `run_lineup_stream` uses to set `cancel`.
-struct RxStream(tokio::sync::mpsc::Receiver<Result<Bytes, std::io::Error>>);
+pub(crate) struct RxStream(pub(crate) tokio::sync::mpsc::Receiver<Result<Bytes, std::io::Error>>);
 
 impl futures_core::Stream for RxStream {
     type Item = Result<Bytes, std::io::Error>;
@@ -674,9 +674,9 @@ impl futures_core::Stream for RxStream {
     }
 }
 
-type LineSender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
+pub(crate) type LineSender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
 
-async fn send_line(tx: &LineSender, mut line: String) -> Result<(), ()> {
+pub(crate) async fn send_line(tx: &LineSender, mut line: String) -> Result<(), ()> {
     line.push('\n');
     tx.send(Ok(Bytes::from(line))).await.map_err(|_| ())
 }
@@ -709,8 +709,14 @@ fn points_line(kind: &str, points: &[[i64; 4]]) -> String {
     s
 }
 
-async fn flush_batch(tx: &LineSender, cancel: &AtomicBool, kind: &str, batch: &mut Vec<[i64; 4]>) {
-    for chunk in batch.chunks(MAX_POINTS_PER_LINE) {
+async fn flush_batch(
+    tx: &LineSender,
+    cancel: &AtomicBool,
+    kind: &str,
+    batch: &mut Vec<[i64; 4]>,
+    max_points_per_line: usize,
+) {
+    for chunk in batch.chunks(max_points_per_line) {
         if send_line(tx, points_line(kind, chunk)).await.is_err() {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -727,6 +733,7 @@ async fn drain_events(
     cancel: &AtomicBool,
     truncated: &AtomicBool,
     truncated_sent: &mut bool,
+    max_points_per_line: usize,
 ) {
     let mut batch_kind: Option<&'static str> = None;
     let mut batch: Vec<[i64; 4]> = Vec::new();
@@ -734,7 +741,7 @@ async fn drain_events(
         match ev {
             SolveEvent::Phase(phase, count) => {
                 if let Some(k) = batch_kind.take() {
-                    flush_batch(tx, cancel, k, &mut batch).await;
+                    flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
                 }
                 let line = format!("{{\"phase\":\"{}\",\"count\":{count}}}", phase_name(phase));
                 if send_line(tx, line).await.is_err() {
@@ -744,7 +751,7 @@ async fn drain_events(
             SolveEvent::Origin(x, y, z, hits) => {
                 if batch_kind != Some("checked") {
                     if let Some(k) = batch_kind.take() {
-                        flush_batch(tx, cancel, k, &mut batch).await;
+                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
                     }
                     batch_kind = Some("checked");
                 }
@@ -753,7 +760,7 @@ async fn drain_events(
             SolveEvent::Candidate(x, y, z, ok) => {
                 if batch_kind != Some("verified") {
                     if let Some(k) = batch_kind.take() {
-                        flush_batch(tx, cancel, k, &mut batch).await;
+                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
                     }
                     batch_kind = Some("verified");
                 }
@@ -762,7 +769,7 @@ async fn drain_events(
         }
     }
     if let Some(k) = batch_kind.take() {
-        flush_batch(tx, cancel, k, &mut batch).await;
+        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
     }
     if truncated.load(Ordering::Relaxed) && !*truncated_sent {
         *truncated_sent = true;
@@ -853,6 +860,8 @@ async fn run_solve_and_stream(
     cache_key: String,
     tx: LineSender,
     cancel: Arc<AtomicBool>,
+    max_stream_points: usize,
+    max_points_per_line: usize,
 ) {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SolveEvent>();
     let total_points = Arc::new(AtomicUsize::new(0));
@@ -871,7 +880,7 @@ async fn run_solve_and_stream(
             if truncated_o.load(Ordering::Relaxed) {
                 return;
             }
-            if total_points_o.fetch_add(1, Ordering::Relaxed) >= MAX_STREAM_POINTS {
+            if total_points_o.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
                 truncated_o.store(true, Ordering::Relaxed);
                 return;
             }
@@ -889,7 +898,7 @@ async fn run_solve_and_stream(
             if truncated_c.load(Ordering::Relaxed) {
                 return;
             }
-            if total_points_c.fetch_add(1, Ordering::Relaxed) >= MAX_STREAM_POINTS {
+            if total_points_c.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
                 truncated_c.store(true, Ordering::Relaxed);
                 return;
             }
@@ -921,7 +930,15 @@ async fn run_solve_and_stream(
                 handle_done = true;
             }
             _ = ticker.tick() => {
-                drain_events(&mut event_rx, &tx, &cancel, &truncated_for_drain, &mut truncated_sent).await;
+                // A window with no `checked`/`verified` lines (e.g. after truncation, or a long
+                // exhaustive-branch stretch) would otherwise leave a disconnect unnoticed until
+                // the next line write fails - which may be minutes away. Poll `tx` directly on
+                // every tick so cancellation is armed no later than one drain interval after the
+                // client leaves (`ServeCommand.cs:1700-1712`'s `context.RequestAborted`).
+                if tx.is_closed() {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                drain_events(&mut event_rx, &tx, &cancel, &truncated_for_drain, &mut truncated_sent, max_points_per_line).await;
             }
         }
     }
@@ -931,6 +948,7 @@ async fn run_solve_and_stream(
         &cancel,
         &truncated_for_drain,
         &mut truncated_sent,
+        max_points_per_line,
     )
     .await;
     let solve_result = solve_result.expect("handle awaited exactly once above");
@@ -966,7 +984,7 @@ async fn run_solve_and_stream(
     }
 }
 
-fn ndjson_response(body: Body) -> Response {
+pub(crate) fn ndjson_response(body: Body) -> Response {
     let mut resp = Response::new(body);
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -1087,6 +1105,8 @@ pub(crate) async fn post_lineup(
             cache_key,
             tx,
             cancel,
+            state.max_stream_points,
+            state.max_points_per_line,
         )
         .await;
     });

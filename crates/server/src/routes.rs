@@ -20,6 +20,7 @@ use geom::math::V3;
 
 use crate::AppState;
 use crate::config::{self, AppConfig};
+use crate::jobs;
 use crate::physics;
 use crate::registry::{MapEntry, RegistryError};
 use crate::solve;
@@ -64,6 +65,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/lineup-one", get(physics::get_lineup_one))
         .route("/api/slack", get(physics::get_slack))
         .route("/api/smoke", get(physics::get_smoke))
+        .route("/api/jobs", get(jobs::get_jobs))
+        .route(
+            "/api/jobs/{id}",
+            get(jobs::get_job).delete(jobs::delete_job),
+        )
+        .route("/api/jobs/extract", post(jobs::post_extract))
+        .route("/api/jobs/standspots", post(jobs::post_standspots))
+        .route("/api/jobs/viewerdata", post(jobs::post_viewerdata))
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
         .route("/", get(get_index))
         .route("/viewer/{*rest}", get(get_viewer_asset))

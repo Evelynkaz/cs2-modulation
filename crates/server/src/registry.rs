@@ -261,6 +261,45 @@ impl MapRegistry {
         self.load(map, &dir)
     }
 
+    /// Drops `map`'s cached entry, if loaded, so the next `get` rebuilds it from disk
+    /// (`jobs.rs`, after a background job writes new data for it - a fresh extraction, stand
+    /// spots, or a radar render - so it's visible without restarting the server).
+    pub fn invalidate(&self, map: &str) {
+        self.entries.lock().unwrap().remove(map);
+    }
+
+    /// Replaces `map`'s cached stand-spot state alone by re-reading `standspots.json`, leaving
+    /// its mesh, ETag and already-built colliders untouched (`jobs.rs`, after a `standspots` job;
+    /// unlike `invalidate`, this doesn't force the next request to re-hash `world.cgeo`). A no-op
+    /// if `map` isn't loaded yet.
+    pub fn reload_stand_spots(&self, map: &str) {
+        let mut entries = self.entries.lock().unwrap();
+        let Some(old) = entries.get(map).cloned() else {
+            return;
+        };
+        let stand_spots = mapdata::load_stand_spots(&old.dir);
+        let bundle = MapBundle {
+            map: old.bundle.map.clone(),
+            dir: old.bundle.dir.clone(),
+            mesh: old.bundle.mesh.clone(),
+            nav_areas: old.bundle.nav_areas.clone(),
+            spawns: old.bundle.spawns.clone(),
+            stand_spots,
+        };
+        let new_entry = Arc::new(MapEntry {
+            map: old.map.clone(),
+            dir: old.dir.clone(),
+            bundle,
+            etag: old.etag.clone(),
+            places: old.places.clone(),
+            grenade_collider: clone_once(&old.grenade_collider),
+            player_collider: clone_once(&old.player_collider),
+            mesh_payload: clone_once(&old.mesh_payload),
+            grounded_spawns: clone_once(&old.grounded_spawns),
+        });
+        entries.insert(map.to_string(), new_entry);
+    }
+
     fn load(&self, map: &str, dir: &Path) -> Result<Arc<MapEntry>, RegistryError> {
         let mut entries = self.entries.lock().unwrap();
         if let Some(e) = entries.get(map) {
@@ -288,13 +327,19 @@ impl MapRegistry {
 /// The build subdirectory under `map_dir` (named `<build>-<sha12>-x<version>`) with the most
 /// recent modification time among those that are complete (`extract::cache::is_complete`): an
 /// incomplete directory (e.g. missing `world.cgeo`) is skipped entirely rather than shadowing an
-/// older, complete one.
+/// older, complete one. A directory still named `<build>.tmp-<pid>` (`extract::cache::
+/// save_extraction`'s in-progress name) is skipped too, even if it happens to already satisfy
+/// `is_complete` - it's mid-write and about to be renamed away, or torn down entirely.
 fn newest_complete_dir(map_dir: &Path) -> Option<PathBuf> {
     let read = fs::read_dir(map_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in read.flatten() {
         let path = entry.path();
-        if !cache::is_complete(&path) {
+        let is_tmp = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".tmp-"));
+        if is_tmp || !cache::is_complete(&path) {
             continue;
         }
         let modified = fs::metadata(&path)
@@ -336,6 +381,17 @@ fn map_summary(map: &str, dir: &Path, stale: bool) -> Option<MapSummary> {
         build: manifest.meta.game_build,
         stale,
     })
+}
+
+/// A fresh `OnceLock` holding a clone of `cell`'s value, if it was already set - used by
+/// `reload_stand_spots` to carry an already-built collider/payload over to the replacement
+/// `MapEntry` instead of rebuilding it.
+fn clone_once<T: Clone>(cell: &OnceLock<T>) -> OnceLock<T> {
+    let new = OnceLock::new();
+    if let Some(v) = cell.get() {
+        let _ = new.set(v.clone());
+    }
+    new
 }
 
 /// First 16 hex chars of the mesh file's own sha256.

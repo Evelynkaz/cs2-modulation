@@ -549,6 +549,18 @@ pub fn solve(
             // doc comment above), so it lands in `coverage` from the
             // sequential fold below instead of racing another origin's
             // write on the same key.
+            //
+            // `on_origin` is diagnostic only (nothing reads it back to
+            // influence the solved result), so unlike `coverage`/`on_pruned`
+            // it is called right here, from the parallel body, rather than
+            // deferred to the sequential fold: that is what makes points
+            // stream out while the sweep is still running instead of arriving
+            // in one burst after `collect()`. Worker completion order is
+            // acceptable for a diagnostic stream; the reference does the same
+            // (`LineupSolver.cs:529`, inside `Parallel.ForEach`).
+            if let Some(f) = opts.on_origin {
+                f(feet, hits.len());
+            }
             Some(OriginOutcome {
                 coverage_key: (feet.x.round_ties_even() as i32, feet.y.round_ties_even() as i32),
                 coverage_count: hits.len() as i32,
@@ -607,9 +619,6 @@ pub fn solve(
             for (ty, strength, run_offset, reason) in &outcome.pruned {
                 f(feet, *ty, *strength, *run_offset, reason);
             }
-        }
-        if let Some(f) = opts.on_origin {
-            f(feet, outcome.hits.len());
         }
         for &(key, lineup) in &outcome.hits {
             match best.get(&key) {

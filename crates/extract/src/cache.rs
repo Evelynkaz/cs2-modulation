@@ -72,17 +72,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// `(game build, first 12 hex chars of the map VPK's sha256)`.
-fn compute_key(install: &GameInstall, map: &str) -> Result<(String, String), ExtractError> {
-    let build = install.build_id()?;
-    let vpk_path = install.map_vpk(map);
-    let hash = sha256_file(&vpk_path).map_err(|source| ExtractError::Io {
-        path: vpk_path,
-        source,
-    })?;
-    Ok((build, hash[..12].to_string()))
-}
-
 fn cache_key_dir(cache_root: &Path, map: &str, build: &str, sha12: &str) -> PathBuf {
     cache_root
         .join("maps")
@@ -119,14 +108,33 @@ pub fn is_complete(dir: &Path) -> bool {
 
 /// Returns the cache directory for `map`'s current build if it exists and is complete (every
 /// file the manifest lists present with the recorded size, and the manifest's own extractor
-/// version matches). Hashing the map VPK every call is acceptable (this is a report-time cost).
+/// version matches). Hashing the map VPK every call is acceptable (this is a report-time cost);
+/// callers with a tighter budget (e.g. the map registry, listing many maps per request) should
+/// use [`find_cached_with_hash`] with a memoized hash instead.
 pub fn find_cached(
     cache_root: &Path,
     install: &GameInstall,
     map: &str,
 ) -> Result<Option<PathBuf>, ExtractError> {
-    let (build, sha12) = compute_key(install, map)?;
-    let dir = cache_key_dir(cache_root, map, &build, &sha12);
+    let vpk_path = install.map_vpk(map);
+    let hash = sha256_file(&vpk_path).map_err(|source| ExtractError::Io {
+        path: vpk_path,
+        source,
+    })?;
+    find_cached_with_hash(cache_root, install, map, &hash)
+}
+
+/// [`find_cached`], but given the map VPK's sha256 rather than hashing it again - for a caller
+/// that already has (or has memoized) the hash.
+pub fn find_cached_with_hash(
+    cache_root: &Path,
+    install: &GameInstall,
+    map: &str,
+    vpk_sha256: &str,
+) -> Result<Option<PathBuf>, ExtractError> {
+    let build = install.build_id()?;
+    let sha12 = &vpk_sha256[..vpk_sha256.len().min(12)];
+    let dir = cache_key_dir(cache_root, map, &build, sha12);
     Ok(is_complete(&dir).then_some(dir))
 }
 

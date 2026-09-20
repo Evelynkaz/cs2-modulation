@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -177,9 +178,20 @@ pub struct MapSummary {
     pub stale: bool,
 }
 
+/// A memoized VPK hash, valid as long as the file's `(modified, len)` identity - the same pair
+/// `routes.rs`'s radar ETag uses - hasn't changed since it was computed.
+struct VpkHashMemo {
+    modified: SystemTime,
+    len: u64,
+    sha256: String,
+}
+
 pub struct MapRegistry {
     cache_root: PathBuf,
     entries: Mutex<HashMap<String, Arc<MapEntry>>>,
+    /// Map VPK path -> its last-hashed sha256, so `discover` (called on every `/api/maps` and
+    /// `/api/config` request) stats each VPK instead of sha256-ing gigabytes of it every time.
+    vpk_hashes: Mutex<HashMap<PathBuf, VpkHashMemo>>,
 }
 
 impl MapRegistry {
@@ -187,7 +199,33 @@ impl MapRegistry {
         MapRegistry {
             cache_root,
             entries: Mutex::new(HashMap::new()),
+            vpk_hashes: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// `path`'s sha256, from the memo if its `(modified, len)` identity still matches what was
+    /// last hashed, else freshly computed (and the memo updated) - so a changed VPK is always
+    /// re-hashed, never silently reported stale-but-cached.
+    fn hashed_vpk(&self, path: &Path) -> std::io::Result<String> {
+        let meta = fs::metadata(path)?;
+        let modified = meta.modified()?;
+        let len = meta.len();
+        if let Some(memo) = self.vpk_hashes.lock().unwrap().get(path)
+            && memo.modified == modified
+            && memo.len == len
+        {
+            return Ok(memo.sha256.clone());
+        }
+        let sha256 = cache::sha256_file(path)?;
+        self.vpk_hashes.lock().unwrap().insert(
+            path.to_path_buf(),
+            VpkHashMemo {
+                modified,
+                len,
+                sha256: sha256.clone(),
+            },
+        );
+        Ok(sha256)
     }
 
     pub fn cache_root(&self) -> &Path {
@@ -197,10 +235,11 @@ impl MapRegistry {
     /// `(map name, build dir, stale)` for every map that has at least one complete build
     /// subdirectory. Missing/empty cache -> an empty list, never an error. When `game_dir`
     /// validates as a real CS2 install, the current build is picked via
-    /// `extract::cache::find_cached` (the same selection a live extraction would make); `stale`
-    /// then flags a mismatch against the newest-write-time pick. Without a usable `game_dir`,
-    /// the newest-write-time pick is used and every map is flagged `stale` (nothing to compare
-    /// against).
+    /// `extract::cache::find_cached_with_hash` fed a memoized VPK hash (`hashed_vpk`) - the same
+    /// selection a live extraction would make, without re-sha256-ing every map's VPK on every
+    /// call; `stale` then flags a mismatch against the newest-write-time pick. Without a usable
+    /// `game_dir`, the newest-write-time pick is used and every map is flagged `stale` (nothing
+    /// to compare against).
     fn discover(&self, game_dir: Option<&Path>) -> Vec<(String, PathBuf, bool)> {
         let maps_dir = self.cache_root.join("maps");
         let Ok(read) = fs::read_dir(&maps_dir) else {
@@ -220,13 +259,18 @@ impl MapRegistry {
             };
             let mtime_pick = newest_complete_dir(&path);
             let (chosen, stale) = match &install {
-                Some(install) => match cache::find_cached(&self.cache_root, install, name) {
-                    Ok(Some(dir)) => {
-                        let stale = mtime_pick.as_deref() != Some(dir.as_path());
-                        (Some(dir), stale)
+                Some(install) => {
+                    let vpk_path = install.map_vpk(name);
+                    match self.hashed_vpk(&vpk_path).ok().and_then(|hash| {
+                        cache::find_cached_with_hash(&self.cache_root, install, name, &hash).ok()
+                    }) {
+                        Some(Some(dir)) => {
+                            let stale = mtime_pick.as_deref() != Some(dir.as_path());
+                            (Some(dir), stale)
+                        }
+                        _ => (mtime_pick, true),
                     }
-                    _ => (mtime_pick, true),
-                },
+                }
                 None => (mtime_pick, true),
             };
             if let Some(dir) = chosen {
@@ -424,4 +468,115 @@ fn load_places(dir: &Path) -> Vec<(String, [f32; 3])> {
             Some((name.to_string(), e.origin))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use extract::build::Extraction;
+    use extract::report::{ExtractMeta, ExtractReport};
+    use geom::mesh::CollisionMesh;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cs2mod_registry_test_{name}_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn fake_install(root: &Path, vpk_bytes: &[u8]) -> GameInstall {
+        fs::create_dir_all(root.join("maps")).unwrap();
+        fs::write(root.join("steam.inf"), "ClientVersion=2000908\n").unwrap();
+        fs::write(root.join("pak01_dir.vpk"), b"pak bytes").unwrap();
+        fs::write(root.join("maps").join("de_test.vpk"), vpk_bytes).unwrap();
+        GameInstall::new(root).unwrap()
+    }
+
+    /// Writes a complete cache directory for `de_test`, keyed off `install`'s current VPK bytes,
+    /// and returns the cache root.
+    fn sample_cache_root(root: &Path, install: &GameInstall) -> PathBuf {
+        let cache_root = root.join("cache");
+        let vpk_sha256 = cache::sha256_file(&install.map_vpk("de_test")).unwrap();
+        let extraction = Extraction {
+            mesh: CollisionMesh::new(),
+            entities: Vec::new(),
+            nav: None,
+            report: ExtractReport::default(),
+            meta: ExtractMeta {
+                map: "de_test".to_string(),
+                game_build: "2000908".to_string(),
+                extractor_version: extract::EXTRACTOR_VERSION,
+                map_vpk_sha256: vpk_sha256,
+                shared_vpk_sha256: Vec::new(),
+                created_utc: cache::now_utc_rfc3339(),
+                timing_ms: 0,
+            },
+        };
+        cache::save_extraction(&cache_root, &extraction, false).unwrap();
+        cache_root
+    }
+
+    fn de_test_stale(registry: &MapRegistry, root: &Path) -> bool {
+        registry
+            .maps(Some(root))
+            .into_iter()
+            .find(|s| s.map == "de_test")
+            .expect("de_test in /api/maps")
+            .stale
+    }
+
+    /// A second `maps()` call must not re-hash a VPK whose `(modified, len)` identity hasn't
+    /// changed: overwriting the file's bytes (same length) but restoring its exact original
+    /// modification time leaves the memoized hash - and therefore the cache dir it resolves to -
+    /// unchanged, so `stale` stays `false` even though the on-disk bytes no longer match what was
+    /// actually cached.
+    #[test]
+    fn second_call_reuses_memoized_hash() {
+        let root = temp_dir("memo_root");
+        let install = fake_install(&root, b"original vpk bytes");
+        let cache_root = sample_cache_root(&root, &install);
+        let registry = MapRegistry::new(cache_root);
+
+        assert!(!de_test_stale(&registry, &root), "freshly cached, matches");
+
+        let vpk_path = install.map_vpk("de_test");
+        let original_modified = fs::metadata(&vpk_path).unwrap().modified().unwrap();
+        // Same length (18 bytes) as "original vpk bytes", different content.
+        fs::write(&vpk_path, b"replaced-vpk-bytz!").unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&vpk_path)
+            .unwrap()
+            .set_modified(original_modified)
+            .unwrap();
+
+        assert!(
+            !de_test_stale(&registry, &root),
+            "identity unchanged - the stale memoized hash (not the new bytes) must still be used"
+        );
+    }
+
+    /// A VPK whose `(modified, len)` identity did change must be re-hashed, and a real content
+    /// change flips `stale` back to `true` (the memoized cache dir no longer matches).
+    #[test]
+    fn changed_identity_is_rehashed_and_flips_stale() {
+        let root = temp_dir("rehash_root");
+        let install = fake_install(&root, b"original vpk bytes");
+        let cache_root = sample_cache_root(&root, &install);
+        let registry = MapRegistry::new(cache_root);
+
+        assert!(!de_test_stale(&registry, &root), "freshly cached, matches");
+
+        let vpk_path = install.map_vpk("de_test");
+        // Different length, and no mtime override - a real, naturally-observed identity change.
+        fs::write(&vpk_path, b"a completely different, longer vpk payload").unwrap();
+
+        assert!(
+            de_test_stale(&registry, &root),
+            "changed identity must be re-hashed, and the new hash doesn't match the cached dir"
+        );
+    }
 }

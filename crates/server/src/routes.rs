@@ -149,8 +149,8 @@ pub(crate) fn get_entry(state: &AppState, map: &str) -> Result<Arc<MapEntry>, Bo
 // ---- /api/lineup ---------------------------------------------------------------------------------
 
 /// Whether `<cache>/maps` has at least one subdirectory - a cheap stand-in for "some map is
-/// extracted" that does not touch the VPKs (unlike `MapRegistry::maps`, which sha256's every
-/// cached map's VPK through `cache::find_cached` to build its list).
+/// extracted" that does not touch the VPKs (unlike `MapRegistry::maps`, which may still have to
+/// sha256 an unmemoized cached map's VPK to build its list).
 fn has_extracted_maps(state: &AppState) -> bool {
     let Ok(read) = std::fs::read_dir(state.registry.cache_root().join("maps")) else {
         return false;

@@ -95,6 +95,39 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## meshoptimizer
+
+- URL: https://github.com/zeux/meshoptimizer
+- Copyright (C) 2016-2025 Arseny Kapoulkine
+- Лицензия: MIT. Компилируется в наш бинарник через крейт `meshopt` (crates.io, MIT/Apache-2.0),
+  который вендорит его C++-исходники; используется в `crates/s2render` для распаковки буферов
+  вершин/индексов VBIB/MVTX/MIDX.
+
+```
+Copyright (c) 2016-2025 Arseny Kapoulkine
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+```
+
 ## cs2-smoke-solver
 
 - URL: https://github.com/NC1107/cs2-smoke-solver
@@ -243,4 +276,169 @@ software under these terms.
 
 **Use** means anything you do with the software requiring one
 of your licenses.
+```
+
+## texture2ddecoder
+
+- URL: https://github.com/UniversalGameExtraction/texture2ddecoder
+- Dual-licensed MIT / Apache-2.0.
+- Rust crate used by `crates/s2tex` to decode BC1/BC3/BC4/BC5/BC7 block-compressed
+  texture data. Its own README credits the BCn block decoders to AssetStudio's
+  (https://github.com/Perfare/AssetStudio, `Texture2DDecoderNative/bcn.cpp`) native
+  C++ decoders (MIT) -- see the AssetStudio entry below for that license.
+
+```
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+## AssetStudio
+
+- URL: https://github.com/Perfare/AssetStudio
+- Copyright (c) 2016 Radu; Copyright (c) 2016-2020 Perfare
+- License: MIT. Source of `Texture2DDecoderNative/bcn.cpp`, the native BCn block
+  decoders that `texture2ddecoder` (see above) is itself a Rust port of.
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2016 Radu
+Copyright (c) 2016-2020 Perfare
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## jpeg-encoder
+
+- URL: https://github.com/vstroebel/jpeg-encoder
+- Copyright (c) 2021 Volker Ströbel
+- License: `(MIT OR Apache-2.0) AND IJG` -- we take the MIT option for the crate's
+  own code; the IJG condition applies regardless (its forward DCT is ported from
+  the Independent JPEG Group's software, via mozjpeg). Used by `crates/s2tex` to
+  encode opaque decoded textures as JPEG for the browser.
+
+```
+Copyright (c) 2021 Volker Ströbel <volkerstroebel@mysurdity.de>
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+```
+This file was part of the Independent JPEG Group's software:
+Copyright (C) 1991-1996, Thomas G. Lane.
+libjpeg-turbo Modifications:
+Copyright (C) 2015, 2020, D. R. Commander.
+This software is copyright (C) 1991-2020, Thomas G. Lane, Guido Vollbeding.
+All Rights Reserved except as specified below.
+
+Permission is hereby granted to use, copy, modify, and distribute this
+software (or portions thereof) for any purpose, without fee, subject to these
+conditions:
+(1) If any part of the source code for this software is distributed, then this
+README file must be included, with this copyright and no-warranty notice
+unaltered; and any additions, deletions, or changes to the original files
+must be clearly indicated in accompanying documentation.
+(2) If only executable code is distributed, then the accompanying
+documentation must state that "this software is based in part on the work of
+the Independent JPEG Group".
+(3) Permission for use of this software is granted only if the user accepts
+full responsibility for any undesirable consequences; the authors accept
+NO LIABILITY for damages of any kind.
+```
+
+## zune-jpeg
+
+- URL: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg
+- Copyright (c) zune-jpeg Contributors
+- License: `MIT OR Apache-2.0 OR Zlib`; we take the MIT option.
+- Rust crate used by `crates/s2tex` to decode a vtex's embedded raw JPEG mip
+  (`JPEG_RGBA8888`/`JPEG_DXT5` formats).
+
+```
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ```

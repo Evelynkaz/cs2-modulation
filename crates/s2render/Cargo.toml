@@ -1,0 +1,15 @@
+[package]
+name = "s2render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+s2fmt = { workspace = true }
+thiserror = { workspace = true }
+ruzstd = { workspace = true }
+meshopt = "0.6"

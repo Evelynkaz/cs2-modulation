@@ -32,7 +32,7 @@ enum Command {
         /// Cache directory; defaults to `<repo-or-cwd>/cache`.
         #[arg(long)]
         cache: Option<PathBuf>,
-        /// Re-extract even if a cache entry for this build already exists.
+        /// Re-extract even if a complete cache entry for the map's current .vpk already exists.
         #[arg(long)]
         force: bool,
     },

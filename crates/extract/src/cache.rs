@@ -1,5 +1,10 @@
-//! Per-game-build extraction cache: `<cache_root>/maps/<map>/<build>-<sha12>-x<version>/`,
-//! written atomically (`<dir>.tmp-<pid>` then renamed into place).
+//! Per-map extraction cache: `<cache_root>/maps/<map>/<sha12>-x<version>/`, written atomically
+//! (`<dir>.tmp-<pid>` then renamed into place). The directory is keyed by the map VPK's content
+//! hash and the extractor version alone - not the game build - so a CS2 patch that leaves a
+//! map's `.vpk` untouched leaves its cache untouched too; the build a directory was extracted
+//! from is still recorded in `manifest.json`. Directories from before this change, named
+//! `<build>-<sha12>-x<version>`, are still recognized as a fallback (see `find_legacy_dir`), read
+//! in place and never renamed or copied.
 
 use std::fs;
 use std::io::Read;
@@ -72,18 +77,44 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-fn cache_key_dir(cache_root: &Path, map: &str, build: &str, sha12: &str) -> PathBuf {
+fn cache_key_dir(cache_root: &Path, map: &str, sha12: &str) -> PathBuf {
     cache_root
         .join("maps")
         .join(map)
-        .join(format!("{build}-{sha12}-x{EXTRACTOR_VERSION}"))
+        .join(format!("{sha12}-x{EXTRACTOR_VERSION}"))
 }
 
 /// The cache directory a freshly-built [`Extraction`]'s own metadata maps to, without hashing
 /// the map VPK again (it was already hashed once, while building [`ExtractMeta`]).
 fn cache_key_dir_from_meta(cache_root: &Path, meta: &ExtractMeta) -> PathBuf {
     let sha12 = &meta.map_vpk_sha256[..meta.map_vpk_sha256.len().min(12)];
-    cache_key_dir(cache_root, &meta.map, &meta.game_build, sha12)
+    cache_key_dir(cache_root, &meta.map, sha12)
+}
+
+/// A pre-existing `<build>-<sha12>-x<version>` directory (the naming scheme used before the
+/// cache key stopped including the build) under `cache_root/maps/<map>/`, whose hash and
+/// extractor version match `sha12` and are complete - the first such directory found, in
+/// arbitrary order, since at most one is expected to exist per `(sha12, version)` pair. Only
+/// consulted when [`cache_key_dir`]'s own (new-form) directory isn't a complete cache; found
+/// directories are read as-is, never renamed or copied into the new form.
+fn find_legacy_dir(cache_root: &Path, map: &str, sha12: &str) -> Option<PathBuf> {
+    let map_dir = cache_root.join("maps").join(map);
+    let suffix = format!("-{sha12}-x{EXTRACTOR_VERSION}");
+    let read = fs::read_dir(&map_dir).ok()?;
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let is_match = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(&suffix));
+        if is_match && is_complete(&path) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 /// True if `dir` has a readable, current-version manifest and every file it lists is present
@@ -106,11 +137,11 @@ pub fn is_complete(dir: &Path) -> bool {
     })
 }
 
-/// Returns the cache directory for `map`'s current build if it exists and is complete (every
-/// file the manifest lists present with the recorded size, and the manifest's own extractor
-/// version matches). Hashing the map VPK every call is acceptable (this is a report-time cost);
-/// callers with a tighter budget (e.g. the map registry, listing many maps per request) should
-/// use [`find_cached_with_hash`] with a memoized hash instead.
+/// Returns the cache directory for `map`'s current `.vpk` content if it exists and is complete
+/// (every file the manifest lists present with the recorded size, and the manifest's own
+/// extractor version matches). Hashing the map VPK every call is acceptable (this is a
+/// report-time cost); callers with a tighter budget (e.g. the map registry, listing many maps
+/// per request) should use [`find_cached_with_hash`] with a memoized hash instead.
 pub fn find_cached(
     cache_root: &Path,
     install: &GameInstall,
@@ -125,17 +156,22 @@ pub fn find_cached(
 }
 
 /// [`find_cached`], but given the map VPK's sha256 rather than hashing it again - for a caller
-/// that already has (or has memoized) the hash.
+/// that already has (or has memoized) the hash. `install` is kept in the signature for symmetry
+/// with [`find_cached`] and left unused; the cache key no longer depends on the game build.
+/// Tries the new-form directory first, then falls back to a matching legacy one
+/// ([`find_legacy_dir`]).
 pub fn find_cached_with_hash(
     cache_root: &Path,
-    install: &GameInstall,
+    _install: &GameInstall,
     map: &str,
     vpk_sha256: &str,
 ) -> Result<Option<PathBuf>, ExtractError> {
-    let build = install.build_id()?;
     let sha12 = &vpk_sha256[..vpk_sha256.len().min(12)];
-    let dir = cache_key_dir(cache_root, map, &build, sha12);
-    Ok(is_complete(&dir).then_some(dir))
+    let dir = cache_key_dir(cache_root, map, sha12);
+    if is_complete(&dir) {
+        return Ok(Some(dir));
+    }
+    Ok(find_legacy_dir(cache_root, map, sha12))
 }
 
 fn write_json<T: Serialize>(
@@ -483,11 +519,154 @@ mod tests {
     }
 
     #[test]
-    fn cache_dir_name_matches_build_sha_and_version() {
-        let dir = cache_key_dir(Path::new("/cache"), "de_mirage", "2000908", "abcdef012345");
-        assert_eq!(
-            dir,
-            Path::new("/cache/maps/de_mirage/2000908-abcdef012345-x1")
+    fn cache_dir_name_matches_sha_and_version() {
+        let dir = cache_key_dir(Path::new("/cache"), "de_mirage", "abcdef012345");
+        assert_eq!(dir, Path::new("/cache/maps/de_mirage/abcdef012345-x1"));
+    }
+
+    /// Writes a directory `is_complete` accepts (a readable, current-version manifest listing no
+    /// files to additionally check for the presence of) - a minimal stand-in for a cache
+    /// directory, for tests that exercise directory-selection logic rather than the files
+    /// `save_extraction` actually writes.
+    fn write_bare_complete_dir(dir: &Path, map: &str, build: &str, vpk_sha256: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let manifest = Manifest {
+            meta: ExtractMeta {
+                map: map.to_string(),
+                game_build: build.to_string(),
+                extractor_version: EXTRACTOR_VERSION,
+                map_vpk_sha256: vpk_sha256.to_string(),
+                shared_vpk_sha256: Vec::new(),
+                created_utc: now_utc_rfc3339(),
+                timing_ms: 0,
+            },
+            files: Vec::new(),
+        };
+        let text = serde_json::to_string_pretty(&manifest).unwrap();
+        fs::write(dir.join("manifest.json"), text).unwrap();
+    }
+
+    #[test]
+    fn new_form_dir_is_found_by_hash() {
+        let cache_root =
+            std::env::temp_dir().join(format!("extract_cache_test_newform_{}", std::process::id()));
+        fs::remove_dir_all(&cache_root).ok();
+        let sha = "a".repeat(64);
+        let sha12 = &sha[..12];
+        let dir = cache_key_dir(&cache_root, "de_mirage", sha12);
+        write_bare_complete_dir(&dir, "de_mirage", "2000914", &sha);
+
+        let install = fake_install(&cache_root.join("game"), "2000914");
+        let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
+        assert_eq!(found.as_deref(), Some(dir.as_path()));
+
+        fs::remove_dir_all(&cache_root).ok();
+    }
+
+    #[test]
+    fn legacy_dir_is_found_as_a_fallback_when_no_new_form_dir_exists() {
+        let cache_root =
+            std::env::temp_dir().join(format!("extract_cache_test_legacy_{}", std::process::id()));
+        fs::remove_dir_all(&cache_root).ok();
+        let sha = "c".repeat(64);
+        let sha12 = &sha[..12];
+
+        let legacy_dir = cache_root
+            .join("maps")
+            .join("de_mirage")
+            .join(format!("2000908-{sha12}-x{EXTRACTOR_VERSION}"));
+        write_bare_complete_dir(&legacy_dir, "de_mirage", "2000908", &sha);
+
+        let install = fake_install(&cache_root.join("game"), "2000914");
+        let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
+        assert_eq!(found.as_deref(), Some(legacy_dir.as_path()));
+
+        fs::remove_dir_all(&cache_root).ok();
+    }
+
+    #[test]
+    fn a_dir_with_a_different_hash_does_not_match() {
+        let cache_root = std::env::temp_dir().join(format!(
+            "extract_cache_test_wronghash_{}",
+            std::process::id()
+        ));
+        fs::remove_dir_all(&cache_root).ok();
+        let sha_cached = "d".repeat(64);
+        let sha_current = "e".repeat(64);
+        let sha12 = &sha_cached[..12];
+
+        let dir = cache_key_dir(&cache_root, "de_mirage", sha12);
+        write_bare_complete_dir(&dir, "de_mirage", "2000908", &sha_cached);
+
+        let install = fake_install(&cache_root.join("game"), "2000914");
+        let found =
+            find_cached_with_hash(&cache_root, &install, "de_mirage", &sha_current).unwrap();
+        assert!(found.is_none());
+
+        fs::remove_dir_all(&cache_root).ok();
+    }
+
+    #[test]
+    fn incomplete_new_form_dir_does_not_shadow_a_complete_legacy_one() {
+        let cache_root = std::env::temp_dir().join(format!(
+            "extract_cache_test_incomplete_{}",
+            std::process::id()
+        ));
+        fs::remove_dir_all(&cache_root).ok();
+        let sha = "b".repeat(64);
+        let sha12 = &sha[..12];
+
+        // New-form dir: manifest present, but claims a file that isn't there.
+        let new_dir = cache_key_dir(&cache_root, "de_mirage", sha12);
+        write_bare_complete_dir(&new_dir, "de_mirage", "2000914", &sha);
+        let mut manifest: Manifest =
+            serde_json::from_str(&fs::read_to_string(new_dir.join("manifest.json")).unwrap())
+                .unwrap();
+        manifest.files.push(("world.cgeo".to_string(), 4));
+        fs::write(
+            new_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(!is_complete(&new_dir));
+
+        // A complete legacy dir for the same hash and extractor version.
+        let legacy_dir = cache_root
+            .join("maps")
+            .join("de_mirage")
+            .join(format!("2000908-{sha12}-x{EXTRACTOR_VERSION}"));
+        write_bare_complete_dir(&legacy_dir, "de_mirage", "2000908", &sha);
+
+        let install = fake_install(&cache_root.join("game"), "2000914");
+        let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
+        assert_eq!(found.as_deref(), Some(legacy_dir.as_path()));
+
+        fs::remove_dir_all(&cache_root).ok();
+    }
+
+    /// Real game, real repo cache: a map whose `.vpk` hasn't changed since a previous CS2 patch
+    /// must still resolve through `find_cached`, without re-extraction - the main observable
+    /// outcome of dropping the build from the cache key. Needs `CS2_GAME_DIR` and an existing
+    /// `de_dust2` cache directory (any build) under `<repo>/cache`.
+    #[test]
+    #[ignore = "needs CS2_GAME_DIR"]
+    fn unchanged_map_finds_a_cache_from_a_previous_build() {
+        let game_dir = std::env::var_os("CS2_GAME_DIR").expect("CS2_GAME_DIR must be set");
+        let install = GameInstall::new(PathBuf::from(&game_dir)).expect("valid CS2 install");
+        let cache_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("cache");
+
+        let found = find_cached(&cache_root, &install, "de_dust2")
+            .expect("find_cached")
+            .expect("expected an existing cache for de_dust2 (its .vpk hasn't changed)");
+        let name = found.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            !name.starts_with(&format!("{}-", install.build_id().unwrap())),
+            "expected a cache dir from a previous build to be reused, got {name}"
         );
     }
 }

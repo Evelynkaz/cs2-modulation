@@ -206,15 +206,15 @@ pub fn extract(
     Ok(())
 }
 
-/// `cs2mod info <MAP>`. Prints the manifest and report highlights for the current build's cache,
-/// or how to run `extract` if there is none.
+/// `cs2mod info <MAP>`. Prints the manifest and report highlights for the cache matching the
+/// map's current `.vpk`, or how to run `extract` if there is none.
 pub fn info(map: &str, game: Option<&Path>, cache: Option<&Path>) -> anyhow::Result<()> {
     let install = install_for(game)?;
     let cache_root = resolve_cache_root(cache)?;
 
     let Some(dir) = cache::find_cached(&cache_root, &install, map)? else {
         println!(
-            "no cache for {map} on this build; run `cs2mod extract {map}` first (--game/--cache as needed)"
+            "no cache for {map} matching its current .vpk; run `cs2mod extract {map}` first (--game/--cache as needed)"
         );
         return Ok(());
     };
@@ -265,7 +265,7 @@ fn parse_region(spec: &str) -> anyhow::Result<([f32; 3], [f32; 3])> {
     ))
 }
 
-/// Loads `map`'s cached mesh for the current build, auto-extracting first if there is none yet.
+/// Loads `map`'s cached mesh for its current `.vpk`, auto-extracting first if there is none yet.
 pub(crate) fn load_or_extract_mesh(
     map: &str,
     game: Option<&Path>,
@@ -306,7 +306,7 @@ pub fn export_obj(
     let dir = match cache::find_cached(&cache_root, &install, map)? {
         Some(dir) => dir,
         None => {
-            println!("no cache for {map} on this build; extracting first");
+            println!("no cache for {map} matching its current .vpk; extracting first");
             let extraction = extract_map(&install, map, &ExtractOptions::default())
                 .with_context(|| format!("failed to extract {map}"))?;
             cache::save_extraction(&cache_root, &extraction, false)

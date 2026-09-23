@@ -172,8 +172,7 @@ pub struct MapSummary {
     pub has_glass: bool,
     pub has_doors: bool,
     pub build: String,
-    /// True when the build directory picked for this map doesn't match what
-    /// `extract::cache::find_cached` would pick for the currently configured game install (or
+    /// True when there's no complete cache directory for this map's current `.vpk` hash (or
     /// when there's no configured game install to compare against at all).
     pub stale: bool,
 }
@@ -232,14 +231,15 @@ impl MapRegistry {
         &self.cache_root
     }
 
-    /// `(map name, build dir, stale)` for every map that has at least one complete build
+    /// `(map name, cache dir, stale)` for every map that has at least one complete cache
     /// subdirectory. Missing/empty cache -> an empty list, never an error. When `game_dir`
-    /// validates as a real CS2 install, the current build is picked via
+    /// validates as a real CS2 install, the directory for the VPK's current hash is picked via
     /// `extract::cache::find_cached_with_hash` fed a memoized VPK hash (`hashed_vpk`) - the same
     /// selection a live extraction would make, without re-sha256-ing every map's VPK on every
-    /// call; `stale` then flags a mismatch against the newest-write-time pick. Without a usable
-    /// `game_dir`, the newest-write-time pick is used and every map is flagged `stale` (nothing
-    /// to compare against).
+    /// call; `stale` is true exactly when no complete directory exists for that hash, in which
+    /// case the newest-write-time pick is shown instead (so something is still listed). Without a
+    /// usable `game_dir`, the newest-write-time pick is used and every map is flagged `stale`
+    /// (nothing to compare against).
     fn discover(&self, game_dir: Option<&Path>) -> Vec<(String, PathBuf, bool)> {
         let maps_dir = self.cache_root.join("maps");
         let Ok(read) = fs::read_dir(&maps_dir) else {
@@ -264,10 +264,7 @@ impl MapRegistry {
                     match self.hashed_vpk(&vpk_path).ok().and_then(|hash| {
                         cache::find_cached_with_hash(&self.cache_root, install, name, &hash).ok()
                     }) {
-                        Some(Some(dir)) => {
-                            let stale = mtime_pick.as_deref() != Some(dir.as_path());
-                            (Some(dir), stale)
-                        }
+                        Some(Some(dir)) => (Some(dir), false),
                         _ => (mtime_pick, true),
                     }
                 }
@@ -368,12 +365,13 @@ impl MapRegistry {
     }
 }
 
-/// The build subdirectory under `map_dir` (named `<build>-<sha12>-x<version>`) with the most
-/// recent modification time among those that are complete (`extract::cache::is_complete`): an
-/// incomplete directory (e.g. missing `world.cgeo`) is skipped entirely rather than shadowing an
-/// older, complete one. A directory still named `<build>.tmp-<pid>` (`extract::cache::
-/// save_extraction`'s in-progress name) is skipped too, even if it happens to already satisfy
-/// `is_complete` - it's mid-write and about to be renamed away, or torn down entirely.
+/// The subdirectory under `map_dir` (named `<sha12>-x<version>`, or `<build>-<sha12>-x<version>`
+/// for a pre-existing legacy directory) with the most recent modification time among those that
+/// are complete (`extract::cache::is_complete`): an incomplete directory (e.g. missing
+/// `world.cgeo`) is skipped entirely rather than shadowing an older, complete one. A directory
+/// still named `<...>.tmp-<pid>` (`extract::cache::save_extraction`'s in-progress name) is
+/// skipped too, even if it happens to already satisfy `is_complete` - it's mid-write and about to
+/// be renamed away, or torn down entirely.
 fn newest_complete_dir(map_dir: &Path) -> Option<PathBuf> {
     let read = fs::read_dir(map_dir).ok()?;
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;

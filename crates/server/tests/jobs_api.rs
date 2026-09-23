@@ -18,9 +18,13 @@ use extract::cache;
 use extract::game::GameInstall;
 use extract::mapdata::StandSpotsState;
 use extract::report::{ExtractMeta, ExtractReport, NavAreaDump, NavAreasDump};
+use geom::filter;
+use geom::grid::UniformGrid;
+use geom::math::V3;
 use geom::mesh::{CollisionAttribute, CollisionMesh, MeshObject, ObjectKind, SurfaceProperty};
 use server::AppState;
 use server::config::AppConfig;
+use solver::standspots;
 
 fn temp_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -395,10 +399,14 @@ async fn delete_during_standspots_cancels_and_leaves_no_temp_files() {
     );
 }
 
-/// Real de_mirage: `POST /api/jobs/standspots` through the API must produce the same 22412
-/// stand spots as the CLI (`cmd_solver.rs::standspots`), and the cache file it writes must load
-/// back through `extract::mapdata::load_stand_spots` as `Loaded`. Needs `CS2_GAME_DIR` and a
-/// prior `cs2mod extract de_mirage`.
+/// Real de_mirage: `POST /api/jobs/standspots` through the API must report the same count as an
+/// expected count computed independently in this test the way the CLI does it
+/// (`crates/cli/src/cmd_solver.rs:71-103`: load the mesh and nav areas from the resolved cache
+/// dir, build a player-mask `UniformGrid` at cell 128, run `solver::standspots::compute` over the
+/// mesh bounds at step 16) - not from the job's own payload or the file it writes, so a drift of
+/// the job's step or collider mask away from the CLI would fail this test. The cache file the job
+/// writes must also load back (`extract::mapdata::load_stand_spots` as `Loaded`) with that same
+/// count. Needs `CS2_GAME_DIR` and a prior `cs2mod extract de_mirage`.
 #[tokio::test]
 #[ignore = "needs CS2_GAME_DIR"]
 async fn de_mirage_standspots_job_matches_cli_and_writes_a_loadable_cache() {
@@ -443,14 +451,28 @@ async fn de_mirage_standspots_job_matches_cli_and_writes_a_loadable_cache() {
     );
     let last_line = last_text.lines().last().expect("at least one line");
     let last_value: Value = serde_json::from_str(last_line).unwrap();
-    assert_eq!(last_value["result"]["count"], json!(22412));
 
     let install = GameInstall::new(PathBuf::from(&game_dir)).expect("game install");
     let dir = cache::find_cached(&cache_root, &install, "de_mirage")
         .expect("find_cached")
         .expect("cache dir for de_mirage");
+
+    // The expected count, computed independently the way the CLI does (cmd_solver.rs:71-103):
+    // load the mesh and nav areas from the resolved cache dir, build a player-mask `UniformGrid`
+    // at cell 128, and scan at step 16.
+    let mesh = cache::load_mesh(&dir).expect("load_mesh");
+    let nav_areas = extract::mapdata::load_nav_areas(&dir).expect("load_nav_areas");
+    let (min, max) = mesh.bounds().expect("de_mirage mesh has triangles");
+    let (min, max) = (V3::from_array(min), V3::from_array(max));
+    let mask = filter::player_mask(&mesh);
+    let collider = UniformGrid::build(&mesh, &mask, None, 128.0).expect("build player collider");
+    let expected = standspots::compute(&collider, &nav_areas, min, max, 16.0, None).len();
+
+    assert_eq!(last_value["result"]["count"], json!(expected));
     match extract::mapdata::load_stand_spots(&dir) {
-        StandSpotsState::Loaded(file) => assert_eq!(file.spots.len(), 22412),
+        StandSpotsState::Loaded(file) => {
+            assert_eq!(file.spots.len(), expected);
+        }
         other => panic!("expected Loaded stand spots, got {other:?}"),
     }
 }

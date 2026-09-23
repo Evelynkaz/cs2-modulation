@@ -360,6 +360,31 @@ pub fn load_report(dir: &Path) -> Result<crate::report::ExtractReport, ExtractEr
 mod tests {
     use super::*;
 
+    /// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop,
+    /// even on panic.
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> TempDir {
+        let dir =
+            std::env::temp_dir().join(format!("extract_cache_test_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        TempDir(dir)
+    }
+
     #[test]
     fn civil_from_days_known_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
@@ -384,9 +409,7 @@ mod tests {
 
     #[test]
     fn sha256_file_matches_known_vector() {
-        let dir =
-            std::env::temp_dir().join(format!("extract_cache_sha_test_{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let dir = temp_dir("sha");
         let path = dir.join("abc.txt");
         fs::write(&path, b"abc").unwrap();
         let hash = sha256_file(&path).unwrap();
@@ -394,7 +417,6 @@ mod tests {
             hash,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        fs::remove_dir_all(&dir).ok();
     }
 
     fn fake_install(root: &Path, build: &str) -> GameInstall {
@@ -431,12 +453,8 @@ mod tests {
 
     #[test]
     fn save_find_and_replace_round_trip() {
-        let root =
-            std::env::temp_dir().join(format!("extract_cache_test_root_{}", std::process::id()));
-        let cache_root =
-            std::env::temp_dir().join(format!("extract_cache_test_cache_{}", std::process::id()));
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&cache_root).ok();
+        let root = temp_dir("round_trip_root");
+        let cache_root = temp_dir("round_trip_cache");
         let install = fake_install(&root, "2000908");
 
         assert!(
@@ -471,23 +489,12 @@ mod tests {
 
         let (mesh, _) = cgeo::load_cgeo(dir.join("world.cgeo")).unwrap();
         assert_eq!(mesh.vertices.len(), 0);
-
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     #[test]
     fn incomplete_cache_is_repaired_without_force() {
-        let root = std::env::temp_dir().join(format!(
-            "extract_cache_test_repair_root_{}",
-            std::process::id()
-        ));
-        let cache_root = std::env::temp_dir().join(format!(
-            "extract_cache_test_repair_cache_{}",
-            std::process::id()
-        ));
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&cache_root).ok();
+        let root = temp_dir("repair_root");
+        let cache_root = temp_dir("repair_cache");
         let install = fake_install(&root, "2000908");
         let extraction = sample_extraction(&install, "de_test");
 
@@ -513,9 +520,6 @@ mod tests {
         assert_eq!(repaired, dir);
         assert!(dir.join("world.cgeo").is_file());
         assert!(is_complete(&dir));
-
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     #[test]
@@ -548,9 +552,7 @@ mod tests {
 
     #[test]
     fn new_form_dir_is_found_by_hash() {
-        let cache_root =
-            std::env::temp_dir().join(format!("extract_cache_test_newform_{}", std::process::id()));
-        fs::remove_dir_all(&cache_root).ok();
+        let cache_root = temp_dir("newform");
         let sha = "a".repeat(64);
         let sha12 = &sha[..12];
         let dir = cache_key_dir(&cache_root, "de_mirage", sha12);
@@ -559,15 +561,11 @@ mod tests {
         let install = fake_install(&cache_root.join("game"), "2000914");
         let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
         assert_eq!(found.as_deref(), Some(dir.as_path()));
-
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     #[test]
     fn legacy_dir_is_found_as_a_fallback_when_no_new_form_dir_exists() {
-        let cache_root =
-            std::env::temp_dir().join(format!("extract_cache_test_legacy_{}", std::process::id()));
-        fs::remove_dir_all(&cache_root).ok();
+        let cache_root = temp_dir("legacy");
         let sha = "c".repeat(64);
         let sha12 = &sha[..12];
 
@@ -580,17 +578,11 @@ mod tests {
         let install = fake_install(&cache_root.join("game"), "2000914");
         let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
         assert_eq!(found.as_deref(), Some(legacy_dir.as_path()));
-
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     #[test]
     fn a_dir_with_a_different_hash_does_not_match() {
-        let cache_root = std::env::temp_dir().join(format!(
-            "extract_cache_test_wronghash_{}",
-            std::process::id()
-        ));
-        fs::remove_dir_all(&cache_root).ok();
+        let cache_root = temp_dir("wronghash");
         let sha_cached = "d".repeat(64);
         let sha_current = "e".repeat(64);
         let sha12 = &sha_cached[..12];
@@ -602,17 +594,11 @@ mod tests {
         let found =
             find_cached_with_hash(&cache_root, &install, "de_mirage", &sha_current).unwrap();
         assert!(found.is_none());
-
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     #[test]
     fn incomplete_new_form_dir_does_not_shadow_a_complete_legacy_one() {
-        let cache_root = std::env::temp_dir().join(format!(
-            "extract_cache_test_incomplete_{}",
-            std::process::id()
-        ));
-        fs::remove_dir_all(&cache_root).ok();
+        let cache_root = temp_dir("incomplete");
         let sha = "b".repeat(64);
         let sha12 = &sha[..12];
 
@@ -640,8 +626,6 @@ mod tests {
         let install = fake_install(&cache_root.join("game"), "2000914");
         let found = find_cached_with_hash(&cache_root, &install, "de_mirage", &sha).unwrap();
         assert_eq!(found.as_deref(), Some(legacy_dir.as_path()));
-
-        fs::remove_dir_all(&cache_root).ok();
     }
 
     /// Real game, real repo cache: a map whose `.vpk` hasn't changed since a previous CS2 patch

@@ -166,8 +166,22 @@ mod tests {
 
     #[test]
     fn loads_and_flattens_across_files_tolerating_missing_fields() {
-        let dir = std::env::temp_dir().join(format!("calib-corpus-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        struct TempDir(std::path::PathBuf);
+        impl std::ops::Deref for TempDir {
+            type Target = Path;
+            fn deref(&self) -> &Path {
+                &self.0
+            }
+        }
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("calib-corpus-test-{}", std::process::id())));
+        std::fs::create_dir_all(&*dir).unwrap();
         write(
             &dir,
             "de_mirage-1.json",
@@ -198,7 +212,5 @@ mod tests {
         assert_eq!(rows[1].result.run_deg, 5.0);
         assert_eq!(rows[1].result.glass_state.as_deref(), Some("gone"));
         assert_eq!(rows[1].result.pos, None);
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -40,7 +40,20 @@ fn find_de_mirage_dir() -> PathBuf {
         .unwrap_or_else(|| panic!("no cache for de_mirage; run `cs2mod extract de_mirage` first"))
 }
 
-fn router() -> Router {
+/// The temp config file/viewer dir `router()` hands to `AppState`, removed on drop (even on
+/// panic) whether or not anything actually wrote to them.
+struct TempPaths(Vec<PathBuf>);
+
+impl Drop for TempPaths {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+}
+
+fn router() -> (Router, TempPaths) {
     find_de_mirage_dir();
     let config_path = std::env::temp_dir().join(format!(
         "cs2mod-server-solve-real-config-{}.json",
@@ -51,12 +64,15 @@ fn router() -> Router {
         std::process::id()
     ));
     let state = Arc::new(AppState::new(
-        config_path,
+        config_path.clone(),
         AppConfig::default(),
         cache_root(),
-        viewer_dir,
+        viewer_dir.clone(),
     ));
-    server::routes::router(state)
+    (
+        server::routes::router(state),
+        TempPaths(vec![config_path, viewer_dir]),
+    )
 }
 
 /// The same `MapData`/`SolveQuery` `cmd_solver.rs::solve` builds for
@@ -152,7 +168,7 @@ async fn lineup_matches_direct_solve_and_trajectory_agrees_with_rest() {
     // A leftover cached answer from a previous run of this test would collapse the stream to one
     // `result` line with no phases, failing the assertions below - each run must solve fresh.
     let _ = std::fs::remove_dir_all(cache_root().join("solves"));
-    let router = router();
+    let (router, _temp_paths) = router();
     let direct = direct_solve_first_ranked();
 
     let body = json!({

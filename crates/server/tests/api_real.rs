@@ -24,7 +24,20 @@ fn cache_root() -> PathBuf {
         .join("cache")
 }
 
-fn router() -> axum::Router {
+/// The temp config file/viewer dir `router()` hands to `AppState`, removed on drop (even on
+/// panic) whether or not anything actually wrote to them.
+struct TempPaths(Vec<PathBuf>);
+
+impl Drop for TempPaths {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_file(p);
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+}
+
+fn router() -> (axum::Router, TempPaths) {
     // Confirms de_mirage is actually cached for the current build before handing the registry a
     // cache root that has it (`find_cached` re-hashes the map VPK against `CS2_GAME_DIR`).
     let game_dir = std::env::var_os("CS2_GAME_DIR").expect("CS2_GAME_DIR must be set");
@@ -42,12 +55,15 @@ fn router() -> axum::Router {
         std::process::id()
     ));
     let state = Arc::new(AppState::new(
-        config_path,
+        config_path.clone(),
         AppConfig::default(),
         cache_root(),
-        viewer_dir,
+        viewer_dir.clone(),
     ));
-    server::routes::router(state)
+    (
+        server::routes::router(state),
+        TempPaths(vec![config_path, viewer_dir]),
+    )
 }
 
 async fn get(router: &axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
@@ -68,7 +84,7 @@ async fn get(router: &axum::Router, uri: &str) -> (StatusCode, axum::http::Heade
 #[tokio::test]
 #[ignore = "needs CS2_GAME_DIR and a de_mirage cache entry"]
 async fn maps_lists_de_mirage() {
-    let router = router();
+    let (router, _temp_paths) = router();
     let (status, _headers, body) = get(&router, "/api/maps").await;
     assert_eq!(status, StatusCode::OK);
     let maps: Value = serde_json::from_slice(&body).unwrap();
@@ -84,7 +100,7 @@ async fn maps_lists_de_mirage() {
 #[tokio::test]
 #[ignore = "needs CS2_GAME_DIR and a de_mirage cache entry"]
 async fn mesh_payload_size_matches_triangle_groups() {
-    let router = router();
+    let (router, _temp_paths) = router();
     let (status, _headers, body) = get(&router, "/api/mesh?map=de_mirage").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(&body[0..4], b"SM3D");
@@ -104,7 +120,7 @@ async fn mesh_payload_size_matches_triangle_groups() {
 #[tokio::test]
 #[ignore = "needs CS2_GAME_DIR and a de_mirage cache entry"]
 async fn levels_at_a_known_mid_point_returns_at_least_one() {
-    let router = router();
+    let (router, _temp_paths) = router();
     // Mid, from the target-solver parity corpus's query `c` (`crates/solver/tests/target_real.rs`).
     let (status, _headers, body) =
         get(&router, "/api/levels?map=de_mirage&x=-662.5&y=-1612.5").await;

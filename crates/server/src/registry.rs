@@ -475,14 +475,31 @@ mod tests {
     use extract::report::{ExtractMeta, ExtractReport};
     use geom::mesh::CollisionMesh;
 
-    fn temp_dir(name: &str) -> PathBuf {
+    /// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop,
+    /// even on panic.
+    struct TempDir(PathBuf);
+
+    impl std::ops::Deref for TempDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_dir(name: &str) -> TempDir {
         let dir = std::env::temp_dir().join(format!(
             "cs2mod_registry_test_{name}_{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        dir
+        TempDir(dir)
     }
 
     fn fake_install(root: &Path, vpk_bytes: &[u8]) -> GameInstall {

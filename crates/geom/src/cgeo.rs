@@ -749,34 +749,44 @@ mod tests {
         assert!(matches!(err, CgeoError::Malformed(_)));
     }
 
+    /// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop,
+    /// even on panic.
+    struct TempDir(std::path::PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn save_invalid_mesh_leaves_no_tmp() {
         let mut mesh = CollisionMesh::new();
         mesh.vertices = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         mesh.triangles = vec![[0, 1, 2]];
         // tri_attribute/tri_surface/tri_object left empty -> length mismatch.
-        let dir =
-            std::env::temp_dir().join(format!("geom_cgeo_invalid_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("invalid.cgeo");
+        let dir = TempDir(
+            std::env::temp_dir().join(format!("geom_cgeo_invalid_test_{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("invalid.cgeo");
         let err = save_cgeo(&path, &mesh, &[]).unwrap_err();
         assert!(matches!(err, CgeoError::Invalid(_)));
         assert!(!path.exists());
         assert!(!path.with_extension("cgeo.tmp").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn save_and_load_round_trip() {
         let mesh = sample_mesh();
-        let dir = std::env::temp_dir().join(format!("geom_cgeo_test_{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.cgeo");
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("geom_cgeo_test_{}", std::process::id())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("test.cgeo");
         save_cgeo(&path, &mesh, &[]).unwrap();
         let (mesh2, _) = load_cgeo(&path).unwrap();
         assert_eq!(mesh.vertices, mesh2.vertices);
         assert_eq!(mesh.degenerate_skipped, mesh2.degenerate_skipped);
         assert!(!path.with_extension("cgeo.tmp").exists());
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

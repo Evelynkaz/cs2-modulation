@@ -55,9 +55,16 @@ fn de_mirage_radar_renders_and_round_trips() {
         coverage * 100.0
     );
 
-    let tmp = std::env::temp_dir().join("cs2mod-radar-real-test.png");
-    radar::write_png(&img, &tmp).expect("write_png");
-    let file = std::fs::File::open(&tmp).expect("open written png");
+    struct TempFile(PathBuf);
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let tmp = TempFile(std::env::temp_dir().join("cs2mod-radar-real-test.png"));
+    radar::write_png(&img, &tmp.0).expect("write_png");
+    let file = std::fs::File::open(&tmp.0).expect("open written png");
     let decoder = png::Decoder::new(file);
     let mut reader = decoder.read_info().expect("read_info");
     let mut buf = vec![0u8; reader.output_buffer_size()];
@@ -68,5 +75,4 @@ fn de_mirage_radar_renders_and_round_trips() {
         img.rgba.as_slice(),
         "PNG must decode back to the same bytes"
     );
-    let _ = std::fs::remove_file(&tmp);
 }

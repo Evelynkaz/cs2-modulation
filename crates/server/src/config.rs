@@ -177,36 +177,50 @@ pub fn validate_game_dir(p: &Path) -> Result<GameDirInfo, String> {
 mod tests {
     use super::*;
 
+    /// A `std::env::temp_dir()` file or subdirectory unique to one test, removed on drop, even
+    /// on panic.
+    struct TempPath(PathBuf);
+
+    impl std::ops::Deref for TempPath {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_path(name: &str) -> TempPath {
+        let path =
+            std::env::temp_dir().join(format!("cs2mod-config-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&path);
+        TempPath(path)
+    }
+
     #[test]
     fn load_missing_file_is_default() {
-        let path = std::env::temp_dir().join(format!(
-            "cs2mod-config-test-missing-{}.json",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let path = temp_path("missing");
         let cfg = load_at(&path);
         assert_eq!(cfg, AppConfig::default());
     }
 
     #[test]
     fn load_corrupt_file_is_default() {
-        let path = std::env::temp_dir().join(format!(
-            "cs2mod-config-test-corrupt-{}.json",
-            std::process::id()
-        ));
-        std::fs::write(&path, b"not json").unwrap();
+        let path = temp_path("corrupt");
+        std::fs::write(&*path, b"not json").unwrap();
         let cfg = load_at(&path);
         assert_eq!(cfg, AppConfig::default());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn save_then_load_round_trips() {
-        let dir = std::env::temp_dir().join(format!(
-            "cs2mod-config-test-roundtrip-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = temp_path("roundtrip");
         let path = dir.join("config.json");
         let cfg = AppConfig {
             port: 9000,
@@ -216,24 +230,18 @@ mod tests {
         save_at(&path, &cfg).unwrap();
         let loaded = load_at(&path);
         assert_eq!(loaded, cfg);
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn validate_game_dir_rejects_missing_maps() {
-        let dir =
-            std::env::temp_dir().join(format!("cs2mod-config-test-nogame-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = temp_path("nogame");
+        std::fs::create_dir_all(&*dir).unwrap();
         assert!(validate_game_dir(&dir).is_err());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn validate_game_dir_adjusts_install_root() {
-        let root =
-            std::env::temp_dir().join(format!("cs2mod-config-test-root-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let root = temp_path("root");
         let csgo = root.join("game").join("csgo");
         std::fs::create_dir_all(csgo.join("maps")).unwrap();
         std::fs::write(csgo.join("pak01_dir.vpk"), b"x").unwrap();
@@ -243,6 +251,5 @@ mod tests {
         assert!(info.adjusted);
         assert_eq!(info.csgo_dir, csgo);
         assert_eq!(info.build, "2000908");
-        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -180,9 +180,17 @@ mod tests {
 
     #[test]
     fn loads_throws_json_fixture() {
-        let dir = std::env::temp_dir().join(format!("calib-throws-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("throws.json");
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("calib-throws-test-{}", std::process::id())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("throws.json");
         std::fs::write(
             &path,
             r#"[
@@ -199,7 +207,5 @@ mod tests {
         assert_eq!(samples[1].spec.throw_type, ThrowType::JumpThrow);
         assert!(samples[1].impact);
         assert_eq!(samples[0].landing, V3::new(500.0, 0.0, 0.0));
-
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

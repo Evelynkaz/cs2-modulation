@@ -5,7 +5,7 @@
 //! KV3 parsing needs a >= 4 MiB stack (`stage2_common.md`); every test here does its real work on
 //! a spawned thread with 16 MiB, matching the CLI.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use extract::build::{ExtractOptions, extract_map};
 use extract::cache;
@@ -33,14 +33,31 @@ fn on_big_stack<F: FnOnce() + Send + 'static>(f: F) {
         .expect("thread panicked");
 }
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop, even
+/// on panic.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "cs2mod_extract_real_test_{name}_{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 /// Möller-Trumbore ray/triangle intersection: returns the hit distance along `dir` (from
@@ -245,8 +262,6 @@ fn de_mirage_extracts_matches_policy_and_spawns_are_over_solid_floor() {
             obj_path.display()
         );
         assert!(stats.triangles_written > 0);
-
-        std::fs::remove_dir_all(&dir).ok();
     });
 }
 

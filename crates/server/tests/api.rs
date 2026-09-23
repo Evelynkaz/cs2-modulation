@@ -19,14 +19,31 @@ use geom::mesh::{CollisionAttribute, CollisionMesh, MeshObject, ObjectKind, Surf
 use server::AppState;
 use server::config::AppConfig;
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop, even
+/// on panic.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "cs2mod_server_api_test_{name}_{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 fn fake_install(root: &Path) -> GameInstall {
@@ -89,16 +106,17 @@ fn one_triangle_mesh() -> CollisionMesh {
     mesh
 }
 
-/// Writes a complete cache directory for `de_test` with the given mesh/nav/entities, and returns
-/// `(root, cache_root, cache_dir)`.
+/// Writes a complete cache directory for `de_test` with the given mesh/nav/entities under
+/// `cache_root` (a fake install root nested inside it, cleaned up along with everything else),
+/// and returns the map's own cache dir.
 fn sample_cache_dir(
-    name: &str,
+    cache_root: &Path,
     mesh: CollisionMesh,
     nav: Option<NavAreasDump>,
     entities: Vec<EntityRecord>,
-) -> (PathBuf, PathBuf, PathBuf) {
-    let root = temp_dir(&format!("{name}_root"));
-    let cache_root = temp_dir(&format!("{name}_cache"));
+) -> PathBuf {
+    let root = cache_root.join("_install_root");
+    fs::create_dir_all(&root).unwrap();
     let install = fake_install(&root);
     let vpk_sha256 = cache::sha256_file(&install.map_vpk("de_test")).unwrap();
     let extraction = Extraction {
@@ -116,17 +134,18 @@ fn sample_cache_dir(
             timing_ms: 0,
         },
     };
-    let dir = cache::save_extraction(&cache_root, &extraction, false).unwrap();
-    (root, cache_root, dir)
+    cache::save_extraction(cache_root, &extraction, false).unwrap()
 }
 
-fn router_over(name: &str, cache_root: PathBuf) -> Router {
-    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
-    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
+fn router_over(cache_root: &Path) -> Router {
+    let config_path = cache_root.join("_config").join("config.json");
+    fs::create_dir_all(cache_root.join("_config")).unwrap();
+    let viewer_dir = cache_root.join("_viewer_empty");
+    fs::create_dir_all(&viewer_dir).unwrap();
     let state = Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
-        cache_root,
+        cache_root.to_path_buf(),
         viewer_dir,
     ));
     server::routes::router(state)
@@ -153,7 +172,7 @@ async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn config_starts_unconfigured_and_maps_empty_on_empty_cache() {
     let cache_root = temp_dir("empty_cache");
-    let router = router_over("empty_cache", cache_root);
+    let router = router_over(&cache_root);
 
     let (status, body) = get(&router, "/api/config").await;
     assert_eq!(status, StatusCode::OK);
@@ -167,9 +186,13 @@ async fn config_starts_unconfigured_and_maps_empty_on_empty_cache() {
 
 #[tokio::test]
 async fn put_config_with_bad_path_400_and_does_not_corrupt_saved_config() {
-    let cache_root = temp_dir("put_bad_cache");
-    let config_path = temp_dir("put_bad_config").join("config.json");
-    let viewer_dir = temp_dir("put_bad_viewer");
+    let base = temp_dir("put_bad");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_dir = base.join("viewer");
+    fs::create_dir_all(&viewer_dir).unwrap();
     let state = Arc::new(AppState::new(
         config_path.clone(),
         AppConfig::default(),
@@ -229,10 +252,14 @@ async fn put_config_with_bad_path_400_and_does_not_corrupt_saved_config() {
 
 #[tokio::test]
 async fn put_config_with_good_game_dir_200_and_written_to_disk() {
-    let cache_root = temp_dir("put_good_cache");
-    let config_path = temp_dir("put_good_config").join("config.json");
-    let viewer_dir = temp_dir("put_good_viewer");
-    let game_root = temp_dir("put_good_game");
+    let base = temp_dir("put_good");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_dir = base.join("viewer");
+    fs::create_dir_all(&viewer_dir).unwrap();
+    let game_root = base.join("game");
     fs::create_dir_all(game_root.join("maps")).unwrap();
     fs::write(game_root.join("pak01_dir.vpk"), b"x").unwrap();
     fs::write(game_root.join("maps").join("de_test.vpk"), b"x").unwrap();
@@ -271,7 +298,7 @@ async fn put_config_with_good_game_dir_200_and_written_to_disk() {
 #[tokio::test]
 async fn unknown_map_is_404_everywhere() {
     let cache_root = temp_dir("unknown_map_cache");
-    let router = router_over("unknown_map", cache_root);
+    let router = router_over(&cache_root);
 
     for uri in [
         "/api/spawns?map=nope",
@@ -289,8 +316,9 @@ async fn unknown_map_is_404_everywhere() {
 
 #[tokio::test]
 async fn mesh_header_and_conditional_304() {
-    let (_root, cache_root, _dir) = sample_cache_dir("mesh", one_triangle_mesh(), None, Vec::new());
-    let router = router_over("mesh", cache_root);
+    let cache_root = temp_dir("mesh");
+    let _dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
 
     let resp = router
         .clone()
@@ -345,9 +373,12 @@ async fn mesh_header_and_conditional_304() {
 
 #[tokio::test]
 async fn static_traversal_outside_viewer_dir_is_404_not_a_file() {
-    let cache_root = temp_dir("static_cache");
-    let config_path = temp_dir("static_config").join("config.json");
-    let viewer_root = temp_dir("static_viewer_root");
+    let base = temp_dir("static");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_root = base.join("viewer_root");
     let viewer_dir = viewer_root.join("viewer");
     fs::create_dir_all(&viewer_dir).unwrap();
     fs::write(viewer_dir.join("index.html"), b"<html>viewer</html>").unwrap();
@@ -389,7 +420,7 @@ async fn static_traversal_outside_viewer_dir_is_404_not_a_file() {
 #[tokio::test]
 async fn missing_index_html_serves_stub() {
     let cache_root = temp_dir("stub_cache");
-    let router = router_over("stub", cache_root);
+    let router = router_over(&cache_root);
     let resp = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
@@ -404,9 +435,13 @@ async fn missing_index_html_serves_stub() {
 
 #[tokio::test]
 async fn put_config_with_missing_cache_dir_is_400() {
-    let cache_root = temp_dir("put_bad_cache_dir_cache");
-    let config_path = temp_dir("put_bad_cache_dir_config").join("config.json");
-    let viewer_dir = temp_dir("put_bad_cache_dir_viewer");
+    let base = temp_dir("put_bad_cache_dir");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_dir = base.join("viewer");
+    fs::create_dir_all(&viewer_dir).unwrap();
     let state = Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
@@ -432,9 +467,13 @@ async fn put_config_with_missing_cache_dir_is_400() {
 
 #[tokio::test]
 async fn put_config_body_too_large_is_413_with_json_error() {
-    let cache_root = temp_dir("put_large_cache");
-    let config_path = temp_dir("put_large_config").join("config.json");
-    let viewer_dir = temp_dir("put_large_viewer");
+    let base = temp_dir("put_large");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_dir = base.join("viewer");
+    fs::create_dir_all(&viewer_dir).unwrap();
     let state = Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
@@ -466,9 +505,9 @@ async fn put_config_body_too_large_is_413_with_json_error() {
 
 #[tokio::test]
 async fn security_headers_present_on_json_binary_and_404() {
-    let (_root, cache_root, _dir) =
-        sample_cache_dir("headers", one_triangle_mesh(), None, Vec::new());
-    let router = router_over("headers", cache_root);
+    let cache_root = temp_dir("headers");
+    let _dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
 
     for uri in ["/api/maps", "/api/mesh?map=de_test", "/api/spawns?map=nope"] {
         let resp = router
@@ -496,9 +535,9 @@ async fn security_headers_present_on_json_binary_and_404() {
 
 #[tokio::test]
 async fn mesh_mismatched_etag_is_200_and_distinct_meshes_have_distinct_etags() {
-    let (_root, cache_root, _dir) =
-        sample_cache_dir("etag_a", one_triangle_mesh(), None, Vec::new());
-    let router = router_over("etag_a", cache_root);
+    let cache_root = temp_dir("etag_a");
+    let _dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
 
     let resp = router
         .clone()
@@ -548,8 +587,9 @@ async fn mesh_mismatched_etag_is_200_and_distinct_meshes_have_distinct_etags() {
             o,
         )
         .unwrap();
-    let (_root_b, cache_root_b, _dir_b) = sample_cache_dir("etag_b", other_mesh, None, Vec::new());
-    let router_b = router_over("etag_b", cache_root_b);
+    let cache_root_b = temp_dir("etag_b");
+    let _dir_b = sample_cache_dir(&cache_root_b, other_mesh, None, Vec::new());
+    let router_b = router_over(&cache_root_b);
     let resp_b = router_b
         .oneshot(
             Request::builder()
@@ -571,9 +611,12 @@ async fn mesh_mismatched_etag_is_200_and_distinct_meshes_have_distinct_etags() {
 
 #[tokio::test]
 async fn static_traversal_variants_are_rejected() {
-    let cache_root = temp_dir("static_cache2");
-    let config_path = temp_dir("static_config2").join("config.json");
-    let viewer_root = temp_dir("static_viewer_root2");
+    let base = temp_dir("static2");
+    let cache_root = base.join("cache");
+    fs::create_dir_all(&cache_root).unwrap();
+    let config_path = base.join("config").join("config.json");
+    fs::create_dir_all(base.join("config")).unwrap();
+    let viewer_root = base.join("viewer_root");
     let viewer_dir = viewer_root.join("viewer");
     fs::create_dir_all(&viewer_dir).unwrap();
     fs::write(viewer_dir.join("index.html"), b"<html>viewer</html>").unwrap();
@@ -609,10 +652,10 @@ async fn static_traversal_variants_are_rejected() {
 
 #[tokio::test]
 async fn radar_png_success_path() {
-    let (_root, cache_root, dir) =
-        sample_cache_dir("radarpng", one_triangle_mesh(), None, Vec::new());
+    let cache_root = temp_dir("radarpng");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
     fs::write(dir.join("viewer-map.png"), b"fake png bytes").unwrap();
-    let router = router_over("radarpng", cache_root);
+    let router = router_over(&cache_root);
 
     let resp = router
         .oneshot(
@@ -643,9 +686,9 @@ async fn levels_two_stacked_floors_bottom_to_top() {
         ],
         ladders: Vec::new(),
     };
-    let (_root, cache_root, _dir) =
-        sample_cache_dir("levels", CollisionMesh::new(), Some(nav), Vec::new());
-    let router = router_over("levels", cache_root);
+    let cache_root = temp_dir("levels");
+    let _dir = sample_cache_dir(&cache_root, CollisionMesh::new(), Some(nav), Vec::new());
+    let router = router_over(&cache_root);
 
     let (status, body) = get(&router, "/api/levels?map=de_test&x=0&y=0").await;
     assert_eq!(status, StatusCode::OK);

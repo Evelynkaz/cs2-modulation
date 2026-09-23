@@ -10,14 +10,31 @@ use extract::mapdata::{StandSpotFile, StandSpotJson, StandSpotsState};
 use extract::report::{EntityRecord, ExtractMeta, ExtractReport, NavAreaDump, NavAreasDump};
 use geom::mesh::CollisionMesh;
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop, even
+/// on panic.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "cs2mod_extract_mapdata_test_{name}_{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 /// A `GameInstall` and cache dir with just enough on disk (`maps/<map>.vpk`, `pak01_dir.vpk`,
@@ -75,9 +92,6 @@ fn missing_nav_json_is_an_empty_vec_not_an_error() {
 
     let nav_areas = extract::load_nav_areas(&dir).unwrap();
     assert!(nav_areas.is_empty());
-
-    fs::remove_dir_all(&root).ok();
-    fs::remove_dir_all(&cache_root).ok();
 }
 
 #[test]
@@ -129,9 +143,6 @@ fn load_nav_areas_keeps_only_hull_index_zero() {
     assert_eq!(nav_areas.len(), 1);
     let corners: Vec<[f32; 3]> = nav_areas[0].iter().map(|v| v.to_array()).collect();
     assert_eq!(corners, hull0_corners);
-
-    fs::remove_dir_all(&root).ok();
-    fs::remove_dir_all(&cache_root).ok();
 }
 
 #[test]
@@ -143,9 +154,6 @@ fn malformed_nav_json_is_an_error() {
 
     let err = extract::load_nav_areas(&dir).unwrap_err();
     assert!(err.to_string().contains("nav.json"));
-
-    fs::remove_dir_all(&root).ok();
-    fs::remove_dir_all(&cache_root).ok();
 }
 
 #[test]
@@ -169,9 +177,6 @@ fn spawns_filters_2v2_wingman_spawns() {
     assert_eq!(spawns.t[0], geom::math::V3::new(1.0, 2.0, 3.0));
     assert_eq!(spawns.ct.len(), 1);
     assert_eq!(spawns.ct[0], geom::math::V3::new(7.0, 8.0, 9.0));
-
-    fs::remove_dir_all(&root).ok();
-    fs::remove_dir_all(&cache_root).ok();
 }
 
 fn sample_stand_spot_file() -> StandSpotFile {
@@ -194,7 +199,6 @@ fn stand_spots_missing() {
         extract::load_stand_spots(&dir),
         StandSpotsState::Missing
     ));
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -205,7 +209,6 @@ fn stand_spots_unreadable() {
         extract::load_stand_spots(&dir),
         StandSpotsState::Unreadable
     ));
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -222,7 +225,6 @@ fn stand_spots_stale() {
         StandSpotsState::Stale { version } => assert_eq!(version, extract::STANDSPOTS_VERSION + 1),
         other => panic!("expected Stale, got {other:?}"),
     }
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -243,7 +245,6 @@ fn stand_spots_loaded_round_trips_through_save() {
         }
         other => panic!("expected Loaded, got {other:?}"),
     }
-    fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -259,5 +260,4 @@ fn save_stand_spots_overwrites_an_existing_file() {
         StandSpotsState::Loaded(loaded) => assert_eq!(loaded.step, 32.0),
         other => panic!("expected Loaded, got {other:?}"),
     }
-    fs::remove_dir_all(&dir).ok();
 }

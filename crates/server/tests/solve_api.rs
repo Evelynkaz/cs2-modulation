@@ -20,14 +20,31 @@ use geom::mesh::{CollisionAttribute, CollisionMesh, MeshObject, ObjectKind, Surf
 use server::AppState;
 use server::config::AppConfig;
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop, even
+/// on panic.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "cs2mod_server_solve_test_{name}_{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 fn fake_install(root: &Path) -> GameInstall {
@@ -93,10 +110,12 @@ fn nav_area(half: f32) -> NavAreaDump {
     }
 }
 
-/// Writes a complete `de_test` cache directory with a flat floor and one nav area covering it.
-fn sample_cache_dir(name: &str) -> PathBuf {
-    let root = temp_dir(&format!("{name}_root"));
-    let cache_root = temp_dir(&format!("{name}_cache"));
+/// Writes a complete `de_test` cache directory with a flat floor and one nav area covering it,
+/// under `cache_root` (a fake install root nested inside it, cleaned up along with everything
+/// else).
+fn sample_cache_dir(cache_root: &Path) {
+    let root = cache_root.join("_install_root");
+    fs::create_dir_all(&root).unwrap();
     let install = fake_install(&root);
     let vpk_sha256 = cache::sha256_file(&install.map_vpk("de_test")).unwrap();
     let half = 600.0;
@@ -121,17 +140,18 @@ fn sample_cache_dir(name: &str) -> PathBuf {
             timing_ms: 0,
         },
     };
-    cache::save_extraction(&cache_root, &extraction, false).unwrap();
-    cache_root
+    cache::save_extraction(cache_root, &extraction, false).unwrap();
 }
 
-fn router_over(name: &str, cache_root: PathBuf) -> Router {
-    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
-    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
+fn router_over(cache_root: &Path) -> Router {
+    let config_path = cache_root.join("_config").join("config.json");
+    fs::create_dir_all(cache_root.join("_config")).unwrap();
+    let viewer_dir = cache_root.join("_viewer_empty");
+    fs::create_dir_all(&viewer_dir).unwrap();
     let state = Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
-        cache_root,
+        cache_root.to_path_buf(),
         viewer_dir,
     ));
     server::routes::router(state)
@@ -140,14 +160,20 @@ fn router_over(name: &str, cache_root: PathBuf) -> Router {
 /// Like `router_over`, but with the progress-stream caps overridden - used to exercise
 /// truncation without a real 200k-point sweep.
 fn router_over_with_limits(
-    name: &str,
-    cache_root: PathBuf,
+    cache_root: &Path,
     max_stream_points: usize,
     max_points_per_line: usize,
 ) -> Router {
-    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
-    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
-    let mut state = AppState::new(config_path, AppConfig::default(), cache_root, viewer_dir);
+    let config_path = cache_root.join("_config").join("config.json");
+    fs::create_dir_all(cache_root.join("_config")).unwrap();
+    let viewer_dir = cache_root.join("_viewer_empty");
+    fs::create_dir_all(&viewer_dir).unwrap();
+    let mut state = AppState::new(
+        config_path,
+        AppConfig::default(),
+        cache_root.to_path_buf(),
+        viewer_dir,
+    );
     state.max_stream_points = max_stream_points;
     state.max_points_per_line = max_points_per_line;
     server::routes::router(Arc::new(state))
@@ -193,8 +219,9 @@ fn count_cache_files(cache_root: &Path) -> usize {
 
 #[tokio::test]
 async fn validation_errors_are_400_with_expected_text() {
-    let cache_root = sample_cache_dir("validate");
-    let router = router_over("validate", cache_root);
+    let cache_root = temp_dir("validate");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
 
     let cases: Vec<(Value, &str)> = vec![
         (
@@ -241,8 +268,9 @@ async fn validation_errors_are_400_with_expected_text() {
 /// wrapping the cell-count product); it must now be a plain 400.
 #[tokio::test]
 async fn target_far_below_mesh_z_is_400() {
-    let cache_root = sample_cache_dir("below_z");
-    let router = router_over("below_z", cache_root);
+    let cache_root = temp_dir("below_z");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
     let (status, bytes) = post_lineup(
         &router,
         &json!({ "map": "de_test", "target": [0.0, 0.0, -1400.0] }),
@@ -263,8 +291,9 @@ async fn target_far_below_mesh_z_is_400() {
 /// still solves normally, not rejected by the z check.
 #[tokio::test]
 async fn target_just_inside_the_z_margin_still_solves() {
-    let cache_root = sample_cache_dir("inside_z");
-    let router = router_over("inside_z", cache_root);
+    let cache_root = temp_dir("inside_z");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
     let (status, bytes) = post_lineup(
         &router,
         &json!({ "map": "de_test", "target": [0.0, 0.0, -500.0] }),
@@ -279,8 +308,9 @@ async fn target_just_inside_the_z_margin_still_solves() {
 
 #[tokio::test]
 async fn oversized_non_json_and_wrong_content_type() {
-    let cache_root = sample_cache_dir("bad_bodies");
-    let router = router_over("bad_bodies", cache_root);
+    let cache_root = temp_dir("bad_bodies");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
 
     let big = "x".repeat(8 * 1024);
     let (status, _) = post_lineup(&router, &json!({ "map": "de_test", "pad": big })).await;
@@ -316,8 +346,9 @@ async fn oversized_non_json_and_wrong_content_type() {
 
 #[tokio::test]
 async fn unknown_map_is_404() {
-    let cache_root = sample_cache_dir("unknown");
-    let router = router_over("unknown", cache_root);
+    let cache_root = temp_dir("unknown");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
     let (status, bytes) =
         post_lineup(&router, &json!({ "map": "nope", "target": [0.0, 0.0] })).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -327,8 +358,9 @@ async fn unknown_map_is_404() {
 
 #[tokio::test]
 async fn non_smoke_grenade_is_501() {
-    let cache_root = sample_cache_dir("flash");
-    let router = router_over("flash", cache_root);
+    let cache_root = temp_dir("flash");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
     let mut body = base_target();
     body["grenade"] = json!("flash");
     let (status, bytes) = post_lineup(&router, &body).await;
@@ -403,8 +435,9 @@ fn assert_finite_points(points: &[Value], line: &str) {
 
 #[tokio::test]
 async fn successful_stream_then_cache_hit_then_distinct_key_on_tolerance() {
-    let cache_root = sample_cache_dir("stream");
-    let router = router_over("stream", cache_root.clone());
+    let cache_root = temp_dir("stream");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
 
     let mut body = base_target();
     body["tolerance"] = json!(300.0);
@@ -453,15 +486,17 @@ async fn progress_point_stream_is_bounded() {
     let mut body = base_target();
     body["tolerance"] = json!(300.0);
 
-    let unbounded_cache_root = sample_cache_dir("bounded_reference");
-    let unbounded_router = router_over("bounded_reference", unbounded_cache_root);
+    let unbounded_cache_root = temp_dir("bounded_reference");
+    sample_cache_dir(&unbounded_cache_root);
+    let unbounded_router = router_over(&unbounded_cache_root);
     let (status, unbounded_bytes) = post_lineup(&unbounded_router, &body).await;
     assert_eq!(status, StatusCode::OK);
     let unbounded_last = assert_well_formed_ndjson(&unbounded_bytes);
     let unbounded_lineups = &unbounded_last["result"]["lineups"];
 
-    let cache_root = sample_cache_dir("bounded");
-    let router = router_over_with_limits("bounded", cache_root, 10, 4);
+    let cache_root = temp_dir("bounded");
+    sample_cache_dir(&cache_root);
+    let router = router_over_with_limits(&cache_root, 10, 4);
     let (status, bytes) = post_lineup(&router, &body).await;
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8(bytes.to_vec()).unwrap();
@@ -504,8 +539,9 @@ async fn progress_point_stream_is_bounded() {
 
 #[tokio::test]
 async fn client_disconnect_does_not_write_the_cache() {
-    let cache_root = sample_cache_dir("cancel");
-    let router = router_over("cancel", cache_root.clone());
+    let cache_root = temp_dir("cancel");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
 
     // First run the same query to completion and time it: a fixed short sleep (as this test used
     // to do) stays green even if `cancel` is never armed, as long as the solve happens to still be

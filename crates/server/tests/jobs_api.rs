@@ -26,14 +26,31 @@ use server::AppState;
 use server::config::AppConfig;
 use solver::standspots;
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A `std::env::temp_dir()` subdirectory unique to one test, removed (recursively) on drop, even
+/// on panic.
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "cs2mod_server_jobs_test_{name}_{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 fn fake_install(root: &Path) -> GameInstall {
@@ -99,10 +116,11 @@ fn nav_area(half: f32) -> NavAreaDump {
 }
 
 /// Writes a complete `<map>` cache directory with a flat floor and one nav area covering it, of
-/// side `2*half`.
-fn sample_cache_dir(name: &str, map: &str, half: f32) -> PathBuf {
-    let root = temp_dir(&format!("{name}_root"));
-    let cache_root = temp_dir(&format!("{name}_cache"));
+/// side `2*half`, under `cache_root` (a fake install root nested inside it, cleaned up along with
+/// everything else).
+fn sample_cache_dir(cache_root: &Path, map: &str, half: f32) {
+    let root = cache_root.join("_install_root");
+    fs::create_dir_all(&root).unwrap();
     let install = fake_install(&root);
     fs::write(root.join("maps").join(format!("{map}.vpk")), b"fake vpk").unwrap();
     let vpk_sha256 = cache::sha256_file(&install.map_vpk(map)).unwrap();
@@ -127,23 +145,24 @@ fn sample_cache_dir(name: &str, map: &str, half: f32) -> PathBuf {
             timing_ms: 0,
         },
     };
-    cache::save_extraction(&cache_root, &extraction, false).unwrap();
-    cache_root
+    cache::save_extraction(cache_root, &extraction, false).unwrap();
 }
 
-fn state_over(name: &str, cache_root: PathBuf) -> Arc<AppState> {
-    let config_path = temp_dir(&format!("{name}_config")).join("config.json");
-    let viewer_dir = temp_dir(&format!("{name}_viewer_empty"));
+fn state_over(cache_root: &Path) -> Arc<AppState> {
+    let config_path = cache_root.join("_config").join("config.json");
+    fs::create_dir_all(cache_root.join("_config")).unwrap();
+    let viewer_dir = cache_root.join("_viewer_empty");
+    fs::create_dir_all(&viewer_dir).unwrap();
     Arc::new(AppState::new(
         config_path,
         AppConfig::default(),
-        cache_root,
+        cache_root.to_path_buf(),
         viewer_dir,
     ))
 }
 
-fn router_over(name: &str, cache_root: PathBuf) -> Router {
-    server::routes::router(state_over(name, cache_root))
+fn router_over(cache_root: &Path) -> Router {
+    server::routes::router(state_over(cache_root))
 }
 
 async fn get(router: &Router, uri: &str) -> (StatusCode, Value) {
@@ -222,8 +241,9 @@ async fn delete_job(router: &Router, id: &str) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn standspots_on_unknown_map_errors_in_the_stream_not_a_panic() {
-    let cache_root = sample_cache_dir("unknown_std", "de_test", 200.0);
-    let router = router_over("unknown_std", cache_root);
+    let cache_root = temp_dir("unknown_std");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
 
     let (status, body) = post_job(&router, "standspots", "de_nope").await;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -248,8 +268,9 @@ async fn standspots_on_unknown_map_errors_in_the_stream_not_a_panic() {
 
 #[tokio::test]
 async fn repeated_post_returns_the_same_job_id() {
-    let cache_root = sample_cache_dir("dedupe", "de_test", 1500.0);
-    let router = router_over("dedupe", cache_root);
+    let cache_root = temp_dir("dedupe");
+    sample_cache_dir(&cache_root, "de_test", 1500.0);
+    let router = router_over(&cache_root);
 
     let (status_a, body_a) = post_job(&router, "standspots", "de_test").await;
     assert_eq!(status_a, StatusCode::ACCEPTED);
@@ -260,8 +281,9 @@ async fn repeated_post_returns_the_same_job_id() {
 
 #[tokio::test]
 async fn get_after_completion_replays_the_stored_state() {
-    let cache_root = sample_cache_dir("replay", "de_test", 200.0);
-    let router = router_over("replay", cache_root.clone());
+    let cache_root = temp_dir("replay");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
 
     let (_status, maps_before) = get(&router, "/api/maps").await;
     let before = maps_before
@@ -312,8 +334,9 @@ async fn get_after_completion_replays_the_stored_state() {
 /// `registry::MapRegistry::reload_stand_spots`, not just `/api/maps`' file-presence check.
 #[tokio::test]
 async fn registry_entry_sees_stand_spots_after_the_job() {
-    let cache_root = sample_cache_dir("registry_reload", "de_test", 200.0);
-    let state = state_over("registry_reload", cache_root);
+    let cache_root = temp_dir("registry_reload");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let state = state_over(&cache_root);
     let router = server::routes::router(state.clone());
 
     let entry_before = state.registry.get("de_test", None).unwrap();
@@ -350,8 +373,9 @@ async fn registry_entry_sees_stand_spots_after_the_job() {
 /// running by the time the (immediately following) `DELETE` request lands.
 #[tokio::test]
 async fn delete_during_standspots_cancels_and_leaves_no_temp_files() {
-    let cache_root = sample_cache_dir("cancel", "de_big", 6000.0);
-    let router = router_over("cancel", cache_root.clone());
+    let cache_root = temp_dir("cancel");
+    sample_cache_dir(&cache_root, "de_big", 6000.0);
+    let router = router_over(&cache_root);
 
     let (status, body) = post_job(&router, "standspots", "de_big").await;
     assert_eq!(status, StatusCode::ACCEPTED);
@@ -418,14 +442,15 @@ async fn de_mirage_standspots_job_matches_cli_and_writes_a_loadable_cache() {
         .unwrap()
         .join("cache");
 
-    let config_path = temp_dir("real_mirage_config").join("config.json");
+    let config_dir = temp_dir("real_mirage_config");
+    let config_path = config_dir.join("config.json");
     let viewer_dir = temp_dir("real_mirage_viewer_empty");
     let state = Arc::new(
         AppState::new(
             config_path,
             AppConfig::default(),
             cache_root.clone(),
-            viewer_dir,
+            viewer_dir.to_path_buf(),
         )
         .with_overrides(Some(PathBuf::from(&game_dir)), None, None),
     );

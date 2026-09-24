@@ -8,11 +8,18 @@
 
 pub mod attributes;
 pub mod buffer;
+pub mod entity;
 pub mod error;
+pub mod export;
 pub mod format;
+pub mod gltf;
+pub mod material;
 pub mod mesh;
 pub mod model;
 mod reader;
+pub mod source;
+pub mod texture;
+pub mod world;
 
 pub use attributes::{FloatAttribute, Normal};
 pub use buffer::{Buffer, Compression, InputLayoutField};

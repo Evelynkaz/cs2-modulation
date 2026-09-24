@@ -11,6 +11,8 @@ repository = "https://github.com/Evelynkaz/cs2-modulation"
 
 [workspace.dependencies]
 s2fmt = { path = "crates/s2fmt" }
+s2tex = { path = "crates/s2tex" }
+s2render = { path = "crates/s2render" }
 geom = { path = "crates/geom" }
 extract = { path = "crates/extract" }
 sim = { path = "crates/sim" }

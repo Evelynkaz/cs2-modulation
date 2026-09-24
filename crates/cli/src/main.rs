@@ -1,4 +1,5 @@
 mod cmd_extract;
+mod cmd_render;
 mod cmd_res;
 mod cmd_serve;
 mod cmd_sim;
@@ -289,6 +290,27 @@ enum Command {
         #[arg(long)]
         game: Option<PathBuf>,
         /// Cache directory; overrides the saved config for this run.
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
+    /// Export a map's visible render geometry (world + entities), materials and textures to
+    /// `render.glb`/`render.json` in its extraction cache directory.
+    ExportGlb {
+        /// Map name (e.g. `de_mirage`).
+        map: String,
+        /// Texture mip budget: no side longer than this many pixels.
+        #[arg(long, default_value_t = 1024)]
+        max_texture: u32,
+        /// JPEG quality (1-100) for base color and normal textures.
+        #[arg(long, default_value_t = 90)]
+        jpeg_quality: u8,
+        /// Overwrite an existing `render.glb`/`render.json`.
+        #[arg(long)]
+        force: bool,
+        /// Game directory (`...\game\csgo`); defaults to `CS2_GAME_DIR`.
+        #[arg(long)]
+        game: Option<PathBuf>,
+        /// Cache directory; defaults to `<repo-or-cwd>/cache`.
         #[arg(long)]
         cache: Option<PathBuf>,
     },
@@ -597,6 +619,22 @@ fn run() -> anyhow::Result<u8> {
             game,
             cache,
         } => cmd_serve::serve(port, open, game.as_deref(), cache.as_deref()),
+        Command::ExportGlb {
+            map,
+            max_texture,
+            jpeg_quality,
+            force,
+            game,
+            cache,
+        } => cmd_render::export_glb(
+            &map,
+            max_texture,
+            jpeg_quality,
+            force,
+            game.as_deref(),
+            cache.as_deref(),
+        )
+        .map(|()| 0),
         Command::Vpk { command } => match command {
             VpkCommand::Ls {
                 vpk,

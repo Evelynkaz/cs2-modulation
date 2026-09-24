@@ -66,4 +66,6 @@ pub enum TexError {
         expected: u64,
         actual: usize,
     },
+    #[error("HDR layer {layer} does not exist (image has {layers})")]
+    InvalidHdrLayer { layer: u32, layers: u32 },
 }

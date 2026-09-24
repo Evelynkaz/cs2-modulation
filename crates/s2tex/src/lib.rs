@@ -15,15 +15,20 @@
 //! [`decode_bytes`]) and reads the mip payload straight out of `bytes` at
 //! `data_block.offset + data_block.size`.
 
+mod bc6h;
 mod budget;
 mod decode;
 pub mod encode;
 mod error;
 pub mod format;
+mod half_float;
+mod hdr_decode;
 pub mod header;
 mod mip;
 mod reader;
 mod redi;
+pub mod rgbe;
+pub mod tonemap;
 mod transform;
 
 pub use encode::{Encoded, EncodedFormat, alpha_is_significant, encode as encode_image};
@@ -147,6 +152,265 @@ pub fn decode_bytes(bytes: &[u8], max_side: u32) -> Result<DecodedImage, TexErro
     decode(&resource, bytes, max_side)
 }
 
+/// A decoded HDR mip, linear-light float RGBA (`s6f3a2b_hdr.md` change
+/// item 3) -- [`decode`]'s counterpart for BC6H and the raw float formats,
+/// which clamp/error in the LDR path instead (`decode::decode_mip`).
+#[derive(Debug, Clone)]
+pub struct HdrImage {
+    pub width: u32,
+    pub height: u32,
+    /// `layers` slices of `width * height * 4` floats each, back to back,
+    /// linear-light `[R, G, B, A]` per pixel: every face/slice the mip
+    /// actually stores (`mip::sizes_for_level`'s `depth`), unlike
+    /// [`decode`]'s LDR path, which always truncates to the first. For a
+    /// cubemap that's the 6 faces in `Texture.cs`'s `CubemapFace` order
+    /// (+X, -X, +Y, -Y, +Z, -Z; change item 3's "для кубов нужны ВСЕ 6
+    /// граней"); for a volume texture (e.g. a light probe volume atlas)
+    /// it's every depth slice at this mip level, so a caller can sample it
+    /// per vertex on the CPU without a second, layer-truncated decode.
+    pub rgba: Vec<f32>,
+    pub format: VTexFormat,
+    pub mip_level: u32,
+    pub layers: u32,
+    pub is_cube: bool,
+}
+
+impl HdrImage {
+    fn layer_slice(&self, layer: u32) -> Result<&[f32], TexError> {
+        if layer >= self.layers {
+            return Err(TexError::InvalidHdrLayer {
+                layer,
+                layers: self.layers,
+            });
+        }
+        let per_layer = (self.width as usize) * (self.height as usize) * 4;
+        let start = per_layer * layer as usize;
+        Ok(&self.rgba[start..start + per_layer])
+    }
+
+    /// Radiance `.hdr` (RGBE) bytes for `layer` (`0`-based), loadable by
+    /// three.js's `RGBELoader` (`s6f3a2b_hdr.md` change item 4, `rgbe`).
+    pub fn encode_radiance(&self, layer: u32) -> Result<Vec<u8>, TexError> {
+        let slice = self.layer_slice(layer)?;
+        Ok(rgbe::encode(self.width, self.height, slice))
+    }
+
+    /// A tone-mapped RGBA8 preview of `layer`, encoded the same way
+    /// [`DecodedImage::encode`] encodes an LDR image (`s6f3a2b_hdr.md`
+    /// change item 4, `tonemap`).
+    pub fn tonemap_preview(&self, layer: u32, jpeg_quality: u8) -> Result<Encoded, TexError> {
+        let slice = self.layer_slice(layer)?;
+        let ldr = tonemap::preview_rgba8(self.width, self.height, slice);
+        encode_image(&ldr, self.width, self.height, jpeg_quality, false)
+    }
+}
+
+/// Decodes `resource` to an [`HdrImage`] no larger than `max_side` pixels on
+/// its longest side (same mip budget as [`decode`]). Only the float HDR
+/// formats and BC6H are supported (`hdr_decode::decode_hdr_slice`); embedded
+/// JPEG/PNG/WebP formats can't be HDR and are rejected immediately.
+///
+/// Decodes every face/slice of the target mip level into one buffer, so its
+/// size is capped at 1 GiB (`mip::hdr_element_count`, checked before any mip
+/// bytes are even read): a large probe-volume atlas can exceed that on its
+/// own (de_fachwerk's is 340x336x1800, de_cache's 300x292x1608, de_boulder's
+/// 244x240x1224, all bigger than de_mirage's 164x152x384) and must be read
+/// one slice at a time with [`decode_raw_mip`]/[`decode_raw_mip_bytes`] plus
+/// [`decode_hdr_slice`] instead.
+pub fn decode_hdr(resource: &Resource, bytes: &[u8], max_side: u32) -> Result<HdrImage, TexError> {
+    let data_block = resource
+        .block(FourCC::DATA)
+        .ok_or(TexError::MissingDataBlock)?;
+    let header_bytes = resource.block_bytes(data_block);
+    let header = header::parse(header_bytes)?;
+
+    if header.format.is_raw_image() {
+        return Err(TexError::UnsupportedFormat {
+            format: header.format,
+        });
+    }
+
+    let mip_data_offset = data_block
+        .offset
+        .checked_add(data_block.size)
+        .ok_or(TexError::SizeOverflow)?;
+
+    let target_level = budget::pick_mip_for_budget(&header, max_side);
+
+    // Computed from the header alone, before any mip bytes are read,
+    // decompressed or allocated for: a raw BC6H mip can be 16x smaller than
+    // its decoded float output, so `mip::extract`'s own byte-size cap can't
+    // be relied on to catch an oversized decoded result
+    // (`s6f3a2b_hdr.md`'s crafted-header cap).
+    let sizes = mip::sizes_for_level(&header, target_level);
+    let total_elements = mip::hdr_element_count(sizes)?;
+
+    let mip = mip::extract(&header, bytes, mip_data_offset, target_level)?;
+
+    // Every face/slice this mip stores is decoded (unlike the LDR path's
+    // first-layer-only `decode`): 6 for a cubemap, the full depth for a
+    // volume texture, both already folded into `sizes_for_level`'s `depth`.
+    let layers = mip.sizes.depth;
+    let per_layer_sizes = mip::MipSizes {
+        width: mip.sizes.width,
+        height: mip.sizes.height,
+        depth: 1,
+    };
+    let per_layer_len = mip::buffer_size_for(header.format, per_layer_sizes)?;
+    let per_layer_elements = (mip.sizes.width as usize) * (mip.sizes.height as usize) * 4;
+
+    // One allocation, decoded into directly below (no intermediate
+    // per-layer buffer) -- `s6f3a2b_hdr.md`'s "avoid the double peak" note.
+    let mut rgba = vec![0f32; total_elements];
+    for layer in 0..layers {
+        let start = per_layer_len * (layer as usize);
+        let end = start
+            .checked_add(per_layer_len)
+            .ok_or(TexError::SizeOverflow)?;
+        let layer_bytes = mip
+            .bytes
+            .get(start..end)
+            .ok_or_else(|| TexError::Truncated {
+                detail: format!("mip data shorter than layer {layer} of {layers}"),
+            })?;
+
+        let out_start = per_layer_elements * (layer as usize);
+        let out_end = out_start + per_layer_elements;
+        hdr_decode::decode_hdr_slice(
+            header.format,
+            mip.sizes.width,
+            mip.sizes.height,
+            layer_bytes,
+            &mut rgba[out_start..out_end],
+        )?;
+    }
+
+    Ok(HdrImage {
+        width: mip.sizes.width,
+        height: mip.sizes.height,
+        rgba,
+        format: header.format,
+        mip_level: target_level,
+        layers,
+        is_cube: header.flags.is_cube(),
+    })
+}
+
+/// [`decode_hdr`], parsing `bytes` into a [`Resource`] first.
+pub fn decode_hdr_bytes(bytes: &[u8], max_side: u32) -> Result<HdrImage, TexError> {
+    let resource = Resource::parse(bytes.to_vec())?;
+    decode_hdr(&resource, bytes, max_side)
+}
+
+/// One mip level's raw, still-compressed-format bytes (LZ4-decompressed if
+/// the mip was stored compressed, but not decoded to pixels): every
+/// face/slice back to back, in on-disk order. For a block format (BC6H
+/// included) this is exactly the block stream a WebGL
+/// `compressedTex{Sub}Image*D` call wants, so a browser can upload it
+/// directly instead of round-tripping through a CPU-side float decode
+/// (`s6f3a2b_hdr.md`'s note on lightmaps mostly shipping as raw BC6H
+/// blocks).
+#[derive(Debug, Clone)]
+pub struct RawMip {
+    pub width: u32,
+    pub height: u32,
+    /// Faces/slices this mip stores (6x for a cubemap, the mip-adjusted
+    /// depth for a volume texture, 1 otherwise) -- see
+    /// `mip::sizes_for_level`.
+    pub depth: u32,
+    pub format: VTexFormat,
+    /// The mip level this was extracted at (`decode_raw_mip`'s `level`
+    /// argument, echoed back here for [`decode_hdr_slice`]'s `HdrImage`
+    /// result). `0` is the largest, full-resolution mip
+    /// (`mip::mip_level_size`'s `size >> level`); higher levels are
+    /// smaller, same convention as [`DecodedImage::mip_level`] and
+    /// [`HdrImage::mip_level`].
+    pub mip_level: u32,
+    pub is_cube: bool,
+    pub bytes: Vec<u8>,
+}
+
+/// Extracts `level`'s raw bytes (`mip::extract`) without decoding pixels.
+/// `level` `0` is the largest, full-resolution mip -- see
+/// [`RawMip::mip_level`].
+pub fn decode_raw_mip(resource: &Resource, bytes: &[u8], level: u32) -> Result<RawMip, TexError> {
+    let data_block = resource
+        .block(FourCC::DATA)
+        .ok_or(TexError::MissingDataBlock)?;
+    let header_bytes = resource.block_bytes(data_block);
+    let header = header::parse(header_bytes)?;
+
+    let mip_data_offset = data_block
+        .offset
+        .checked_add(data_block.size)
+        .ok_or(TexError::SizeOverflow)?;
+
+    let mip = mip::extract(&header, bytes, mip_data_offset, level)?;
+    Ok(RawMip {
+        width: mip.sizes.width,
+        height: mip.sizes.height,
+        depth: mip.sizes.depth,
+        format: header.format,
+        mip_level: level,
+        is_cube: header.flags.is_cube(),
+        bytes: mip.bytes,
+    })
+}
+
+/// [`decode_raw_mip`], parsing `bytes` into a [`Resource`] first.
+pub fn decode_raw_mip_bytes(bytes: &[u8], level: u32) -> Result<RawMip, TexError> {
+    let resource = Resource::parse(bytes.to_vec())?;
+    decode_raw_mip(&resource, bytes, level)
+}
+
+/// Decodes `raw`'s `z`-th face/slice to a single-layer [`HdrImage`], without
+/// the whole-mip float buffer [`decode_hdr`] would need for every
+/// face/slice combined -- the per-slice API large probe-volume atlases need
+/// (`decode_hdr`'s doc comment, `s6f3a2b_hdr.md`'s "map exporter will read
+/// large probe-volume atlases SLICE BY SLICE, never whole" design
+/// decision). Same 1 GiB sanity cap as [`decode_hdr`] (`mip::hdr_element_count`),
+/// applied to this one slice.
+pub fn decode_hdr_slice(raw: &RawMip, z: u32) -> Result<HdrImage, TexError> {
+    if z >= raw.depth {
+        return Err(TexError::InvalidHdrLayer {
+            layer: z,
+            layers: raw.depth,
+        });
+    }
+
+    let sizes = mip::MipSizes {
+        width: raw.width,
+        height: raw.height,
+        depth: 1,
+    };
+    let total_elements = mip::hdr_element_count(sizes)?;
+    let layer_len = mip::buffer_size_for(raw.format, sizes)?;
+
+    let start = layer_len
+        .checked_mul(z as usize)
+        .ok_or(TexError::SizeOverflow)?;
+    let end = start.checked_add(layer_len).ok_or(TexError::SizeOverflow)?;
+    let layer_bytes = raw
+        .bytes
+        .get(start..end)
+        .ok_or_else(|| TexError::Truncated {
+            detail: format!("mip data shorter than slice {z} of {}", raw.depth),
+        })?;
+
+    let mut rgba = vec![0f32; total_elements];
+    hdr_decode::decode_hdr_slice(raw.format, raw.width, raw.height, layer_bytes, &mut rgba)?;
+
+    Ok(HdrImage {
+        width: raw.width,
+        height: raw.height,
+        rgba,
+        format: raw.format,
+        mip_level: raw.mip_level,
+        layers: 1,
+        is_cube: raw.is_cube,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +418,65 @@ mod tests {
     #[test]
     fn decode_bytes_rejects_non_resource_input() {
         assert!(decode_bytes(b"not a resource", 1024).is_err());
+    }
+
+    #[test]
+    fn decode_hdr_bytes_rejects_non_resource_input() {
+        assert!(decode_hdr_bytes(b"not a resource", 1024).is_err());
+    }
+
+    #[test]
+    fn decode_raw_mip_bytes_rejects_non_resource_input() {
+        assert!(decode_raw_mip_bytes(b"not a resource", 0).is_err());
+    }
+
+    /// Wraps a vtex DATA block's bytes in a minimal, otherwise-empty
+    /// resource container (file header + one-entry block table), the same
+    /// offset convention `s2fmt::resource::Resource::parse` uses everywhere
+    /// (each offset relative to its own field's position).
+    fn resource_bytes(data_block: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0u32.to_le_bytes()); // file_size, patched below
+        out.extend_from_slice(&12u16.to_le_bytes()); // header_version
+        out.extend_from_slice(&0u16.to_le_bytes()); // resource version
+        out.extend_from_slice(&8u32.to_le_bytes()); // block_offset (table starts right after block_count)
+        out.extend_from_slice(&1u32.to_le_bytes()); // block_count
+        out.extend_from_slice(b"DATA");
+        out.extend_from_slice(&8u32.to_le_bytes()); // rel_offset (payload starts right after size)
+        out.extend_from_slice(&(data_block.len() as u32).to_le_bytes());
+        out.extend_from_slice(data_block);
+        let file_size = out.len() as u32;
+        out[0..4].copy_from_slice(&file_size.to_le_bytes());
+        out
+    }
+
+    /// A vtex header declaring BC6H 16384x16384, depth 4, one mip level --
+    /// `s6f3a2b_hdr.md`'s crafted case (~17 GiB of decoded floats). No extra
+    /// data, so no mip payload is needed: the size check below must reject
+    /// this from the header alone, before ever looking for mip bytes.
+    fn crafted_oversized_hdr_header() -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&1u16.to_le_bytes()); // version
+        b.extend_from_slice(&0u16.to_le_bytes()); // flags
+        b.extend_from_slice(&[0u8; 16]); // reflectivity
+        b.extend_from_slice(&16384u16.to_le_bytes()); // width
+        b.extend_from_slice(&16384u16.to_le_bytes()); // height
+        b.extend_from_slice(&4u16.to_le_bytes()); // depth
+        b.push(19); // format = Bc6H
+        b.push(1); // num_mip_levels
+        b.extend_from_slice(&0u32.to_le_bytes()); // picmip0res
+        b.extend_from_slice(&0u32.to_le_bytes()); // extraDataOffset
+        b.extend_from_slice(&0u32.to_le_bytes()); // extraDataCount
+        b
+    }
+
+    #[test]
+    fn decode_hdr_bytes_rejects_a_crafted_oversized_volume_before_allocating() {
+        let bytes = resource_bytes(&crafted_oversized_hdr_header());
+        let err = decode_hdr_bytes(&bytes, header::MAX_SIDE).unwrap_err();
+        assert!(
+            matches!(err, TexError::SizeTooLarge { .. }),
+            "expected SizeTooLarge, got {err:?}"
+        );
     }
 }

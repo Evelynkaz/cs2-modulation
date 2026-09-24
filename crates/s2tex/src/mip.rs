@@ -91,6 +91,36 @@ pub fn buffer_size_for(format: VTexFormat, sizes: MipSizes) -> Result<usize, Tex
     Ok(total as usize)
 }
 
+/// Total `f32` element count (`width * height * 4` channels `* depth`) an
+/// [`crate::HdrImage`]'s `rgba` buffer needs for `sizes`, checked (as the
+/// equivalent byte count, `elements * 4`) against the same
+/// [`MAX_BUFFER_SIZE`] cap `buffer_size_for` applies to a mip's raw bytes.
+/// Computed from the header/mip dimensions alone, before any bytes are read
+/// or a float buffer allocated: a raw BC6H mip is 16x smaller than its
+/// decoded float output (16 bytes cover a 4x4 block of 16 pixels, each of
+/// which decodes to 16 bytes of float RGBA -- 1 byte/pixel compressed vs 16
+/// bytes/pixel decoded), so `buffer_size_for`'s 1 GiB cap on the
+/// *compressed* bytes lets a decoded size 16x that cap through; this is a
+/// separate check on the *decoded* size (`s6f3a2b_hdr.md`'s crafted-header
+/// cap).
+pub fn hdr_element_count(sizes: MipSizes) -> Result<usize, TexError> {
+    let pixels = u64::from(sizes.width)
+        .checked_mul(u64::from(sizes.height))
+        .ok_or(TexError::SizeOverflow)?;
+    let elements = pixels
+        .checked_mul(4)
+        .and_then(|v| v.checked_mul(u64::from(sizes.depth)))
+        .ok_or(TexError::SizeOverflow)?;
+    let bytes = elements.checked_mul(4).ok_or(TexError::SizeOverflow)?;
+    if bytes > MAX_BUFFER_SIZE {
+        return Err(TexError::SizeTooLarge {
+            requested: bytes,
+            limit: MAX_BUFFER_SIZE,
+        });
+    }
+    Ok(elements as usize)
+}
+
 /// One extracted mip level: its dimensions and decompressed bytes (still in
 /// the source pixel format, not yet RGBA8).
 pub struct MipData {
@@ -214,6 +244,35 @@ mod tests {
         let h = header(4, 3, 1, VTexFormat::Rgba8888, 1, 0);
         let sizes = sizes_for_level(&h, 0);
         assert_eq!(buffer_size_for(h.format, sizes).unwrap(), 4 * 3 * 4);
+    }
+
+    #[test]
+    fn hdr_element_count_rejects_a_16384_squared_by_4_volume() {
+        // s6f3a2b_hdr.md's crafted case: BC6H 16384x16384, depth 4 -- 17 GiB
+        // of decoded floats, 16x over the 1 GiB cap even before the depth
+        // multiplier.
+        let sizes = MipSizes {
+            width: 16384,
+            height: 16384,
+            depth: 4,
+        };
+        assert!(matches!(
+            hdr_element_count(sizes),
+            Err(TexError::SizeTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn hdr_element_count_allows_exactly_one_gib() {
+        // 8192x8192x1 floats = 8192*8192*4*4 bytes = exactly 1<<30: the
+        // check must use `>`, not `>=`, so a real 8192^2 irradiance texture
+        // still decodes.
+        let sizes = MipSizes {
+            width: 8192,
+            height: 8192,
+            depth: 1,
+        };
+        assert_eq!(hdr_element_count(sizes).unwrap(), 8192 * 8192 * 4);
     }
 
     #[test]

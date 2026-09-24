@@ -407,6 +407,72 @@ full responsibility for any undesirable consequences; the authors accept
 NO LIABILITY for damages of any kind.
 ```
 
+## bcdec_rs
+
+- URL: https://github.com/ScanMountGoat/image_dds/tree/main/bcdec_rs
+- Copyright (c) 2023 SMG
+- License: MIT.
+- Rust crate used by `crates/s2tex` to decode BC6H block data to linear-light float RGB
+  (`texture2ddecoder`'s BC6H decoder only exposes an LDR path that clamps to `u8`). Its own
+  README describes it as a safe, dependency-free port of the `bcdec` C library (see the `bcdec`
+  entry below), fuzzed against bindings to that original C code for arbitrary block input.
+
+```
+MIT License
+
+Copyright (c) 2023 SMG
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## bcdec
+
+- URL: https://github.com/iOrange/bcdec
+- Copyright (c) 2022 Sergii Kudlai
+- License: MIT (or, at the licensor's alternative offer, The Unlicense) -- we take the MIT
+  option. Original C library that `bcdec_rs` (see above) is a Rust port of; not itself compiled
+  into this project, credited here because `bcdec_rs`'s own attribution points to it.
+
+```
+MIT License
+
+Copyright (c) 2022 Sergii Kudlai
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## zune-jpeg
 
 - URL: https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg

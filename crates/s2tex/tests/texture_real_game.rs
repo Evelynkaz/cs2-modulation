@@ -51,6 +51,7 @@ fn failure_reason(e: &TexError) -> String {
         TexError::PngEncode(_) => "png_encode".to_string(),
         TexError::EncodeDimensionsTooLarge { .. } => "encode_dimensions_too_large".to_string(),
         TexError::EncodeBufferSizeMismatch { .. } => "encode_buffer_size_mismatch".to_string(),
+        TexError::InvalidHdrLayer { .. } => "invalid_hdr_layer".to_string(),
     }
 }
 
@@ -410,4 +411,524 @@ fn de_mirage_matches_vrf_reference_export() {
         );
     }
     println!("worst difference across all cases: {worst_overall}");
+}
+
+// ---------------------------------------------------------------------
+// F3a-2b (`s6f3a2b_hdr.md`): BC6H and float HDR formats.
+// ---------------------------------------------------------------------
+
+/// A short label for an HDR decode failure, by error kind/format --
+/// `failure_reason`'s counterpart for [`s2tex::decode_hdr_bytes`].
+fn hdr_failure_reason(e: &TexError) -> String {
+    match e {
+        TexError::UnsupportedFormat { format } => format!("not_hdr_format:{format:?}"),
+        other => failure_reason(other),
+    }
+}
+
+/// Scans `entries` with [`s2tex::decode_hdr_bytes`], folding results into
+/// `stats`. A texture whose format isn't one of the HDR ones this crate
+/// supports (`hdr_decode::decode_hdr_slice`'s list, plus every raw
+/// JPEG/PNG/WebP format) reports `UnsupportedFormat` and is *not* counted
+/// as a failure -- it means "not an HDR texture", the expected outcome for
+/// the vast majority of `pak01`'s vtex_c population (`s6f3a2b_hdr.md`'s
+/// real-archive test is about the BC6H/float subset, not every texture).
+struct HdrScanStats {
+    format_histogram: BTreeMap<String, usize>,
+    failure_reasons: BTreeMap<String, usize>,
+    hdr_successes: usize,
+    hdr_failures: usize,
+    not_hdr_format: usize,
+}
+
+fn scan_hdr(vpk: &Vpk, entries: &[&VpkEntry], stats: &mut HdrScanStats) {
+    for entry in entries {
+        let bytes = match vpk.read(entry) {
+            Ok(b) => b,
+            Err(_) => {
+                stats.hdr_failures += 1;
+                *stats
+                    .failure_reasons
+                    .entry("vpk_read".to_string())
+                    .or_insert(0) += 1;
+                continue;
+            }
+        };
+        match s2tex::decode_hdr_bytes(&bytes, BUDGET) {
+            Ok(image) => {
+                stats.hdr_successes += 1;
+                *stats
+                    .format_histogram
+                    .entry(format!("{:?}", image.format))
+                    .or_insert(0) += 1;
+            }
+            Err(TexError::UnsupportedFormat { .. }) => stats.not_hdr_format += 1,
+            Err(e) => {
+                stats.hdr_failures += 1;
+                *stats
+                    .failure_reasons
+                    .entry(hdr_failure_reason(&e))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "needs CS2_GAME_DIR; slow, run with --release"]
+fn hdr_and_float_real_archive_scan() {
+    let pak01_path = game_dir().join("pak01_dir.vpk");
+    let pak01 =
+        Vpk::open(&pak01_path).unwrap_or_else(|e| panic!("failed to open {pak01_path:?}: {e}"));
+
+    let all_vtex: Vec<&VpkEntry> = pak01
+        .entries()
+        .filter(|e| e.path.ends_with(".vtex_c"))
+        .collect();
+    let want = 2000usize.min(all_vtex.len());
+    let stride = (all_vtex.len() / want).max(1);
+    let sample: Vec<&VpkEntry> = all_vtex
+        .iter()
+        .step_by(stride)
+        .take(want)
+        .copied()
+        .collect();
+
+    println!(
+        "=== pak01 sample: {} vtex_c entries, HDR budget={BUDGET} ===",
+        sample.len()
+    );
+    let mut pak01_stats = HdrScanStats {
+        format_histogram: BTreeMap::new(),
+        failure_reasons: BTreeMap::new(),
+        hdr_successes: 0,
+        hdr_failures: 0,
+        not_hdr_format: 0,
+    };
+    let start = Instant::now();
+    scan_hdr(&pak01, &sample, &mut pak01_stats);
+    let elapsed = start.elapsed();
+    println!("elapsed: {elapsed:?}");
+    println!(
+        "hdr successes: {}, hdr failures: {}, not-HDR-format: {}",
+        pak01_stats.hdr_successes, pak01_stats.hdr_failures, pak01_stats.not_hdr_format
+    );
+    println!("format histogram: {:?}", pak01_stats.format_histogram);
+    println!("failure reasons: {:?}", pak01_stats.failure_reasons);
+
+    // The map's own known HDR/float set (`s6f3a2b_hdr.md`'s task facts):
+    // the sky cube (pak01) and de_mirage's lightmaps (its own map VPK) --
+    // every BC6H texture the coordinator's data survey actually found.
+    let sky_path = "materials/skybox/sky_de_mirage_exr_71e5f2a1.vtex_c";
+    let sky_entry = pak01
+        .entries()
+        .find(|e| e.path == sky_path)
+        .unwrap_or_else(|| panic!("{sky_path} not found in pak01"));
+
+    let mirage_vpk_path = game_dir().join("maps").join("de_mirage.vpk");
+    let mirage_vpk = Vpk::open(&mirage_vpk_path)
+        .unwrap_or_else(|e| panic!("failed to open {mirage_vpk_path:?}: {e}"));
+    let lightmap_paths = [
+        "maps/de_mirage/lightmaps/irradiance.vtex_c",
+        "maps/de_mirage/lightmaps/directional_irradiance.vtex_c",
+        "maps/de_mirage/lightmaps/direct_light_shadows.vtex_c",
+        "maps/de_mirage/lightmaps/env_light_probe_volume_atlas.vtex_c",
+        "maps/de_mirage/lightmaps/env_light_probe_volume_atlas_dlshd.vtex_c",
+    ];
+    let lightmap_entries: Vec<&VpkEntry> = lightmap_paths
+        .iter()
+        .map(|p| {
+            mirage_vpk
+                .entries()
+                .find(|e| &e.path == p)
+                .unwrap_or_else(|| panic!("{p} not found in maps/de_mirage.vpk"))
+        })
+        .collect();
+
+    println!("=== known de_mirage HDR/lightmap set ===");
+    let mut known_stats = HdrScanStats {
+        format_histogram: BTreeMap::new(),
+        failure_reasons: BTreeMap::new(),
+        hdr_successes: 0,
+        hdr_failures: 0,
+        not_hdr_format: 0,
+    };
+    scan_hdr(&pak01, &[sky_entry], &mut known_stats);
+    let start = Instant::now();
+    scan_hdr(&mirage_vpk, &lightmap_entries, &mut known_stats);
+    let elapsed = start.elapsed();
+    println!("elapsed (lightmap set): {elapsed:?}");
+    println!(
+        "hdr successes: {}, hdr failures: {}, not-HDR-format (expected for DXT1/ATI1N/BC7): {}",
+        known_stats.hdr_successes, known_stats.hdr_failures, known_stats.not_hdr_format
+    );
+    println!("format histogram: {:?}", known_stats.format_histogram);
+    println!("failure reasons: {:?}", known_stats.failure_reasons);
+
+    // The sky and irradiance textures are both BC6H and must decode.
+    assert!(
+        known_stats.hdr_successes >= 2,
+        "expected the sky cube and irradiance lightmap to both decode as HDR"
+    );
+    assert_eq!(
+        known_stats.hdr_failures, 0,
+        "no known HDR texture should fail to decode"
+    );
+}
+
+/// Reads an EXR's first layer to interleaved RGBA f32
+/// (`exr::image::FlatSamples::values_as_f32` widens whichever sample type
+/// the file actually stores -- `f16`, `f32` or `u32` -- so this doesn't need
+/// to know VRF's own export precision ahead of time).
+fn load_exr_rgba(path: &Path) -> (u32, u32, Vec<f32>) {
+    let image = exr::prelude::read_all_flat_layers_from_file(path)
+        .unwrap_or_else(|e| panic!("failed to read {path:?}: {e}"));
+    let layer = &image.layer_data[0];
+    let width = layer.size.0 as u32;
+    let height = layer.size.1 as u32;
+    let pixel_count = (width as usize) * (height as usize);
+
+    let channel = |name: &str| -> Vec<f32> {
+        let samples = &layer
+            .channel_data
+            .list
+            .iter()
+            .find(|c| c.name.to_string() == name)
+            .unwrap_or_else(|| panic!("{path:?} has no {name} channel"))
+            .sample_data;
+        samples.values_as_f32().collect()
+    };
+    let (r, g, b, a) = (channel("R"), channel("G"), channel("B"), channel("A"));
+
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
+    for i in 0..pixel_count {
+        rgba.extend_from_slice(&[r[i], g[i], b[i], a[i]]);
+    }
+    (width, height, rgba)
+}
+
+/// Worst absolute and relative (`|ours-ref| / max(|ref|, 1.0)`) difference
+/// over R/G/B, sampled at every `stride`-th pixel (both images are
+/// megapixel-plus; a stride keeps this test's runtime reasonable while
+/// still covering the whole image). The `max(|ref|, 1.0)` floor keeps the
+/// relative metric meaningful near black, where an absolute BC6H
+/// quantization step can otherwise look like a huge relative error.
+fn worst_hdr_diff(
+    a: &[f32],
+    b: &[f32],
+    width: u32,
+    height: u32,
+    stride: usize,
+) -> (f32, f32, usize) {
+    let mut worst_abs = 0f32;
+    let mut worst_rel = 0f32;
+    let mut sampled = 0usize;
+    for i in (0..(width as usize) * (height as usize)).step_by(stride) {
+        sampled += 1;
+        for c in 0..3 {
+            let (av, bv) = (a[i * 4 + c], b[i * 4 + c]);
+            let diff = (av - bv).abs();
+            worst_abs = worst_abs.max(diff);
+            worst_rel = worst_rel.max(diff / bv.abs().max(1.0));
+        }
+    }
+    (worst_abs, worst_rel, sampled)
+}
+
+/// `s6f3a2b_hdr.md`: "для неба Mirage ... и одной карты освещения сравнить
+/// с выходом эталона" -- the lightmap half. `irradiance.vtex_c` decodes as
+/// a plain 2D BC6H image (no cubemap reprojection involved, unlike the sky
+/// -- see `sky_cube_reference_stats_and_contact_sheet`), so this compares
+/// full-resolution pixels directly against VRF's own `.exr` export.
+#[test]
+#[ignore = "needs CS2_GAME_DIR and the VRF reference export"]
+fn irradiance_matches_vrf_reference_export() {
+    let vrf_path = PathBuf::from(
+        r"D:\porject\modulator-work\scratch\f3_lighting\lmdec\maps\de_mirage\lightmaps\irradiance.exr",
+    );
+    if !vrf_path.is_file() {
+        println!("no VRF reference export at {vrf_path:?}; skipping comparison");
+        return;
+    }
+
+    let mirage_vpk_path = game_dir().join("maps").join("de_mirage.vpk");
+    let vpk = Vpk::open(&mirage_vpk_path)
+        .unwrap_or_else(|e| panic!("failed to open {mirage_vpk_path:?}: {e}"));
+    let bytes = vpk
+        .read_path("maps/de_mirage/lightmaps/irradiance.vtex_c")
+        .expect("read irradiance.vtex_c");
+
+    let ours = s2tex::decode_hdr_bytes(&bytes, s2tex::header::MAX_SIDE).expect("decode_hdr_bytes");
+    println!(
+        "ours: {}x{} layers={} format={:?} mip_level={}",
+        ours.width, ours.height, ours.layers, ours.format, ours.mip_level
+    );
+
+    let (ref_w, ref_h, reference) = load_exr_rgba(&vrf_path);
+    assert_eq!(
+        (ours.width, ours.height),
+        (ref_w, ref_h),
+        "dimension mismatch"
+    );
+
+    // Half-float endpoints, exact bit-for-bit widening on both sides (see
+    // this crate's `half_float` module and TinyBCSharp's own `(float)Half`)
+    // -- 1e-3 relative tolerance is generous headroom for interpolation
+    // rounding order, not precision loss (`s6f3a2b_hdr.md`'s own estimate).
+    const RELATIVE_TOLERANCE: f32 = 1e-3;
+    const STRIDE: usize = 97; // coprime-ish with 8192 for a spread sample
+
+    let (worst_abs, worst_rel, sampled) =
+        worst_hdr_diff(&ours.rgba, &reference, ours.width, ours.height, STRIDE);
+    println!("sampled {sampled} pixels: worst_abs={worst_abs} worst_rel={worst_rel}");
+    assert!(
+        worst_rel <= RELATIVE_TOLERANCE,
+        "worst relative difference {worst_rel} exceeds tolerance {RELATIVE_TOLERANCE}"
+    );
+}
+
+/// `s6f3a2b_hdr.md`'s coordinator follow-up: the light probe volume atlas
+/// is a BC6H **3D volume** texture (164x152x384), and [`s2tex::decode_hdr`]
+/// must return every depth slice, not just the first, so a caller can
+/// sample it per vertex. Spot-checks a handful of z-slices against VRF's
+/// own per-slice `.exr` exports.
+#[test]
+#[ignore = "needs CS2_GAME_DIR and the VRF reference export"]
+fn probe_volume_atlas_matches_vrf_reference_export() {
+    let vrf_dir = PathBuf::from(
+        r"D:\porject\modulator-work\scratch\f3_lighting\lpvdec\maps\de_mirage\lightmaps",
+    );
+    if !vrf_dir.is_dir() {
+        println!("no VRF reference export at {vrf_dir:?}; skipping comparison");
+        return;
+    }
+
+    let mirage_vpk_path = game_dir().join("maps").join("de_mirage.vpk");
+    let vpk = Vpk::open(&mirage_vpk_path)
+        .unwrap_or_else(|e| panic!("failed to open {mirage_vpk_path:?}: {e}"));
+    let bytes = vpk
+        .read_path("maps/de_mirage/lightmaps/env_light_probe_volume_atlas.vtex_c")
+        .expect("read env_light_probe_volume_atlas.vtex_c");
+
+    let ours = s2tex::decode_hdr_bytes(&bytes, s2tex::header::MAX_SIDE).expect("decode_hdr_bytes");
+    println!(
+        "ours: {}x{} layers={} format={:?} mip_level={}",
+        ours.width, ours.height, ours.layers, ours.format, ours.mip_level
+    );
+    assert_eq!((ours.width, ours.height), (164, 152));
+    assert_eq!(
+        ours.layers, 384,
+        "expected every depth slice, not just the first"
+    );
+
+    const RELATIVE_TOLERANCE: f32 = 1e-3;
+    let mut worst_abs_overall = 0f32;
+    let mut worst_rel_overall = 0f32;
+    for z in [0u32, 50, 100, 200, 383] {
+        let vrf_path = vrf_dir.join(format!("env_light_probe_volume_atlas_z{z:03}.exr"));
+        let (ref_w, ref_h, reference) = load_exr_rgba(&vrf_path);
+        assert_eq!(
+            (ref_w, ref_h),
+            (ours.width, ours.height),
+            "slice {z} dimension mismatch"
+        );
+
+        let per_layer = (ours.width as usize) * (ours.height as usize) * 4;
+        let start = per_layer * (z as usize);
+        let ours_layer = &ours.rgba[start..start + per_layer];
+
+        let (worst_abs, worst_rel, sampled) =
+            worst_hdr_diff(ours_layer, &reference, ours.width, ours.height, 1);
+        println!("z={z}: sampled {sampled} pixels worst_abs={worst_abs} worst_rel={worst_rel}");
+        worst_abs_overall = worst_abs_overall.max(worst_abs);
+        worst_rel_overall = worst_rel_overall.max(worst_rel);
+        assert!(
+            worst_rel <= RELATIVE_TOLERANCE,
+            "slice {z}: worst relative difference {worst_rel} exceeds tolerance {RELATIVE_TOLERANCE}"
+        );
+    }
+    println!("worst across sampled slices: abs={worst_abs_overall} rel={worst_rel_overall}");
+}
+
+/// `s6f3a2b_hdr.md`'s change item 3: `decode_raw_mip`'s success path had no
+/// test. These three buffer sizes are VRF's own "Mip level N - buffer size"
+/// values (`D:\porject\modulator-work\scratch\f3_lighting\lm_data_blocks.txt`),
+/// so this pins the crate's mip-size/LZ4 math against the reference on real
+/// files rather than synthetic ones. `level` `0` is the largest,
+/// full-resolution mip (`irradiance`'s level 1 is the first downsample,
+/// 4096 from an 8192 base).
+#[test]
+#[ignore = "needs CS2_GAME_DIR; slow, run with --release"]
+fn decode_raw_mip_matches_vrf_buffer_sizes() {
+    let pak01_path = game_dir().join("pak01_dir.vpk");
+    let pak01 =
+        Vpk::open(&pak01_path).unwrap_or_else(|e| panic!("failed to open {pak01_path:?}: {e}"));
+    let sky_bytes = pak01
+        .read_path("materials/skybox/sky_de_mirage_exr_71e5f2a1.vtex_c")
+        .expect("read sky_de_mirage_exr_71e5f2a1.vtex_c");
+    let sky = s2tex::decode_raw_mip_bytes(&sky_bytes, 0).expect("decode_raw_mip_bytes sky level 0");
+    assert_eq!((sky.width, sky.height, sky.depth), (512, 512, 6));
+    assert_eq!(sky.format, s2tex::VTexFormat::Bc6H);
+    assert_eq!(sky.bytes.len(), 1_572_864);
+
+    let mirage_vpk_path = game_dir().join("maps").join("de_mirage.vpk");
+    let mirage_vpk = Vpk::open(&mirage_vpk_path)
+        .unwrap_or_else(|e| panic!("failed to open {mirage_vpk_path:?}: {e}"));
+
+    let irradiance_bytes = mirage_vpk
+        .read_path("maps/de_mirage/lightmaps/irradiance.vtex_c")
+        .expect("read irradiance.vtex_c");
+    let irradiance = s2tex::decode_raw_mip_bytes(&irradiance_bytes, 1)
+        .expect("decode_raw_mip_bytes irradiance level 1");
+    assert_eq!(
+        (irradiance.width, irradiance.height, irradiance.depth),
+        (4096, 4096, 1)
+    );
+    assert_eq!(irradiance.format, s2tex::VTexFormat::Bc6H);
+    assert_eq!(irradiance.bytes.len(), 16_777_216);
+
+    let atlas_bytes = mirage_vpk
+        .read_path("maps/de_mirage/lightmaps/env_light_probe_volume_atlas.vtex_c")
+        .expect("read env_light_probe_volume_atlas.vtex_c");
+    let atlas = s2tex::decode_raw_mip_bytes(&atlas_bytes, 0)
+        .expect("decode_raw_mip_bytes env_light_probe_volume_atlas level 0");
+    assert_eq!((atlas.width, atlas.height, atlas.depth), (164, 152, 384));
+    assert_eq!(atlas.format, s2tex::VTexFormat::Bc6H);
+    assert_eq!(atlas.bytes.len(), 9_572_352);
+}
+
+/// `s6f3a2b_hdr.md`'s per-slice API: decoding one z-slice via
+/// `decode_raw_mip_bytes` + `decode_hdr_slice` must agree bit-for-bit with
+/// the same slice out of the whole-texture [`s2tex::decode_hdr_bytes`] path
+/// -- both run the exact same per-format decode over the exact same bytes,
+/// so the worst difference is expected to be exactly 0 (the VRF cross-check
+/// with its own 1e-3 tolerance is the separate
+/// `probe_volume_atlas_matches_vrf_reference_export` test).
+#[test]
+#[ignore = "needs CS2_GAME_DIR; slow, run with --release"]
+fn decode_hdr_slice_matches_the_whole_texture_path() {
+    let mirage_vpk_path = game_dir().join("maps").join("de_mirage.vpk");
+    let vpk = Vpk::open(&mirage_vpk_path)
+        .unwrap_or_else(|e| panic!("failed to open {mirage_vpk_path:?}: {e}"));
+    let bytes = vpk
+        .read_path("maps/de_mirage/lightmaps/env_light_probe_volume_atlas.vtex_c")
+        .expect("read env_light_probe_volume_atlas.vtex_c");
+
+    let whole = s2tex::decode_hdr_bytes(&bytes, s2tex::header::MAX_SIDE).expect("decode_hdr_bytes");
+    let raw = s2tex::decode_raw_mip_bytes(&bytes, whole.mip_level).expect("decode_raw_mip_bytes");
+
+    let per_layer = (whole.width as usize) * (whole.height as usize) * 4;
+    for z in [0u32, 383] {
+        let slice = s2tex::decode_hdr_slice(&raw, z)
+            .unwrap_or_else(|e| panic!("decode_hdr_slice z={z}: {e}"));
+        assert_eq!((slice.width, slice.height), (whole.width, whole.height));
+        let whole_layer = &whole.rgba[per_layer * (z as usize)..per_layer * (z as usize + 1)];
+        let mut worst = 0f32;
+        for (a, b) in slice.rgba.iter().zip(whole_layer.iter()) {
+            worst = worst.max((a - b).abs());
+        }
+        println!("z={z}: worst difference vs the whole-texture path = {worst}");
+        assert_eq!(worst, 0.0, "z={z}: expected bit-identical output");
+    }
+}
+
+/// `s6f3a2b_hdr.md`'s contact sheet ("6 граней неба Mirage после
+/// тонкомпрессии") plus a reference sanity check. VRF's own HDR export for
+/// a cubemap reprojects all 6 faces into a single equirectangular
+/// (latlong) image with bilinear cross-face sampling
+/// (`TextureExtract.cs`'s `CreateLatLongFromCubemapFaces`) rather than
+/// writing the 6 faces separately, so a pixel-exact per-face comparison
+/// isn't available without reimplementing that resampling; instead this
+/// checks that the reprojected reference and our own 6 raw faces agree on
+/// the aggregate radiance range (max and mean over the luminance channel),
+/// which a lossy bilinear resample can shift slightly but not by an order
+/// of magnitude -- a structural cross-check, not a bit-exact one.
+#[test]
+#[ignore = "needs CS2_GAME_DIR and the VRF reference export"]
+fn sky_cube_reference_stats_and_contact_sheet() {
+    let sky_path = game_dir().join("pak01_dir.vpk");
+    let vpk = Vpk::open(&sky_path).unwrap_or_else(|e| panic!("failed to open {sky_path:?}: {e}"));
+    let bytes = vpk
+        .read_path("materials/skybox/sky_de_mirage_exr_71e5f2a1.vtex_c")
+        .expect("read sky_de_mirage_exr_71e5f2a1.vtex_c");
+
+    let ours = s2tex::decode_hdr_bytes(&bytes, s2tex::header::MAX_SIDE).expect("decode_hdr_bytes");
+    println!(
+        "ours: {}x{} layers={} format={:?} mip_level={} is_cube={}",
+        ours.width, ours.height, ours.layers, ours.format, ours.mip_level, ours.is_cube
+    );
+    assert_eq!(ours.layers, 6, "expected all 6 cube faces");
+
+    // Contact sheet: 6 faces, tone-mapped, side by side.
+    const CELL: u32 = 128;
+    let mut canvas = vec![0u8; (CELL * 6 * CELL * 4) as usize];
+    let mut our_max_luma = 0f32;
+    let mut our_luma_sum = 0f64;
+    let per_layer = (ours.width as usize) * (ours.height as usize) * 4;
+    for face in 0..6u32 {
+        let layer = &ours.rgba[per_layer * (face as usize)..per_layer * (face as usize + 1)];
+        let preview = s2tex::tonemap::preview_rgba8(ours.width, ours.height, layer);
+        for y in 0..CELL {
+            for x in 0..CELL {
+                let sx = x * ours.width / CELL;
+                let sy = y * ours.height / CELL;
+                let src = ((sy * ours.width + sx) * 4) as usize;
+                let dst = ((y * (CELL * 6) + (face * CELL + x)) * 4) as usize;
+                canvas[dst..dst + 4].copy_from_slice(&preview[src..src + 4]);
+            }
+        }
+
+        for px in layer.as_chunks::<4>().0 {
+            let luma = px[0] * 0.299 + px[1] * 0.587 + px[2] * 0.114;
+            our_max_luma = our_max_luma.max(luma);
+            our_luma_sum += f64::from(luma);
+        }
+    }
+    let our_mean_luma = our_luma_sum / f64::from((ours.width * ours.height * 6) as u32);
+    println!("ours: max_luma={our_max_luma} mean_luma={our_mean_luma}");
+
+    let contact_sheet_path = PathBuf::from(r"D:\porject\modulator-work\scratch\s2tex_sky.png");
+    if let Some(parent) = contact_sheet_path.parent() {
+        std::fs::create_dir_all(parent).expect("create contact sheet directory");
+    }
+    let file = std::fs::File::create(&contact_sheet_path).expect("create contact sheet file");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), CELL * 6, CELL);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("write contact sheet header");
+    writer
+        .write_image_data(&canvas)
+        .expect("write contact sheet pixels");
+    println!("contact sheet: {}", contact_sheet_path.display());
+
+    let vrf_path = PathBuf::from(
+        r"D:\porject\modulator-work\scratch\f3_lighting\skytex\materials\skybox\sky_de_mirage_exr_71e5f2a1.exr",
+    );
+    if !vrf_path.is_file() {
+        println!("no VRF reference export at {vrf_path:?}; skipping the reference stats check");
+        return;
+    }
+    let (_, _, reference) = load_exr_rgba(&vrf_path);
+    let mut ref_max_luma = 0f32;
+    let mut ref_luma_sum = 0f64;
+    for px in reference.as_chunks::<4>().0 {
+        let luma = px[0] * 0.299 + px[1] * 0.587 + px[2] * 0.114;
+        ref_max_luma = ref_max_luma.max(luma);
+        ref_luma_sum += f64::from(luma);
+    }
+    let ref_mean_luma = ref_luma_sum / (reference.len() / 4) as f64;
+    println!("reference (latlong): max_luma={ref_max_luma} mean_luma={ref_mean_luma}");
+
+    // A bilinear latlong resample redistributes energy across faces but
+    // shouldn't change the overall exposure by more than a small factor;
+    // 3x is a loose, structural bound (documented above), not a precision
+    // claim.
+    assert!(
+        our_max_luma > ref_max_luma / 3.0 && our_max_luma < ref_max_luma * 3.0,
+        "max luma {our_max_luma} vs reference {ref_max_luma} differ by more than 3x"
+    );
+    assert!(
+        our_mean_luma > ref_mean_luma / 3.0 && our_mean_luma < ref_mean_luma * 3.0,
+        "mean luma {our_mean_luma} vs reference {ref_mean_luma} differ by more than 3x"
+    );
 }

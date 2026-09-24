@@ -73,6 +73,13 @@ export async function fetchRenderJson(map) {
   return getJson(`/data/maps/${encodeURIComponent(map)}/render.json`);
 }
 
+// Any other whitelisted `render*` file (`render_lm_*.bin`, `render_sky_cube.bin`, `render_lut.bin`,
+// the fallback PNGs, ...) - same route as `renderGlbUrl`, just a different file name
+// (`s6f3b2_lighting_shader.md` §3/§4: lightmaps, sky cube, LUT).
+export function renderAssetUrl(map, file) {
+  return `/data/maps/${encodeURIComponent(map)}/${file}`;
+}
+
 export function meshUrl(map) {
   return `/api/mesh?map=${encodeURIComponent(map)}`;
 }

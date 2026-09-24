@@ -14,6 +14,7 @@ export const state = {
 };
 
 const THEME_KEY = "cs2-modulation-theme";
+const LIGHTING_MODE_KEY = "cs2-modulation-lighting-mode";
 
 // localStorage throws in some private-browsing modes; every touch of it is wrapped so a blocked
 // store never crashes the page (`s6f1_viewer_shell.md`).
@@ -44,4 +45,23 @@ export function resolveInitialTheme() {
 export function applyTheme(theme) {
   state.theme = theme;
   document.documentElement.dataset.theme = theme;
+}
+
+// The "game"/"simple" lighting toggle (`s6f3b2_lighting_shader.md` §7) - same wrapped-localStorage
+// pattern as the theme above, kept independent of it since a slow GPU may want simple lighting in
+// either theme.
+export function loadStoredLightingMode() {
+  try {
+    return localStorage.getItem(LIGHTING_MODE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function storeLightingMode(mode) {
+  try {
+    localStorage.setItem(LIGHTING_MODE_KEY, mode);
+  } catch {
+    // Ignored - the toggle still works for the rest of this session.
+  }
 }

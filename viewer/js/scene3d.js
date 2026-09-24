@@ -8,10 +8,13 @@
 import * as THREE from "three";
 import { GLTFLoader } from "../lib/three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "../lib/three/examples/jsm/controls/OrbitControls.js";
+import { MeshoptDecoder } from "../lib/three/examples/jsm/libs/meshopt_decoder.module.js";
 import { parseSm3d, flattenGroups } from "./mesh3d.js?v=1";
 import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RADIUS } from "./camera.js?v=1";
 import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke } from "./api.js?v=1";
 import { strings } from "./strings.js?v=1";
+import { createLightingPipeline, hasGameLightingData } from "./lighting.js?v=1";
+import { loadStoredLightingMode, storeLightingMode } from "./state.js?v=1";
 
 const FLY_SPEED_DEFAULT = 400; // inches/second - about walking-to-running pace.
 const FLY_SPEED_MIN = 32;
@@ -43,9 +46,38 @@ function disposeMaterial(material) {
   material.dispose();
 }
 
+// The F3b-2 uber-shader material's textures live in `.uniforms`, not the named `.map`/`.normalMap`
+// fields `disposeMaterial` knows about (`s6f3b2_lighting_shader.md` §2 - a `ShaderMaterial`, not a
+// `MeshStandardMaterial`) - and a mesh with game lighting keeps BOTH its "simple" and "game"
+// materials alive at once (`lighting.js`: instant toggle), while `.material` only ever points at
+// whichever is currently active, so disposal must reach both explicitly, not just `obj.material`.
+const GAME_MATERIAL_TEXTURE_UNIFORMS = [
+  "uAlbedoMap",
+  "uNormalMap",
+  "uAoMap",
+  "uRoughnessMap",
+  "uMetalnessMap",
+  "uTintMaskMap",
+  "uLayer2Map",
+  "uBlendModMap",
+];
+
+function disposeGameMaterial(material) {
+  for (const key of GAME_MATERIAL_TEXTURE_UNIFORMS) {
+    material.uniforms[key]?.value?.dispose?.();
+  }
+  material.dispose();
+}
+
 function disposeObject3D(root) {
   root.traverse((obj) => {
     obj.geometry?.dispose?.();
+    const { simpleMaterial, gameMaterial } = obj.userData ?? {};
+    if (simpleMaterial || gameMaterial) {
+      if (simpleMaterial) disposeMaterial(simpleMaterial);
+      if (gameMaterial) disposeGameMaterial(gameMaterial);
+      return;
+    }
     const mat = obj.material;
     if (Array.isArray(mat)) {
       mat.forEach(disposeMaterial);
@@ -270,17 +302,48 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   let collision = null; // { geometry, overlay, pickProxy }
   let mapCenter = new THREE.Vector3(0, 0, 0);
 
+  // ---- F3b-2 game lighting (`s6f3b2_lighting_shader.md` §7) - "game"/"simple" toggle, remembered
+  // via localStorage; `lightingSupported` is only known once render.json arrives, so until then
+  // `effectiveLightingMode()` stays "simple" regardless of the stored preference.
+  let lightingMode = loadStoredLightingMode() === "simple" ? "simple" : "game";
+  let lightingSupported = false;
+  let lightingPipeline = null;
+  function effectiveLightingMode() {
+    return lightingSupported ? lightingMode : "simple";
+  }
+  function applyLightingMode() {
+    if (!renderGltf) {
+      return;
+    }
+    const useGame = lightingPipeline && effectiveLightingMode() === "game";
+    renderGltf.scene.traverse((o) => {
+      if (!o.isMesh || !o.userData.gameMaterial) {
+        return;
+      }
+      o.material = useGame ? o.userData.gameMaterial : o.userData.simpleMaterial;
+    });
+  }
+
   // ---- resize -----------------------------------------------------------------------------------
   // `updateStyle: true` - the canvas's CSS box always gets an explicit size that matches its
   // drawing buffer, rather than relying on its `width`/`height` content attributes (which is all
   // an `updateStyle: false` call sets) to also happen to equal its CSS layout size.
+  let lastWidth = 1;
+  let lastHeight = 1;
   function resize() {
     const rect = container.getBoundingClientRect();
     const w = Math.max(1, rect.width);
     const h = Math.max(1, rect.height);
+    lastWidth = w;
+    lastHeight = h;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setSize(w, h, true);
+    // The canvas's drawing buffer is CSS size x pixel ratio (what `setSize(..., true)` just set) -
+    // sizing the HDR target in CSS pixels alone rendered game lighting at half resolution whenever
+    // `devicePixelRatio` was 2.
+    const pr = renderer.getPixelRatio();
+    lightingPipeline?.resize(w * pr, h * pr);
   }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
@@ -472,7 +535,11 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     if (mode === "orbit") {
       orbit.update();
     }
-    renderer.render(scene, camera);
+    if (lightingPipeline && effectiveLightingMode() === "game") {
+      lightingPipeline.renderFrame(scene, camera);
+    } else {
+      renderer.render(scene, camera);
+    }
   }
   animHandle = requestAnimationFrame(animate);
 
@@ -518,6 +585,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   let loadProgressHandler = null;
   let loadDoneHandler = null;
   let loadErrorHandler = null;
+  let lightingReadyHandler = null;
 
   // `s6f3b_viewer3d.md` F3b-1a "кэш браузера по ETag": `render.glb` is too large for Chrome's own
   // HTTP cache entry cap, so the revalidation is done by hand against Cache Storage instead of
@@ -586,6 +654,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   }
 
   const gltfLoader = new GLTFLoader();
+  // Harmless today (`render.glb` doesn't use EXT_meshopt_compression/KHR_meshopt_compression yet)
+  // but `GLTFLoader` throws on a meshopt-compressed file with no decoder registered, and
+  // crates/s2render is gaining that geometry compression concurrently with this file.
+  gltfLoader.setMeshoptDecoder(MeshoptDecoder);
   const glbReady = (async () => {
     let buffer;
     try {
@@ -638,6 +710,45 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     sun.position.set(mapCenter.x - d[0] * dist, mapCenter.y - d[1] * dist, mapCenter.z - d[2] * dist);
     sun.target.position.copy(mapCenter);
     sun.target.updateMatrixWorld();
+  });
+
+  // ---- F3b-2 game lighting: build once render.json + render.glb are both in, in parallel with
+  // everything else - `lightingSupported` (and therefore the "game"/"simple" toggle) only becomes
+  // true if this map's render.json actually carries F3a-4's lighting/sky/post-processing data.
+  const lightingReady = renderJsonReady.then(async ({ data }) => {
+    if (destroyed || !hasGameLightingData(data)) {
+      lightingReadyHandler?.(false);
+      return null;
+    }
+    lightingSupported = true;
+    lightingReadyHandler?.(true);
+    let pipeline;
+    try {
+      pipeline = await createLightingPipeline(renderer, map, data);
+    } catch (e) {
+      console.error("lighting pipeline load failed", e);
+      lightingSupported = false;
+      lightingReadyHandler?.(false);
+      return null;
+    }
+    if (destroyed) {
+      pipeline.dispose();
+      return null;
+    }
+    pipeline.resize(lastWidth * renderer.getPixelRatio(), lastHeight * renderer.getPixelRatio());
+    const gltf = await glbReady;
+    if (!gltf || destroyed) {
+      pipeline.dispose();
+      return null;
+    }
+    await pipeline.applyToGltf(gltf);
+    if (destroyed) {
+      pipeline.dispose();
+      return null;
+    }
+    lightingPipeline = pipeline;
+    applyLightingMode();
+    return pipeline;
   });
 
   // ---- target / lineup visuals -------------------------------------------------------------------
@@ -851,6 +962,20 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
         collision.overlay.visible = show;
       }
     },
+    setLightingMode(next) {
+      if (next !== "game" && next !== "simple") {
+        return;
+      }
+      lightingMode = next;
+      storeLightingMode(next);
+      applyLightingMode();
+    },
+    getLightingMode() {
+      return effectiveLightingMode();
+    },
+    isLightingSupported() {
+      return lightingSupported;
+    },
     onLoadProgress(cb) {
       loadProgressHandler = cb;
     },
@@ -859,6 +984,9 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     },
     onLoadError(cb) {
       loadErrorHandler = cb;
+    },
+    onLightingReady(cb) {
+      lightingReadyHandler = cb;
     },
     isCollisionReady() {
       return collision !== null;
@@ -901,6 +1029,9 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
           disposeObject3D(gltf.scene);
         }
       });
+      lightingReady.then((pipeline) => {
+        pipeline?.dispose();
+      });
       domListeners.abort();
       if (collision) {
         disposeObject3D(collision.overlay);
@@ -908,9 +1039,13 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       if (renderGltf) {
         disposeObject3D(renderGltf.scene);
       }
+      if (lightingPipeline) {
+        lightingPipeline.dispose();
+      }
       scene.clear();
       renderGltf = null;
       collision = null;
+      lightingPipeline = null;
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();

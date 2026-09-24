@@ -771,11 +771,14 @@ async function showMapScreen(map, opts = {}) {
   const toggle3dBtn = el("button", { type: "button", textContent: strings.view3d.toggle3d });
   const collisionsBtn = el("button", { type: "button", textContent: strings.view3d.collisionsOn, hidden: true });
   const cameraModeBtn = el("button", { type: "button", textContent: strings.view3d.modeOrbit, hidden: true });
+  // F3b-2: "game"/"simple" lighting toggle (`s6f3b2_lighting_shader.md` §7) - hidden until a 3D view
+  // exists and says this map actually has the data for it (`sceneView.isLightingSupported()`).
+  const lightingBtn = el("button", { type: "button", textContent: strings.view3d.lightingSimple, hidden: true });
   const view3dStatus = el("span", { className: "hint" });
   const viewToolbar = el(
     "div",
     { className: "view-toolbar" },
-    el("div", { className: "field-row", role: "group", "aria-label": "2D/3D" }, toggle2dBtn, toggle3dBtn, collisionsBtn, cameraModeBtn),
+    el("div", { className: "field-row", role: "group", "aria-label": "2D/3D" }, toggle2dBtn, toggle3dBtn, collisionsBtn, cameraModeBtn, lightingBtn),
     view3dStatus,
   );
 
@@ -1311,6 +1314,12 @@ async function showMapScreen(map, opts = {}) {
       view3dStatus.className = "hint status-error";
       view3dStatus.textContent = `${strings.view3d.loadError} ${msg ?? ""}`.trim();
     });
+    sceneView.onLightingReady((supported) => {
+      lightingBtn.hidden = !supported;
+      if (supported) {
+        lightingBtn.textContent = sceneView.getLightingMode() === "game" ? strings.view3d.lightingGame : strings.view3d.lightingSimple;
+      }
+    });
     // Catch up on state this view missed by not existing yet.
     if (solveState.target) {
       sceneView.setTarget(solveState.target);
@@ -1348,6 +1357,7 @@ async function showMapScreen(map, opts = {}) {
       toggle2dBtn.className = "";
       collisionsBtn.hidden = false;
       cameraModeBtn.hidden = false;
+      lightingBtn.hidden = !view.isLightingSupported();
       view3dStatus.className = "hint";
       view3dStatus.textContent = strings.view3d.flyHint;
     } else {
@@ -1358,12 +1368,22 @@ async function showMapScreen(map, opts = {}) {
       toggle3dBtn.className = "";
       collisionsBtn.hidden = true;
       cameraModeBtn.hidden = true;
+      lightingBtn.hidden = true;
       view3dStatus.className = "hint";
       view3dStatus.textContent = "";
     }
   }
   toggle2dBtn.addEventListener("click", () => switchViewMode("2d"));
   toggle3dBtn.addEventListener("click", () => switchViewMode("3d"));
+
+  lightingBtn.addEventListener("click", () => {
+    if (!sceneView) {
+      return;
+    }
+    const next = sceneView.getLightingMode() === "game" ? "simple" : "game";
+    sceneView.setLightingMode(next);
+    lightingBtn.textContent = next === "game" ? strings.view3d.lightingGame : strings.view3d.lightingSimple;
+  });
 
   let collisionsOn = false;
   collisionsBtn.addEventListener("click", () => {

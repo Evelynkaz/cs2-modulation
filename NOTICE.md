@@ -101,7 +101,10 @@ SOFTWARE.
 - Copyright (C) 2016-2025 Arseny Kapoulkine
 - Лицензия: MIT. Компилируется в наш бинарник через крейт `meshopt` (crates.io, MIT/Apache-2.0),
   который вендорит его C++-исходники; используется в `crates/s2render` для распаковки буферов
-  вершин/индексов VBIB/MVTX/MIDX.
+  вершин/индексов VBIB/MVTX/MIDX. Тот же декодер, собранный в WASM и распространяемый как часть
+  npm-пакета `three` (`examples/jsm/libs/meshopt_decoder.module.js`), вендорен в
+  `viewer/lib/three/` для `EXT_meshopt_compression`/`KHR_meshopt_compression` в render.glb - см.
+  раздел `three.js` ниже.
 
 ```
 Copyright (c) 2016-2025 Arseny Kapoulkine
@@ -522,13 +525,17 @@ DEALINGS IN THE SOFTWARE.
   version of the package; no minified `three.module.min.js` is published
   for it, so the unminified build is used), `examples/jsm/loaders/
   GLTFLoader.js`, its two dependencies
-  `examples/jsm/utils/{BufferGeometryUtils,SkeletonUtils}.js`, and
+  `examples/jsm/utils/{BufferGeometryUtils,SkeletonUtils}.js`,
   `examples/jsm/controls/OrbitControls.js` (the orbit-around-a-point mode;
   free flight and the first-person view use this project's own pointer-lock
   and yaw/pitch code instead, since the package's `PointerLockControls.js`
-  assumes a Y-up scene and ours is Z-up). Used by `viewer/js/scene3d.js` to
-  load `render.glb` and fly a free camera around it (`s6f3b_viewer3d.md`
-  F3b-1b).
+  assumes a Y-up scene and ours is Z-up), and
+  `examples/jsm/libs/meshopt_decoder.module.js` (copyright Arseny
+  Kapoulkine, MIT - see the `meshoptimizer` section above; registered with
+  `GLTFLoader.setMeshoptDecoder()` for a `render.glb` compressed with
+  `EXT_meshopt_compression`/`KHR_meshopt_compression`). Used by
+  `viewer/js/scene3d.js` to load `render.glb` and fly a free camera around
+  it (`s6f3b_viewer3d.md` F3b-1b).
 
 ```
 The MIT License

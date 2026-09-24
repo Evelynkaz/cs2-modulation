@@ -26,6 +26,11 @@ Files copied unmodified from the tarball's `package/`:
   yaw/pitch code in `scene3d.js` instead of the package's `PointerLockControls.js`: that helper
   rotates the camera around world +Y and only fits a Y-up scene, and this viewer's scene is Z-up
   (`s6f3a3_map.md` §6) - so it is not vendored here.
+- `examples/jsm/libs/meshopt_decoder.module.js` - registered with `GLTFLoader.setMeshoptDecoder()`
+  in `scene3d.js`. `render.glb` doesn't use `EXT_meshopt_compression`/`KHR_meshopt_compression`
+  today, so this is a no-op until `crates/s2render` starts writing compressed geometry, but
+  `GLTFLoader` throws on a meshopt-compressed file with no decoder registered - vendoring it now
+  means a future `render.glb` doesn't need a matching viewer change.
 
 Every one of these files imports the bare specifier `"three"`, resolved by `viewer/index.html`'s
 import map to `./lib/three/build/three.module.js` - nothing here was edited to add relative

@@ -160,6 +160,9 @@ export const strings = {
     collisionsOn: "Показать коллизии",
     collisionsOff: "Скрыть коллизии",
     flyHint: "WASD - движение, ПКМ - смотреть, Shift - быстрее, Space/Ctrl - вверх/вниз, колесо - скорость.",
+    lightingGame: "Освещение: игровое",
+    lightingSimple: "Освещение: простое",
+    lightingUnavailable: "Игровое освещение недоступно для этой карты (нет данных F3a-4).",
   },
 
   fpv: {

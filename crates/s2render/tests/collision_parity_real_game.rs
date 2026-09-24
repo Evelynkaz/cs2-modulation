@@ -10,8 +10,10 @@
 //! outlier with its coordinates).
 //!
 //! Parses the exported `.glb` itself (not a general glTF reader -- only the shapes this crate's
-//! own `gltf.rs` writes: `POSITION`/indices accessors as tightly-packed bufferViews into the
-//! single BIN chunk, node `matrix` as a flat column-major 16-float array).
+//! own `gltf.rs` writes: `POSITION`/indices accessors as meshopt-compressed (`KHR_meshopt_
+//! compression`) bufferViews into the single BIN chunk, node `matrix` as a flat column-major
+//! 16-float array already composed with each mesh's own KHR_mesh_quantization dequantization
+//! scale/offset).
 //!
 //! `cargo test -p s2render --release --test collision_parity_real_game -- --ignored --nocapture`
 
@@ -71,54 +73,62 @@ fn parse_glb(bytes: &[u8]) -> GlbDoc {
     GlbDoc { json, bin }
 }
 
-fn buffer_view_offset(doc: &GlbDoc, view_index: usize) -> usize {
-    doc.json["bufferViews"][view_index]["byteOffset"]
-        .as_u64()
-        .unwrap_or(0) as usize
-}
-
-/// `POSITION` (or any tightly-packed `VEC3` `FLOAT` accessor this crate's own writer produces).
+/// `POSITION`: KHR_mesh_quantization `SHORT` VEC3 (`s6f3a5_size.md` change item 1), meshopt-
+/// compressed (`KHR_meshopt_compression`, mode `ATTRIBUTES`). The raw (unnormalized) integer
+/// value *is* the mesh-local coordinate the caller's own node `matrix` (already composed with the
+/// mesh's own dequantization scale+offset, `gltf.rs::add_positions`'s own doc comment) maps to
+/// world space -- so this only needs to decompress and widen to `f32`, not dequantize by hand. A
+/// mesh whose coordinates overflowed the SHORT grid instead has a plain FLOAT VEC3 POSITION
+/// (`gltf.rs::add_positions`'s own fallback), whose values are already the real mesh-local
+/// coordinate -- the node `matrix` is an identity quantization placement composed with the
+/// instance transform in that case, so no special-casing is needed downstream.
 fn accessor_positions(doc: &GlbDoc, accessor_index: usize) -> Vec<[f32; 3]> {
     let acc = &doc.json["accessors"][accessor_index];
-    let view = acc["bufferView"].as_u64().unwrap() as usize;
-    let count = acc["count"].as_u64().unwrap() as usize;
-    assert_eq!(
-        acc["componentType"].as_u64().unwrap(),
-        5126,
-        "expected FLOAT"
-    );
-    let offset = buffer_view_offset(doc, view);
-    (0..count)
-        .map(|i| {
-            let s = offset + i * 12;
-            [
-                f32::from_le_bytes(doc.bin[s..s + 4].try_into().unwrap()),
-                f32::from_le_bytes(doc.bin[s + 4..s + 8].try_into().unwrap()),
-                f32::from_le_bytes(doc.bin[s + 8..s + 12].try_into().unwrap()),
-            ]
-        })
-        .collect()
-}
-
-fn accessor_indices(doc: &GlbDoc, accessor_index: usize) -> Vec<u32> {
-    let acc = &doc.json["accessors"][accessor_index];
-    let view = acc["bufferView"].as_u64().unwrap() as usize;
+    let view_index = acc["bufferView"].as_u64().unwrap() as usize;
     let count = acc["count"].as_u64().unwrap() as usize;
     let component_type = acc["componentType"].as_u64().unwrap();
-    let offset = buffer_view_offset(doc, view);
+    let view = &doc.json["bufferViews"][view_index];
+    let ext = &view["extensions"]["KHR_meshopt_compression"];
+    let byte_offset = ext["byteOffset"].as_u64().unwrap() as usize;
+    let byte_length = ext["byteLength"].as_u64().unwrap() as usize;
+    let ext_count = ext["count"].as_u64().unwrap() as usize;
+    assert_eq!(ext_count, count);
+    let compressed = &doc.bin[byte_offset..byte_offset + byte_length];
     match component_type {
-        5123 => (0..count)
-            .map(|i| {
-                let s = offset + i * 2;
-                u32::from(u16::from_le_bytes(doc.bin[s..s + 2].try_into().unwrap()))
-            })
+        5122 => {
+            let decoded: Vec<[i16; 4]> = meshopt::decode_vertex_buffer(compressed, count)
+                .expect("meshopt-decode a POSITION bufferView this crate's own writer produced");
+            decoded
+                .iter()
+                .map(|v| [f32::from(v[0]), f32::from(v[1]), f32::from(v[2])])
+                .collect()
+        }
+        5126 => meshopt::decode_vertex_buffer(compressed, count)
+            .expect("meshopt-decode a POSITION bufferView this crate's own writer produced"),
+        other => panic!("unexpected POSITION componentType {other} (expected SHORT or FLOAT)"),
+    }
+}
+
+/// Indices, meshopt-compressed as a triangle-list stream (`KHR_meshopt_compression`, mode
+/// `TRIANGLES`, `gltf.rs::add_indices`).
+fn accessor_indices(doc: &GlbDoc, accessor_index: usize) -> Vec<u32> {
+    let acc = &doc.json["accessors"][accessor_index];
+    let view_index = acc["bufferView"].as_u64().unwrap() as usize;
+    let count = acc["count"].as_u64().unwrap() as usize;
+    let component_type = acc["componentType"].as_u64().unwrap();
+    let view = &doc.json["bufferViews"][view_index];
+    let ext = &view["extensions"]["KHR_meshopt_compression"];
+    let byte_offset = ext["byteOffset"].as_u64().unwrap() as usize;
+    let byte_length = ext["byteLength"].as_u64().unwrap() as usize;
+    let compressed = &doc.bin[byte_offset..byte_offset + byte_length];
+    match component_type {
+        5123 => meshopt::decode_index_buffer::<u16>(compressed, count)
+            .expect("meshopt-decode an indices bufferView this crate's own writer produced")
+            .into_iter()
+            .map(u32::from)
             .collect(),
-        5125 => (0..count)
-            .map(|i| {
-                let s = offset + i * 4;
-                u32::from_le_bytes(doc.bin[s..s + 4].try_into().unwrap())
-            })
-            .collect(),
+        5125 => meshopt::decode_index_buffer::<u32>(compressed, count)
+            .expect("meshopt-decode an indices bufferView this crate's own writer produced"),
         other => panic!("unexpected index componentType {other}"),
     }
 }

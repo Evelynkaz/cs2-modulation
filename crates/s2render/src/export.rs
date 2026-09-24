@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use s2fmt::entities::{self, Entity, EntityLump, entity_transform};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::buffer::Buffer;
 use crate::entity as ent;
@@ -68,6 +69,41 @@ pub struct ExportResult {
     pub extra_files: Vec<(String, Vec<u8>)>,
 }
 
+/// Per-role texture budget (§2 of `s6f3a5_size.md`: "бюджет по ТИПУ, а не один на всё"). `Color`
+/// (base color, a layer's own color) stays at the export's full `--max-texture` budget -- already
+/// measured, in `texture.rs`'s own doc comment, at the 1024 default -- since surface albedo is
+/// what a player's eye resolves most readily at typical viewing distance. `Normal` (the normal
+/// map's own RGB) and `Mask` (AO, metalness, blend modulation, the tint mask, and -- handled
+/// specially, see `Ctx::get_normal_and_roughness` -- the roughness channel split out of a normal
+/// map's alpha) both get the smaller secondary budget: measuring the actual per-role byte split
+/// on real maps (receipt) showed color alone did not fit the goal's per-map ceiling even after
+/// dedup and the mask-only cut, and the spec's own suggested table explicitly allows normals
+/// "512–1024" (not just 1024) -- `SECONDARY_MAX_SIDE` picks the more conservative half of that
+/// same "512 или 256" range; halving linear resolution already cuts a role's bytes roughly 4x, and
+/// 256 is left as a follow-up if a map still needs to shed more weight after this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TextureRole {
+    Color,
+    Normal,
+    Mask,
+}
+
+/// The `Normal`/`Mask` roles' own cap before clamping to `--max-texture` (`s6f3a5_size.md`'s
+/// constraint that the flag "remains the upper bound" for every type, not just color).
+const SECONDARY_MAX_SIDE: u32 = 512;
+
+impl TextureRole {
+    fn budget(self, base: TextureBudget) -> TextureBudget {
+        match self {
+            TextureRole::Color => base,
+            TextureRole::Normal | TextureRole::Mask => TextureBudget {
+                max_side: base.max_side.min(SECONDARY_MAX_SIDE),
+                jpeg_quality: base.jpeg_quality,
+            },
+        }
+    }
+}
+
 /// Every dropped tools-material draw call, bucketed by `vmat` path (§6).
 #[derive(Default)]
 struct ToolsDrop {
@@ -117,7 +153,17 @@ struct Report {
     /// `env_combined_light_probe_volume` entities that looked like a probe volume but were
     /// missing a required field.
     probe_volumes_skipped: u32,
+    /// Times an already-embedded texture's encoded bytes were reused for a different path/role
+    /// instead of being embedded again (§3 of `s6f3a5_size.md`).
+    texture_dedup_hits: u32,
+    texture_dedup_bytes_saved: u64,
+    /// Embedded (post-dedup) bytes per [`TextureRole`], for `render.json`'s per-type table (§2).
+    texture_bytes_by_role: HashMap<TextureRole, u64>,
 }
+
+/// `(mesh_key, flat draw-call index, overlay, material index)` -- `get_or_build_mesh`'s glTF-mesh
+/// dedup cache key.
+type MeshKey = (String, usize, bool, u32);
 
 /// Cached-decode state shared across the whole export: models, materials, textures and the
 /// glTF-mesh dedup cache keyed by (geometry source, draw call, overlay, material).
@@ -129,11 +175,14 @@ struct Ctx<'a> {
     raw_materials: HashMap<String, Option<Arc<RawMaterial>>>,
     resolved_materials: HashMap<String, Arc<ResolvedMaterial>>,
     gltf_materials: HashMap<(String, [u8; 4]), u32>,
-    textures: HashMap<(String, bool), Option<u32>>,
+    textures: HashMap<(String, TextureRole), Option<u32>>,
     /// `g_tNormal`-path -> `(normalTexture index, roughnessTexture index)`, both derived from one
     /// decode (§7; `texture::load_and_encode_normal_pair`).
     normal_pairs: HashMap<String, Option<(u32, u32)>>,
-    meshes: HashMap<(String, usize, bool, u32), u32>,
+    /// Encoded-image-bytes hash -> already-embedded `textures[]` index (§3 of `s6f3a5_size.md`'s
+    /// content-hash dedup, `Ctx::add_texture_deduped`).
+    image_hashes: HashMap<[u8; 32], u32>,
+    meshes: HashMap<MeshKey, (u32, [[f32; 4]; 3])>,
     /// Shared geometry for probe-lit draw calls, keyed without the material/tint (§2: geometry is
     /// instance-independent, only `_LPV` isn't).
     probe_geometries: HashMap<(String, usize, bool), Arc<ProbeGeometry>>,
@@ -213,18 +262,40 @@ impl<'a> Ctx<'a> {
         Some(resolved)
     }
 
-    fn get_texture(&mut self, path: &str, is_normal: bool) -> Option<u32> {
-        let key = (path.to_string(), is_normal);
+    /// Embeds `bytes` (already-encoded JPEG/PNG) as an image + texture, or reuses an earlier
+    /// texture whose encoded bytes hash the same (§3 of `s6f3a5_size.md`: "проверить, нет ли
+    /// повторно закодированных одинаковых изображений... дедуплицировать по хешу содержимого") --
+    /// catches both "one vtex under different paths" and "one texture in different roles", neither
+    /// of which the per-path caches above see (they key on the *path*/role that was requested, not
+    /// on what came out the other end).
+    fn add_texture_deduped(
+        &mut self,
+        bytes: &[u8],
+        mime_type: &'static str,
+        role: TextureRole,
+    ) -> u32 {
+        let hash: [u8; 32] = Sha256::digest(bytes).into();
+        if let Some(&idx) = self.image_hashes.get(&hash) {
+            self.report.texture_dedup_hits += 1;
+            self.report.texture_dedup_bytes_saved += bytes.len() as u64;
+            return idx;
+        }
+        *self.report.texture_bytes_by_role.entry(role).or_insert(0) += bytes.len() as u64;
+        let image = self.builder.add_image(bytes, mime_type);
+        let idx = self.builder.add_texture(image);
+        self.image_hashes.insert(hash, idx);
+        idx
+    }
+
+    fn get_texture(&mut self, path: &str, role: TextureRole) -> Option<u32> {
+        let key = (path.to_string(), role);
         if let Some(cached) = self.textures.get(&key) {
             return *cached;
         }
         let compiled = compiled_path(path);
-        let result = match texture::load_and_encode(self.sources, &compiled, self.budget, is_normal)
-        {
-            Ok(t) => {
-                let image = self.builder.add_image(&t.bytes, t.mime_type);
-                Some(self.builder.add_texture(image))
-            }
+        let budget = role.budget(self.budget);
+        let result = match texture::load_and_encode(self.sources, &compiled, budget, false) {
+            Ok(t) => Some(self.add_texture_deduped(&t.bytes, t.mime_type, role)),
             Err(e) => {
                 self.report
                     .missing_resources
@@ -238,32 +309,46 @@ impl<'a> Ctx<'a> {
 
     /// `(normalTexture index, roughnessTexture index)` for a normal map path, decoded once and
     /// cached (§7): the roughness image is split out of the alpha channel `load_and_encode`
-    /// discards for the ordinary normal texture path.
+    /// discards for the ordinary normal texture path. Both the normal's own RGB and the roughness
+    /// channel use the secondary (smaller) budget (§2 of `s6f3a5_size.md`'s per-type texture
+    /// table allows normals "512–1024"; measuring the actual per-role byte split on real maps,
+    /// receipt, showed the full budget didn't fit the goal's per-map ceiling even after dedup and
+    /// shrinking AO/metalness/masks alone) -- roughness is additionally box-downsampled from that
+    /// same decode rather than decoded again, since it's already lower-frequency than the normal
+    /// direction itself.
     fn get_normal_and_roughness(&mut self, path: &str) -> Option<(u32, u32)> {
         if let Some(cached) = self.normal_pairs.get(path) {
             return *cached;
         }
         let compiled = compiled_path(path);
-        let result =
-            match texture::load_and_encode_normal_pair(self.sources, &compiled, self.budget) {
-                Ok(pair) => {
-                    let normal_image = self
-                        .builder
-                        .add_image(&pair.normal.bytes, pair.normal.mime_type);
-                    let normal_idx = self.builder.add_texture(normal_image);
-                    let roughness_image = self
-                        .builder
-                        .add_image(&pair.roughness.bytes, pair.roughness.mime_type);
-                    let roughness_idx = self.builder.add_texture(roughness_image);
-                    Some((normal_idx, roughness_idx))
-                }
-                Err(e) => {
-                    self.report
-                        .missing_resources
-                        .push(format!("{compiled}: failed to load normal texture: {e}"));
-                    None
-                }
-            };
+        let normal_budget = TextureRole::Normal.budget(self.budget);
+        let roughness_max_side = TextureRole::Mask.budget(self.budget).max_side;
+        let result = match texture::load_and_encode_normal_pair(
+            self.sources,
+            &compiled,
+            normal_budget,
+            roughness_max_side,
+        ) {
+            Ok(pair) => {
+                let normal_idx = self.add_texture_deduped(
+                    &pair.normal.bytes,
+                    pair.normal.mime_type,
+                    TextureRole::Normal,
+                );
+                let roughness_idx = self.add_texture_deduped(
+                    &pair.roughness.bytes,
+                    pair.roughness.mime_type,
+                    TextureRole::Mask,
+                );
+                Some((normal_idx, roughness_idx))
+            }
+            Err(e) => {
+                self.report
+                    .missing_resources
+                    .push(format!("{compiled}: failed to load normal texture: {e}"));
+                None
+            }
+        };
         self.normal_pairs.insert(path.to_string(), result);
         result
     }
@@ -293,7 +378,7 @@ impl<'a> Ctx<'a> {
                 json!([0.0, 0.0, 0.0, base_color_factor[3]]),
             );
         } else if let Some(tex_path) = &resolved.base_color_texture
-            && let Some(tex_index) = self.get_texture(tex_path, false)
+            && let Some(tex_index) = self.get_texture(tex_path, TextureRole::Color)
         {
             pbr.insert("baseColorTexture".into(), json!({ "index": tex_index }));
         }
@@ -333,7 +418,7 @@ impl<'a> Ctx<'a> {
         if let Some(tint) = extras_tint {
             extras.insert("tint".into(), json!(tint));
             if let Some(mask_path) = &resolved.tint_mask_texture
-                && let Some(idx) = self.get_texture(mask_path, false)
+                && let Some(idx) = self.get_texture(mask_path, TextureRole::Mask)
             {
                 extras.insert("tintMask".into(), json!(idx));
             }
@@ -341,7 +426,7 @@ impl<'a> Ctx<'a> {
         if let Some(layers) = &resolved.layers {
             let mut layer_json = serde_json::Map::new();
             if let Some(p) = &layers.layer2_color
-                && let Some(idx) = self.get_texture(p, false)
+                && let Some(idx) = self.get_texture(p, TextureRole::Color)
             {
                 layer_json.insert("layer2ColorTexture".into(), json!(idx));
             }
@@ -355,7 +440,7 @@ impl<'a> Ctx<'a> {
                 layer_json.insert("layer2NormalTexture".into(), json!(normal_idx));
             }
             if let Some(p) = &layers.blend_modulation
-                && let Some(idx) = self.get_texture(p, false)
+                && let Some(idx) = self.get_texture(p, TextureRole::Mask)
             {
                 layer_json.insert("blendModulationTexture".into(), json!(idx));
             }
@@ -367,14 +452,14 @@ impl<'a> Ctx<'a> {
         // need resampling AO/roughness/metalness to one shared resolution first); each stays its
         // own texture index instead, same as `extras.layers` above.
         if let Some(ao_path) = &resolved.ao_texture
-            && let Some(idx) = self.get_texture(ao_path, false)
+            && let Some(idx) = self.get_texture(ao_path, TextureRole::Mask)
         {
             extras.insert("aoTexture".into(), json!(idx));
             extras.insert("aoChannel".into(), json!("r"));
         }
         match &resolved.metalness {
             MetalnessSource::Texture(p) => {
-                if let Some(idx) = self.get_texture(p, false) {
+                if let Some(idx) = self.get_texture(p, TextureRole::Mask) {
                     extras.insert("metalnessTexture".into(), json!(idx));
                     // complex.frag.slang:604: `mat.Metalness = metalnessTexture.g` -- channel G,
                     // not R (unlike `g_tAmbientOcclusion`).
@@ -436,15 +521,21 @@ fn find_field<'b>(
 
 struct BuiltGeometry {
     position: u32,
+    /// The per-mesh KHR_mesh_quantization dequantization placement `add_positions` returned
+    /// alongside `position` (`s6f3a5_size.md` change item 1) -- every node that instances this
+    /// geometry must compose its own placement transform with this one (`gltf::compose`) so the
+    /// quantized POSITION accessor decodes back to world space correctly.
+    quantize: [[f32; 4]; 3],
     normal: u32,
     uv0: Option<u32>,
     uv1: Option<u32>,
     blend: Option<u32>,
     indices: u32,
     triangles: u64,
-    /// The same positions/normals `add_positions`/`add_vec3` were fed, kept only when `keep_raw`
-    /// is set -- probe-lit primitives need the model-space vertices back to re-transform per
-    /// instance and bake `_LPV` (§2); lightmap/unlit primitives never ask for this.
+    /// The same positions/normals `add_positions`/`add_normals_quantized` were fed, kept only when
+    /// `keep_raw` is set -- probe-lit primitives need the model-space vertices back to
+    /// re-transform per instance and bake `_LPV` (§2); lightmap/unlit primitives never ask for
+    /// this.
     raw_positions: Option<Vec<[f32; 3]>>,
     raw_normals: Option<Vec<[f32; 3]>>,
 }
@@ -547,9 +638,9 @@ fn build_geometry(
     }
 
     let triangles = (local_indices.len() / 3) as u64;
-    let position = builder.add_positions(&positions);
-    let normal = builder.add_vec3(&normals);
-    let uv0_idx = Some(builder.add_vec2(&uv0));
+    let (position, quantize) = builder.add_positions(&positions);
+    let normal = builder.add_normals_quantized(&normals);
+    let uv0_idx = Some(builder.add_uv0(&uv0));
     let uv1_idx = if needs_uv1 {
         Some(builder.add_uv1_u16(&uv1))
     } else {
@@ -564,6 +655,7 @@ fn build_geometry(
 
     Ok(BuiltGeometry {
         position,
+        quantize,
         normal,
         uv0: uv0_idx,
         uv1: uv1_idx,
@@ -613,6 +705,9 @@ fn classify_lighting(mesh: &Mesh, dc: &DrawCall, material_unlit: bool) -> Lighti
 /// its own `_LPV` accessor (see `bake_and_place_probe_instance`).
 struct ProbeGeometry {
     position: u32,
+    /// See `BuiltGeometry::quantize` -- every instance of this geometry composes its own placement
+    /// transform with this one before instancing the shared POSITION accessor.
+    quantize: [[f32; 4]; 3],
     normal: u32,
     uv0: Option<u32>,
     blend: Option<u32>,
@@ -627,6 +722,8 @@ struct ProbeGeometry {
 enum MeshBuild {
     Shared {
         mesh_idx: u32,
+        /// See `BuiltGeometry::quantize`.
+        quantize: [[f32; 4]; 3],
     },
     Probe {
         geometry: Arc<ProbeGeometry>,
@@ -733,6 +830,7 @@ fn get_or_build_mesh(
         };
         let geom = Arc::new(ProbeGeometry {
             position: built.position,
+            quantize: built.quantize,
             normal: built.normal,
             uv0: built.uv0,
             blend: built.blend,
@@ -752,8 +850,8 @@ fn get_or_build_mesh(
     }
 
     let key = (mesh_key.to_string(), flat_index, overlay, material_index);
-    if let Some(&mesh_idx) = ctx.meshes.get(&key) {
-        return Some((MeshBuild::Shared { mesh_idx }, tris));
+    if let Some(&(mesh_idx, quantize)) = ctx.meshes.get(&key) {
+        return Some((MeshBuild::Shared { mesh_idx, quantize }, tris));
     }
 
     let needs_uv1 = lighting == LightingClass::Lightmap;
@@ -796,13 +894,14 @@ fn get_or_build_mesh(
     });
     let mesh_json = json!({ "primitives": [primitive] });
     let mesh_idx = ctx.builder.add_mesh(mesh_json);
-    ctx.meshes.insert(key, mesh_idx);
+    let quantize = geometry.quantize;
+    ctx.meshes.insert(key, (mesh_idx, quantize));
     debug_assert_eq!(
         geometry.triangles, tris,
         "resolved index count must match the draw call's own"
     );
 
-    Some((MeshBuild::Shared { mesh_idx }, tris))
+    Some((MeshBuild::Shared { mesh_idx, quantize }, tris))
 }
 
 /// Bakes `_LPV` for one probe-lit instance (§2) and places it: transforms `geometry`'s
@@ -903,7 +1002,7 @@ fn bake_and_place_probe_instance(
         children,
         name,
         mesh_idx,
-        transform,
+        &gltf::compose(transform, &geometry.quantize),
         overlay_order,
         light_probe_handshake,
     );
@@ -1152,12 +1251,12 @@ fn place_mesh_draw_calls(
         // `F_OVERLAY`, which still gets the vertex offset above but has no such order of its own).
         let final_overlay_order = if object_overlay { overlay_order } else { None };
         match build {
-            MeshBuild::Shared { mesh_idx } => add_instance(
+            MeshBuild::Shared { mesh_idx, quantize } => add_instance(
                 ctx,
                 children,
                 name,
                 mesh_idx,
-                transform,
+                &gltf::compose(transform, &quantize),
                 final_overlay_order,
                 light_probe_handshake,
             ),
@@ -1408,12 +1507,12 @@ fn place_aggregate(
         };
         ctx.report.fragments_placed += 1;
         match build {
-            MeshBuild::Shared { mesh_idx } => add_instance(
+            MeshBuild::Shared { mesh_idx, quantize } => add_instance(
                 ctx,
                 children,
                 None,
                 mesh_idx,
-                &placement.transform,
+                &gltf::compose(&placement.transform, &quantize),
                 None,
                 placement.light_probe_volume_handshake,
             ),
@@ -1740,6 +1839,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         gltf_materials: HashMap::new(),
         textures: HashMap::new(),
         normal_pairs: HashMap::new(),
+        image_hashes: HashMap::new(),
         meshes: HashMap::new(),
         probe_geometries: HashMap::new(),
         probe_volumes,
@@ -1831,6 +1931,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
     let texture_count = ctx.builder.texture_count();
     let geometry_bytes = ctx.builder.geometry_bytes();
     let texture_bytes = ctx.builder.texture_bytes();
+    let position_float_fallback_meshes = ctx.builder.position_float_fallback_meshes();
 
     let sun_json = sun.as_ref().map(|s| {
         let to_sun = [-s.direction[0], -s.direction[1], -s.direction[2]];
@@ -1957,9 +2058,41 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         .collect();
     entity_table.sort_by(|a, b| a["classname"].as_str().cmp(&b["classname"].as_str()));
 
+    let normal_budget = TextureRole::Normal.budget(ctx.budget);
+    let mask_max_side = TextureRole::Mask.budget(ctx.budget).max_side;
+    let bytes_by_role = |role: TextureRole| {
+        ctx.report
+            .texture_bytes_by_role
+            .get(&role)
+            .copied()
+            .unwrap_or(0)
+    };
     let report = json!({
         "formatVersion": 2,
-        "textureBudget": { "maxSide": options.max_texture, "jpegQuality": options.jpeg_quality },
+        "textureBudget": {
+            "maxSide": options.max_texture,
+            "jpegQuality": options.jpeg_quality,
+            "byType": {
+                "color": { "maxSide": options.max_texture, "jpegQuality": options.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Color), "note": "base color, layer-2 color" },
+                "normal": { "maxSide": normal_budget.max_side, "jpegQuality": normal_budget.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Normal), "note": "normal map RGB (HemiOct decoded to XYZ); measured error at the full 1024 budget is in texture.rs's own doc comment -- this map used the smaller secondary budget instead (s6f3a5_size.md's per-type table allows normals 512-1024)" },
+                "mask": { "maxSide": mask_max_side, "jpegQuality": options.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Mask), "note": "AO, metalness, blend modulation, tint mask, and the roughness channel split from a normal map's alpha (downsampled from the normal's own decode, not decoded separately) -- s6f3a5_size.md change item 2" },
+            },
+            "dedup": {
+                "meaning": "textures whose encoded bytes hash the same as an earlier one (different vtex path, or the same texture reused in a different role) are embedded once and reused (s6f3a5_size.md change item 3)",
+                "hits": ctx.report.texture_dedup_hits,
+                "bytesSaved": ctx.report.texture_dedup_bytes_saved,
+            },
+        },
+        "geometryCompression": {
+            "extensionsRequired": ["KHR_mesh_quantization", "KHR_meshopt_compression"],
+            "position": "SHORT (unnormalized) VEC3 -- a single power-of-two step (1/16 unit) shared by every mesh, with each mesh's own offset snapped to a multiple of that step and baked into its instance node's own matrix (composed with its placement transform); a vertex shared by two meshes therefore decodes to the same world position from both. Not normalized: KHR_mesh_quantization's own implementation note prefers unnormalized SHORT for POSITION. A mesh whose coordinates would overflow the SHORT range falls back to plain FLOAT VEC3 (positionFloatFallbackMeshes below counts these)",
+            "positionFloatFallbackMeshes": position_float_fallback_meshes,
+            "normal": "BYTE normalized VEC3, plain per-component quantization (not octahedral)",
+            "texcoord0": "UNSIGNED_SHORT normalized VEC2 when every value is within [0,1], else FLOAT (tiled UVs routinely exceed that range)",
+            "meshoptVersion": 1,
+            "meshoptLevel": 3,
+            "note": "no uncompressed/unquantized fallback is ever written (this viewer is the only reader); it must call setMeshoptDecoder before parsing this file",
+        },
         "sun": sun_json,
         "counts": {
             "nodes": node_count,
@@ -2120,6 +2253,7 @@ mod tests {
             gltf_materials: HashMap::new(),
             textures: HashMap::new(),
             normal_pairs: HashMap::new(),
+            image_hashes: HashMap::new(),
             meshes: HashMap::new(),
             probe_geometries: HashMap::new(),
             probe_volumes: Vec::new(),
@@ -2557,10 +2691,14 @@ mod tests {
         let accessor = &doc["accessors"][uv1_idx as usize];
         let view_idx = accessor["bufferView"].as_u64().unwrap() as usize;
         let view = &doc["bufferViews"][view_idx];
-        let byte_offset = view["byteOffset"].as_u64().unwrap() as usize;
+        let ext = &view["extensions"]["KHR_meshopt_compression"];
+        let byte_offset = ext["byteOffset"].as_u64().unwrap() as usize;
+        let byte_length = ext["byteLength"].as_u64().unwrap() as usize;
+        let count = ext["count"].as_u64().unwrap() as usize;
         let bin = bin_chunk(&glb);
-        let got0 = u16::from_le_bytes(bin[byte_offset..byte_offset + 2].try_into().unwrap());
-        let got1 = u16::from_le_bytes(bin[byte_offset + 2..byte_offset + 4].try_into().unwrap());
+        let compressed = &bin[byte_offset..byte_offset + byte_length];
+        let decoded: Vec<[u16; 2]> = meshopt::decode_vertex_buffer(compressed, count).unwrap();
+        let (got0, got1) = (decoded[0][0], decoded[0][1]);
 
         let raw = [
             f32::from(raw_u16[0]) / 65535.0,

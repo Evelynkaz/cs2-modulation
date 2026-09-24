@@ -110,16 +110,57 @@ pub struct NormalAndRoughness {
     pub roughness: EncodedTexture,
 }
 
+/// Halves `gray` (row-major, one byte/pixel) by 2x2 box averaging, repeatedly, until both
+/// dimensions are `<= max_side` -- mirrors `s2tex::budget::pick_mip_for_budget`'s own "halve until
+/// it fits" loop, but over already-decoded pixels rather than a stored mip chain, since roughness
+/// (§2 of `s6f3a5_size.md`'s per-type texture table) is downsampled from the *same* decode the
+/// full-budget normal map already used rather than decoded again at a smaller mip. Odd trailing
+/// rows/columns repeat the last pixel instead of reading out of bounds.
+fn downsample_gray_to_budget(
+    gray: &[u8],
+    width: u32,
+    height: u32,
+    max_side: u32,
+) -> (Vec<u8>, u32, u32) {
+    let (mut w, mut h) = (width, height);
+    let mut buf = gray.to_vec();
+    while w > max_side || h > max_side {
+        let nw = (w / 2).max(1);
+        let nh = (h / 2).max(1);
+        let mut next = vec![0u8; (nw * nh) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                let x0 = (x * 2).min(w - 1);
+                let x1 = (x * 2 + 1).min(w - 1);
+                let y0 = (y * 2).min(h - 1);
+                let y1 = (y * 2 + 1).min(h - 1);
+                let sum = u32::from(buf[(y0 * w + x0) as usize])
+                    + u32::from(buf[(y0 * w + x1) as usize])
+                    + u32::from(buf[(y1 * w + x0) as usize])
+                    + u32::from(buf[(y1 * w + x1) as usize]);
+                next[(y * nw + x) as usize] = (sum / 4) as u8;
+            }
+        }
+        buf = next;
+        w = nw;
+        h = nh;
+    }
+    (buf, w, h)
+}
+
 /// Like [`load_and_encode`] with `is_normal = true`, but also returns the roughness image split
-/// out of the alpha channel before it's zeroed. Roughness is encoded as a single-channel JPEG at
-/// the budget's quality (`s6f3a4_lighting.md` change item 11: measured 4.19 MB for all 112 of
-/// Mirage's normal maps, vs 34.8 MB for a naive 4-channel PNG) -- `export.rs`'s caller shares this
-/// function's own cache for every path that needs a normal map's pixels, including a layer-2
-/// normal, so the same `vtex_c` is never decoded/embedded twice.
+/// out of the alpha channel before it's zeroed. Roughness is encoded as a single-channel JPEG
+/// (`s6f3a4_lighting.md` change item 11: measured 4.19 MB for all 112 of Mirage's normal maps at
+/// the normal's own resolution, vs 34.8 MB for a naive 4-channel PNG), downsampled to
+/// `roughness_max_side` first -- a slowly-varying, single-channel signal doesn't need the normal
+/// map's own full resolution (§2 of `s6f3a5_size.md`'s per-type texture table) -- `export.rs`'s
+/// caller shares this function's own cache for every path that needs a normal map's pixels,
+/// including a layer-2 normal, so the same `vtex_c` is never decoded/embedded twice.
 pub fn load_and_encode_normal_pair(
     sources: &Sources,
     path: &str,
     budget: TextureBudget,
+    roughness_max_side: u32,
 ) -> Result<NormalAndRoughness, TextureError> {
     let bytes = sources.read(path).ok_or_else(|| TextureError::Missing {
         path: path.to_string(),
@@ -138,6 +179,12 @@ pub fn load_and_encode_normal_pair(
     for px in normal_rgba.as_chunks_mut::<4>().0.iter_mut() {
         px[3] = 255;
     }
+    let (roughness_gray, roughness_width, roughness_height) = downsample_gray_to_budget(
+        &roughness_gray,
+        decoded.width,
+        decoded.height,
+        roughness_max_side,
+    );
 
     let normal_encoded = s2tex::encode_image(
         &normal_rgba,
@@ -152,8 +199,8 @@ pub fn load_and_encode_normal_pair(
     })?;
     let roughness_encoded = s2tex::encode_image_gray(
         &roughness_gray,
-        decoded.width,
-        decoded.height,
+        roughness_width,
+        roughness_height,
         budget.jpeg_quality,
         false,
     )
@@ -176,8 +223,8 @@ pub fn load_and_encode_normal_pair(
         roughness: EncodedTexture {
             bytes: roughness_encoded.bytes,
             mime_type: mime_of(roughness_encoded.format),
-            width: decoded.width,
-            height: decoded.height,
+            width: roughness_width,
+            height: roughness_height,
         },
     })
 }

@@ -12,7 +12,7 @@ use s2fmt::entities::{Entity, EntityValue};
 
 use crate::model::Model;
 
-fn entity_num(v: Option<&EntityValue>) -> Option<f64> {
+pub(crate) fn entity_num(v: Option<&EntityValue>) -> Option<f64> {
     match v? {
         EntityValue::Int(i) => Some(*i as f64),
         EntityValue::UInt(u) => Some(*u as f64),

@@ -10,7 +10,7 @@ use crate::header::Header;
 /// `s2fmt::compress`'s own `MAX_DECOMPRESSED_SIZE`: real mips are at most a
 /// few tens of MB, this just keeps a corrupt header from demanding a
 /// multi-gigabyte allocation.
-const MAX_BUFFER_SIZE: u64 = 1 << 30;
+pub(crate) const MAX_BUFFER_SIZE: u64 = 1 << 30;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MipSizes {

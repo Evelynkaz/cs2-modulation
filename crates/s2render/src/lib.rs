@@ -9,13 +9,16 @@
 pub mod attributes;
 pub mod buffer;
 pub mod entity;
+pub mod environment;
 pub mod error;
 pub mod export;
 pub mod format;
 pub mod gltf;
+pub mod lightmaps;
 pub mod material;
 pub mod mesh;
 pub mod model;
+pub mod probes;
 mod reader;
 pub mod source;
 pub mod texture;

@@ -36,6 +36,10 @@ pub struct DrawCall {
     pub tint_color: Option<[f32; 3]>,
     pub alpha: Option<f32>,
     pub flags: DrawCallFlags,
+    /// `m_bHasBakedLightingFromLightMap` (`Mesh.cs:202-204`): true when this draw call carries a
+    /// baked lightmap UV set (semantic `texcoord` index 3) and should sample `irradiance`/
+    /// `direct_light_shadows` instead of a probe volume (`s6f3a4_lighting.md` change item 0).
+    pub has_baked_lighting_from_lightmap: bool,
 }
 
 impl DrawCall {
@@ -237,6 +241,10 @@ fn parse_draw_call(v: &Value, path: &str) -> Result<DrawCall, MeshError> {
         tint_color: vec3(v, "m_vTintColor"),
         alpha: v.get("m_flAlpha").and_then(Value::as_f32),
         flags: draw_call_flags(v, "m_nFlags"),
+        has_baked_lighting_from_lightmap: v
+            .get("m_bHasBakedLightingFromLightMap")
+            .and_then(|b| b.as_bool().or_else(|| b.as_i64().map(|i| i != 0)))
+            .unwrap_or(false),
     })
 }
 

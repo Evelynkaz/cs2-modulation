@@ -46,6 +46,7 @@ fn draw_call(start_index: i64, index_count: i64, base_vertex: i64) -> DrawCall {
         tint_color: None,
         alpha: None,
         flags: DrawCallFlags::None,
+        has_baked_lighting_from_lightmap: false,
     }
 }
 

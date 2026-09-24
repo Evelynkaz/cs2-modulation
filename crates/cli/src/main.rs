@@ -304,6 +304,10 @@ enum Command {
         /// JPEG quality (1-100) for base color and normal textures.
         #[arg(long, default_value_t = 90)]
         jpeg_quality: u8,
+        /// `high` writes irradiance at full resolution (mip 0, 8192²) instead of the mip-1
+        /// (4096²) default.
+        #[arg(long, default_value = "default")]
+        lightmap_quality: String,
         /// Overwrite an existing `render.glb`/`render.json`.
         #[arg(long)]
         force: bool,
@@ -623,6 +627,7 @@ fn run() -> anyhow::Result<u8> {
             map,
             max_texture,
             jpeg_quality,
+            lightmap_quality,
             force,
             game,
             cache,
@@ -630,6 +635,7 @@ fn run() -> anyhow::Result<u8> {
             &map,
             max_texture,
             jpeg_quality,
+            lightmap_quality.eq_ignore_ascii_case("high"),
             force,
             game.as_deref(),
             cache.as_deref(),

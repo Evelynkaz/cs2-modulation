@@ -31,7 +31,10 @@ pub mod rgbe;
 pub mod tonemap;
 mod transform;
 
-pub use encode::{Encoded, EncodedFormat, alpha_is_significant, encode as encode_image};
+pub use encode::{
+    Encoded, EncodedFormat, alpha_is_significant, encode as encode_image,
+    encode_gray as encode_image_gray,
+};
 pub use error::TexError;
 pub use format::VTexFormat;
 pub use header::Header;
@@ -411,6 +414,64 @@ pub fn decode_hdr_slice(raw: &RawMip, z: u32) -> Result<HdrImage, TexError> {
     })
 }
 
+/// [`decode_hdr_slice`]'s counterpart for a format [`crate::format::VTexFormat::
+/// is_high_dynamic_range`] doesn't cover -- e.g. a probe volume's BC7 `..._dlshd` atlas, which is
+/// block-compressed but carries an ordinary LDR `[0,1]` value (sun visibility), not float HDR
+/// data. Decodes `raw`'s `z`-th face/slice through the same per-format block decoders [`decode`]
+/// uses (`decode::decode_mip`), one slice at a time like [`decode_hdr_slice`] (large volumes are
+/// read slice by slice, never whole).
+pub fn decode_raw_mip_slice_ldr(raw: &RawMip, z: u32) -> Result<DecodedImage, TexError> {
+    if z >= raw.depth {
+        return Err(TexError::InvalidHdrLayer {
+            layer: z,
+            layers: raw.depth,
+        });
+    }
+
+    // Same crafted-header cap as `decode_hdr_slice`, checked before `decode_mip` allocates its
+    // output: a block-compressed format's decoded RGBA8 bytes can be far larger than its raw
+    // bytes (e.g. BC1's 0.5 bytes/pixel compressed vs 4 bytes/pixel decoded, an 8x expansion), so
+    // `buffer_size_for`'s 1 GiB cap on the *compressed* slice doesn't bound the decoded size.
+    let decoded_bytes = u64::from(raw.width)
+        .checked_mul(u64::from(raw.height))
+        .and_then(|v| v.checked_mul(4))
+        .ok_or(TexError::SizeOverflow)?;
+    if decoded_bytes > mip::MAX_BUFFER_SIZE {
+        return Err(TexError::SizeTooLarge {
+            requested: decoded_bytes,
+            limit: mip::MAX_BUFFER_SIZE,
+        });
+    }
+
+    let sizes = mip::MipSizes {
+        width: raw.width,
+        height: raw.height,
+        depth: 1,
+    };
+    let layer_len = mip::buffer_size_for(raw.format, sizes)?;
+    let start = layer_len
+        .checked_mul(z as usize)
+        .ok_or(TexError::SizeOverflow)?;
+    let end = start.checked_add(layer_len).ok_or(TexError::SizeOverflow)?;
+    let layer_bytes = raw
+        .bytes
+        .get(start..end)
+        .ok_or_else(|| TexError::Truncated {
+            detail: format!("mip data shorter than slice {z} of {}", raw.depth),
+        })?;
+
+    let rgba = decode::decode_mip(raw.format, raw.width, raw.height, layer_bytes)?;
+
+    Ok(DecodedImage {
+        width: raw.width,
+        height: raw.height,
+        rgba,
+        format: raw.format,
+        mip_level: raw.mip_level,
+        truncated_to_first_layer: raw.depth > 1,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +535,27 @@ mod tests {
     fn decode_hdr_bytes_rejects_a_crafted_oversized_volume_before_allocating() {
         let bytes = resource_bytes(&crafted_oversized_hdr_header());
         let err = decode_hdr_bytes(&bytes, header::MAX_SIDE).unwrap_err();
+        assert!(
+            matches!(err, TexError::SizeTooLarge { .. }),
+            "expected SizeTooLarge, got {err:?}"
+        );
+    }
+
+    /// A crafted `RawMip` (change item 14, `s6f3a4_lighting.md`): its decoded RGBA8 output would
+    /// be ~1.6 GiB even though the block-compressed input is tiny -- must be rejected before
+    /// `decode_mip` allocates, not just left to `buffer_size_for`'s cap on the *compressed* bytes.
+    #[test]
+    fn decode_raw_mip_slice_ldr_rejects_an_oversized_decode_before_allocating() {
+        let raw = RawMip {
+            width: 20000,
+            height: 20000,
+            depth: 1,
+            format: VTexFormat::Dxt1,
+            mip_level: 0,
+            is_cube: false,
+            bytes: Vec::new(),
+        };
+        let err = decode_raw_mip_slice_ldr(&raw, 0).unwrap_err();
         assert!(
             matches!(err, TexError::SizeTooLarge { .. }),
             "expected SizeTooLarge, got {err:?}"

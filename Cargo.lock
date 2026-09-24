@@ -1073,6 +1073,7 @@ dependencies = [
  "s2fmt",
  "s2tex",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

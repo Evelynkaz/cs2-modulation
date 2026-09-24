@@ -237,6 +237,26 @@ pub struct ResolvedMaterial {
     pub tint_mask: bool,
     pub tint_mask_texture: Option<String>,
     pub layers: Option<LayerBlend>,
+    /// `g_tAmbientOcclusion` (`g_tLayer1AmbientOcclusion` on `csgo_lightmappedgeneric`, an alias
+    /// for the same slot -- `MaterialLoader.cs:57`), channel R (`s6f3a4_lighting.md` change 7).
+    pub ao_texture: Option<String>,
+    /// `g_tMetalness` (channel G -- `complex.frag.slang:604`) if present, else the scalar
+    /// `g_flMetalness` (default `0.0`, `complex.frag.slang:239`).
+    pub metalness: MetalnessSource,
+    /// `F_NO_SPECULAR_AT_FULL_ROUGHNESS` (`complex.frag.slang:85,751-754`): sun specular is
+    /// skipped entirely when roughness is 1.
+    pub no_specular_at_full_roughness: bool,
+    /// `g_bFogEnabled` (`common/fog.slang:12,95`), default true.
+    pub fog_enabled: bool,
+}
+
+/// Where a material's metalness value comes from (§7: "g_tMetalness или скаляр").
+#[derive(Debug, Clone, PartialEq)]
+pub enum MetalnessSource {
+    /// `g_tMetalness`, channel G.
+    Texture(String),
+    /// `g_flMetalness`, already resolved (absent -> `0.0`).
+    Scalar(f32),
 }
 
 fn pick_base_color_texture(mat: &RawMaterial) -> (Option<String>, bool) {
@@ -357,6 +377,24 @@ fn layers(mat: &RawMaterial) -> Option<LayerBlend> {
     })
 }
 
+/// `g_tAmbientOcclusion`, except `csgo_lightmappedgeneric` which names the same slot
+/// `g_tLayer1AmbientOcclusion` (§7; `MaterialLoader.cs:57`'s alias table).
+fn ao_texture(mat: &RawMaterial) -> Option<String> {
+    let key = if mat.shader == "csgo_lightmappedgeneric" {
+        "g_tLayer1AmbientOcclusion"
+    } else {
+        "g_tAmbientOcclusion"
+    };
+    mat.texture(key).map(str::to_string)
+}
+
+fn metalness(mat: &RawMaterial) -> MetalnessSource {
+    match mat.texture("g_tMetalness") {
+        Some(t) => MetalnessSource::Texture(t.to_string()),
+        None => MetalnessSource::Scalar(mat.float("g_flMetalness").unwrap_or(0.0)),
+    }
+}
+
 /// Resolves a decoded material's fixed (tint-independent) rendering rules.
 pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
     let (base_color_texture, constant_black) = pick_base_color_texture(mat);
@@ -388,6 +426,10 @@ pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
         tint_mask: mat.int("F_TINT_MASK") == 1,
         tint_mask_texture: mat.texture("g_tTintMask").map(str::to_string),
         layers: layers(mat),
+        ao_texture: ao_texture(mat),
+        metalness: metalness(mat),
+        no_specular_at_full_roughness: mat.int("F_NO_SPECULAR_AT_FULL_ROUGHNESS") == 1,
+        fog_enabled: mat.int_params.get("g_bFogEnabled").copied().unwrap_or(1) != 0,
     }
 }
 

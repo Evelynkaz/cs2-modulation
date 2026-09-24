@@ -14,12 +14,14 @@ use s2render::source::Sources;
 
 use crate::cmd_extract::{install_for, resolve_cache_root};
 
-/// `cs2mod export-glb <MAP> [--max-texture 1024] [--force] [--game] [--cache]`.
+/// `cs2mod export-glb <MAP> [--max-texture 1024] [--force] [--lightmap-quality high] [--game]
+/// [--cache]`.
 #[allow(clippy::too_many_arguments)]
 pub fn export_glb(
     map: &str,
     max_texture: u32,
     jpeg_quality: u8,
+    lightmap_quality_high: bool,
     force: bool,
     game: Option<&Path>,
     cache: Option<&Path>,
@@ -56,6 +58,7 @@ pub fn export_glb(
     let options = ExportOptions {
         max_texture,
         jpeg_quality,
+        lightmap_quality_high,
     };
     let result =
         export_map(&sources, &options).with_context(|| format!("failed to export {map}"))?;
@@ -65,19 +68,37 @@ pub fn export_glb(
     let json_text =
         serde_json::to_string_pretty(&result.report).context("failed to serialize render.json")?;
     write_atomic(&json_path, json_text.as_bytes())?;
+    let mut extra_bytes = 0usize;
+    for (name, bytes) in &result.extra_files {
+        extra_bytes += bytes.len();
+        write_atomic(&dir.join(name), bytes)?;
+    }
 
     let counts = &result.report["counts"];
     println!("wrote {} ({} bytes)", glb_path.display(), result.glb.len());
     println!("wrote {} ({} bytes)", json_path.display(), json_text.len());
+    for (name, bytes) in &result.extra_files {
+        println!("wrote {} ({} bytes)", dir.join(name).display(), bytes.len());
+    }
     println!(
-        "nodes={} meshes={} materials={} textures={} triangles={} geometryBytes={} textureBytes={}",
+        "nodes={} meshes={} materials={} textures={} triangles={} geometryBytes={} textureBytes={} extraFileBytes={}",
         counts["nodes"],
         counts["meshes"],
         counts["materials"],
         counts["textures"],
         counts["triangles"],
         counts["geometryBytes"],
-        counts["textureBytes"]
+        counts["textureBytes"],
+        extra_bytes
+    );
+    println!(
+        "lightmapDrawCalls={} lightmapTriangles={} probeDrawCalls={} probeTriangles={} unlitDrawCalls={} unlitTriangles={}",
+        counts["lightmapDrawCalls"],
+        counts["lightmapTriangles"],
+        counts["probeDrawCalls"],
+        counts["probeTriangles"],
+        counts["unlitDrawCalls"],
+        counts["unlitTriangles"],
     );
     println!("time: {elapsed_ms} ms");
     Ok(())

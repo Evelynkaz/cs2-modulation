@@ -12,13 +12,22 @@ use serde_json::{Value, json};
 
 use crate::buffer::Buffer;
 use crate::entity as ent;
+use crate::environment;
 use crate::gltf::{self, GltfBuilder};
-use crate::material::{self, AlphaMode, RawMaterial, ResolvedMaterial};
+use crate::lightmaps;
+use crate::material::{self, AlphaMode, MetalnessSource, RawMaterial, ResolvedMaterial};
 use crate::mesh::{DrawCall, Mesh};
 use crate::model::{self, Model};
+use crate::probes::{self, ProbeAtlasTextures, ProbeVolume};
 use crate::source::{Sources, compiled_path};
 use crate::texture::{self, TextureBudget};
 use crate::world::{self, AggregateRaw, SceneObjectRaw, WorldNodeRaw};
+
+/// Fixed encode scale for `_LPV`'s `UNSIGNED_SHORT` normalized channels (`gltf::add_lpv_u16`):
+/// not computed per export (that would need a second pass over every baked vertex to find the
+/// true max) -- `32` is a constant chosen because the probe irradiance maximum across every one
+/// of the 23 installed maps checked is 23.56, on de_train, so it never clips.
+const LPV_SCALE: f32 = 32.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
@@ -36,6 +45,9 @@ pub enum ExportError {
 pub struct ExportOptions {
     pub max_texture: u32,
     pub jpeg_quality: u8,
+    /// `--lightmap-quality high` (§1): irradiance at mip 0 (8192², the full-resolution file) in
+    /// place of the mip-1 (4096²) default.
+    pub lightmap_quality_high: bool,
 }
 
 impl Default for ExportOptions {
@@ -43,6 +55,7 @@ impl Default for ExportOptions {
         ExportOptions {
             max_texture: 1024,
             jpeg_quality: 90,
+            lightmap_quality_high: false,
         }
     }
 }
@@ -50,6 +63,9 @@ impl Default for ExportOptions {
 pub struct ExportResult {
     pub glb: Vec<u8>,
     pub report: serde_json::Value,
+    /// Files this export writes alongside `render.glb`/`render.json` (§1/§4/§6): raw lightmap/sky
+    /// cube blocks, fallback PNGs, `render_lut.bin`. `(file name, bytes)`.
+    pub extra_files: Vec<(String, Vec<u8>)>,
 }
 
 /// Every dropped tools-material draw call, bucketed by `vmat` path (§6).
@@ -87,6 +103,20 @@ struct Report {
     aggregates_fallback: u32,
     fragments_total: u32,
     fragments_placed: u32,
+    /// Draw call / triangle split by §0's lighting classification (the checklist's "лайтмапленые/
+    /// пробные draw call'ы и треугольники").
+    lightmap_draw_calls: u32,
+    lightmap_triangles: u64,
+    unlit_draw_calls: u32,
+    unlit_triangles: u64,
+    probe_draw_calls: u32,
+    probe_triangles: u64,
+    /// Vertices whose `_LPV` bake fell back to zero because the atlas decode failed for that
+    /// texel (not fatal -- §2).
+    probe_sample_failures: u32,
+    /// `env_combined_light_probe_volume` entities that looked like a probe volume but were
+    /// missing a required field.
+    probe_volumes_skipped: u32,
 }
 
 /// Cached-decode state shared across the whole export: models, materials, textures and the
@@ -100,7 +130,19 @@ struct Ctx<'a> {
     resolved_materials: HashMap<String, Arc<ResolvedMaterial>>,
     gltf_materials: HashMap<(String, [u8; 4]), u32>,
     textures: HashMap<(String, bool), Option<u32>>,
+    /// `g_tNormal`-path -> `(normalTexture index, roughnessTexture index)`, both derived from one
+    /// decode (§7; `texture::load_and_encode_normal_pair`).
+    normal_pairs: HashMap<String, Option<(u32, u32)>>,
     meshes: HashMap<(String, usize, bool, u32), u32>,
+    /// Shared geometry for probe-lit draw calls, keyed without the material/tint (§2: geometry is
+    /// instance-independent, only `_LPV` isn't).
+    probe_geometries: HashMap<(String, usize, bool), Arc<ProbeGeometry>>,
+    probe_volumes: Vec<ProbeVolume>,
+    probe_atlas: Option<ProbeAtlasTextures>,
+    /// The sun's baked shadow channel (§1's fix: the first `light_environment`'s
+    /// `bakedshadowindex`, fallback `bakelightindex`, `0..=3`), used by every probe sample --
+    /// `None` means no baked sun shadow exists, so probe visibility is always `1.0`.
+    baked_shadow_channel: Option<usize>,
     report: Report,
 }
 
@@ -194,6 +236,38 @@ impl<'a> Ctx<'a> {
         result
     }
 
+    /// `(normalTexture index, roughnessTexture index)` for a normal map path, decoded once and
+    /// cached (§7): the roughness image is split out of the alpha channel `load_and_encode`
+    /// discards for the ordinary normal texture path.
+    fn get_normal_and_roughness(&mut self, path: &str) -> Option<(u32, u32)> {
+        if let Some(cached) = self.normal_pairs.get(path) {
+            return *cached;
+        }
+        let compiled = compiled_path(path);
+        let result =
+            match texture::load_and_encode_normal_pair(self.sources, &compiled, self.budget) {
+                Ok(pair) => {
+                    let normal_image = self
+                        .builder
+                        .add_image(&pair.normal.bytes, pair.normal.mime_type);
+                    let normal_idx = self.builder.add_texture(normal_image);
+                    let roughness_image = self
+                        .builder
+                        .add_image(&pair.roughness.bytes, pair.roughness.mime_type);
+                    let roughness_idx = self.builder.add_texture(roughness_image);
+                    Some((normal_idx, roughness_idx))
+                }
+                Err(e) => {
+                    self.report
+                        .missing_resources
+                        .push(format!("{compiled}: failed to load normal texture: {e}"));
+                    None
+                }
+            };
+        self.normal_pairs.insert(path.to_string(), result);
+        result
+    }
+
     /// Builds (or reuses) the glTF material for `vmat_path` tinted by `tint_rgba`; `None` if the
     /// material failed to load or is a tools material (caller checks the latter separately so it
     /// can also skip the draw call and bucket it in the report).
@@ -225,10 +299,12 @@ impl<'a> Ctx<'a> {
         }
         mat.insert("pbrMetallicRoughness".into(), Value::Object(pbr));
 
+        let mut roughness_texture_index = None;
         if let Some(normal_path) = &resolved.normal_texture
-            && let Some(tex_index) = self.get_texture(normal_path, true)
+            && let Some((normal_idx, roughness_idx)) = self.get_normal_and_roughness(normal_path)
         {
-            mat.insert("normalTexture".into(), json!({ "index": tex_index }));
+            mat.insert("normalTexture".into(), json!({ "index": normal_idx }));
+            roughness_texture_index = Some(roughness_idx);
         }
 
         mat.insert(
@@ -270,9 +346,13 @@ impl<'a> Ctx<'a> {
                 layer_json.insert("layer2ColorTexture".into(), json!(idx));
             }
             if let Some(p) = &layers.layer2_normal
-                && let Some(idx) = self.get_texture(p, true)
+                && let Some((normal_idx, _)) = self.get_normal_and_roughness(p)
             {
-                layer_json.insert("layer2NormalTexture".into(), json!(idx));
+                // Shares `normal_pairs` (not the plain `textures` cache) so a layer-2 normal map
+                // that's also used as *some* material's primary normal map is decoded/embedded
+                // only once (§7/§11: "fix the double-embedding of the 3 normal maps used as
+                // layer-2 normals").
+                layer_json.insert("layer2NormalTexture".into(), json!(normal_idx));
             }
             if let Some(p) = &layers.blend_modulation
                 && let Some(idx) = self.get_texture(p, false)
@@ -282,6 +362,43 @@ impl<'a> Ctx<'a> {
             layer_json.insert("formula".into(), json!(material::LAYER_BLEND_FORMULA));
             extras.insert("layers".into(), Value::Object(layer_json));
         }
+
+        // §7: AO/metalness/roughness aren't part of glTF's metallic-roughness texture (that would
+        // need resampling AO/roughness/metalness to one shared resolution first); each stays its
+        // own texture index instead, same as `extras.layers` above.
+        if let Some(ao_path) = &resolved.ao_texture
+            && let Some(idx) = self.get_texture(ao_path, false)
+        {
+            extras.insert("aoTexture".into(), json!(idx));
+            extras.insert("aoChannel".into(), json!("r"));
+        }
+        match &resolved.metalness {
+            MetalnessSource::Texture(p) => {
+                if let Some(idx) = self.get_texture(p, false) {
+                    extras.insert("metalnessTexture".into(), json!(idx));
+                    // complex.frag.slang:604: `mat.Metalness = metalnessTexture.g` -- channel G,
+                    // not R (unlike `g_tAmbientOcclusion`).
+                    extras.insert("metalnessChannel".into(), json!("g"));
+                }
+            }
+            MetalnessSource::Scalar(v) => {
+                extras.insert("metalnessValue".into(), json!(v));
+            }
+        }
+        if let Some(idx) = roughness_texture_index {
+            extras.insert("roughnessTexture".into(), json!(idx));
+            extras.insert("roughnessChannel".into(), json!("r"));
+            extras.insert(
+                "roughnessSource".into(),
+                json!("normal map alpha after HemiOct decode (transform.rs:decode_hemi_oct; \"packed roughness\" moves b->a)"),
+            );
+        }
+        extras.insert(
+            "noSpecularAtFullRoughness".into(),
+            json!(resolved.no_specular_at_full_roughness),
+        );
+        extras.insert("fogEnabled".into(), json!(resolved.fog_enabled));
+
         if !extras.is_empty() {
             mat.insert("extras".into(), Value::Object(extras.clone()));
         }
@@ -325,6 +442,11 @@ struct BuiltGeometry {
     blend: Option<u32>,
     indices: u32,
     triangles: u64,
+    /// The same positions/normals `add_positions`/`add_vec3` were fed, kept only when `keep_raw`
+    /// is set -- probe-lit primitives need the model-space vertices back to re-transform per
+    /// instance and bake `_LPV` (§2); lightmap/unlit primitives never ask for this.
+    raw_positions: Option<Vec<[f32; 3]>>,
+    raw_normals: Option<Vec<[f32; 3]>>,
 }
 
 /// Decodes one draw call's geometry into fresh glTF accessors (positions/normals/UV/`_BLEND`
@@ -338,6 +460,7 @@ fn build_geometry(
     needs_uv1: bool,
     lightmap_uv_scale: [f32; 2],
     needs_blend: bool,
+    keep_raw: bool,
 ) -> Result<BuiltGeometry, crate::error::MeshError> {
     let abs_indices = dc.resolve_indices(mesh)?;
 
@@ -364,8 +487,10 @@ fn build_geometry(
     let uv0_full = find_field(mesh, dc, "TEXCOORD", 0)
         .map(|(b, f)| crate::attributes::decode_texcoord(b, f))
         .transpose()?;
+    // Lightmap UV = vertex field semantic `texcoord` (lowercase), index 3 ("vLightmapUV",
+    // `VertexAttributeLocations.cs:89-90`) -- not index 1.
     let uv1_full = if needs_uv1 {
-        find_field(mesh, dc, "TEXCOORD", 1)
+        find_field(mesh, dc, "TEXCOORD", 3)
             .map(|(b, f)| crate::attributes::decode_texcoord(b, f))
             .transpose()?
     } else {
@@ -426,7 +551,7 @@ fn build_geometry(
     let normal = builder.add_vec3(&normals);
     let uv0_idx = Some(builder.add_vec2(&uv0));
     let uv1_idx = if needs_uv1 {
-        Some(builder.add_vec2(&uv1))
+        Some(builder.add_uv1_u16(&uv1))
     } else {
         None
     };
@@ -445,15 +570,78 @@ fn build_geometry(
         blend: blend_idx,
         indices,
         triangles,
+        raw_positions: keep_raw.then(|| positions.clone()),
+        raw_normals: keep_raw.then(|| normals.clone()),
     })
 }
 
-/// Gets or builds the one-primitive glTF mesh for `(mesh_key, draw call index into `mesh`'s own
-/// flattened `m_sceneObjects[].m_drawCalls[]` list, overlay, material)`. Multiple placements
-/// sharing this key become separate nodes instancing the same glTF mesh (§6's "instances are
-/// nodes with matrices") -- a deliberate simplification vs. the reference's "one glTF mesh per
-/// source vmesh, N primitives" grouping: geometrically and in triangle count these are identical,
-/// only the JSON grouping granularity differs.
+/// Which of §0's three light sources a primitive gets (`Mesh.cs:202-204`, `RenderableMesh.cs:
+/// 314-325`): a draw call with baked lightmap data *and* an actual TEXCOORD index-3 stream draws
+/// from the lightmap; otherwise an unlit material has no indirect term at all; otherwise it falls
+/// back to probe volumes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LightingClass {
+    Lightmap,
+    Unlit,
+    Probe,
+}
+
+impl LightingClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            LightingClass::Lightmap => "lightmap",
+            LightingClass::Unlit => "unlit",
+            LightingClass::Probe => "probe",
+        }
+    }
+}
+
+fn classify_lighting(mesh: &Mesh, dc: &DrawCall, material_unlit: bool) -> LightingClass {
+    let has_lightmap_uv = find_field(mesh, dc, "TEXCOORD", 3).is_some();
+    if dc.has_baked_lighting_from_lightmap && has_lightmap_uv {
+        LightingClass::Lightmap
+    } else if material_unlit {
+        LightingClass::Unlit
+    } else {
+        LightingClass::Probe
+    }
+}
+
+/// Geometry shared across every instance of a probe-lit draw call: POSITION/NORMAL/TEXCOORD_0/
+/// `_BLEND`/indices are identical regardless of placement, only `_LPV` differs per instance
+/// (§2) -- so instances share these accessors, each building its own fresh primitive/mesh with
+/// its own `_LPV` accessor (see `bake_and_place_probe_instance`).
+struct ProbeGeometry {
+    position: u32,
+    normal: u32,
+    uv0: Option<u32>,
+    blend: Option<u32>,
+    indices: u32,
+    local_positions: Vec<[f32; 3]>,
+    local_normals: Vec<[f32; 3]>,
+}
+
+/// What [`get_or_build_mesh`] produced: a shared mesh a caller can instance directly via
+/// [`add_instance`], or probe geometry a caller must still bake `_LPV` for and place itself (via
+/// `bake_and_place_probe_instance`) since baking needs the instance's own world transform.
+enum MeshBuild {
+    Shared {
+        mesh_idx: u32,
+    },
+    Probe {
+        geometry: Arc<ProbeGeometry>,
+        material_index: u32,
+    },
+}
+
+/// Gets or builds the geometry for `(mesh_key, draw call index into `mesh`'s own flattened
+/// `m_sceneObjects[].m_drawCalls[]` list, overlay, material)`. Multiple placements sharing this
+/// key instance the same glTF mesh (§6's "instances are nodes with matrices") -- a deliberate
+/// simplification vs. the reference's "one glTF mesh per source vmesh, N primitives" grouping:
+/// geometrically and in triangle count these are identical, only the JSON grouping granularity
+/// differs. Probe-lit draw calls (`LightingClass::Probe`) are the one exception: their geometry
+/// (not material) is still shared and cached, but each instance gets its own primitive/mesh so it
+/// can carry its own `_LPV` (§2).
 #[allow(clippy::too_many_arguments)]
 fn get_or_build_mesh(
     ctx: &mut Ctx,
@@ -464,7 +652,7 @@ fn get_or_build_mesh(
     overlay: bool,
     lightmap_uv_scale: [f32; 2],
     tint_rgba: [f32; 4],
-) -> Option<(u32, u64)> {
+) -> Option<(MeshBuild, u64)> {
     let Some(material_path) = &dc.material_path else {
         ctx.report.missing_resources.push(format!(
             "{mesh_key}#{flat_index}: draw call has no material path"
@@ -484,6 +672,9 @@ fn get_or_build_mesh(
         return None;
     }
 
+    let resolved = ctx.get_resolved_material(material_path)?;
+    let lighting = classify_lighting(mesh, dc, resolved.unlit);
+
     let material_index = ctx.get_gltf_material(material_path, tint_rgba)?;
     // Every instance (cache hit or not) contributes `tris` to the report's "instanced" total,
     // matching VRF's own `triangles_instanced` -- an instance sharing a cached mesh still draws
@@ -493,15 +684,79 @@ fn get_or_build_mesh(
         .per_material_triangles
         .entry(material_path.clone())
         .or_insert(0) += tris;
+    match lighting {
+        LightingClass::Lightmap => {
+            ctx.report.lightmap_draw_calls += 1;
+            ctx.report.lightmap_triangles += tris;
+        }
+        LightingClass::Unlit => {
+            ctx.report.unlit_draw_calls += 1;
+            ctx.report.unlit_triangles += tris;
+        }
+        LightingClass::Probe => {
+            ctx.report.probe_draw_calls += 1;
+            ctx.report.probe_triangles += tris;
+        }
+    }
+
+    let needs_blend = resolved.layers.is_some();
+
+    if lighting == LightingClass::Probe {
+        let geom_key = (mesh_key.to_string(), flat_index, overlay);
+        if let Some(geom) = ctx.probe_geometries.get(&geom_key) {
+            let geom = geom.clone();
+            return Some((
+                MeshBuild::Probe {
+                    geometry: geom,
+                    material_index,
+                },
+                tris,
+            ));
+        }
+        let built = match build_geometry(
+            &mut ctx.builder,
+            mesh,
+            dc,
+            overlay,
+            false,
+            lightmap_uv_scale,
+            needs_blend,
+            true,
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                ctx.report
+                    .missing_resources
+                    .push(format!("{mesh_key}#{flat_index}: {e}"));
+                return None;
+            }
+        };
+        let geom = Arc::new(ProbeGeometry {
+            position: built.position,
+            normal: built.normal,
+            uv0: built.uv0,
+            blend: built.blend,
+            indices: built.indices,
+            local_positions: built.raw_positions.unwrap_or_default(),
+            local_normals: built.raw_normals.unwrap_or_default(),
+        });
+        ctx.probe_geometries.insert(geom_key, geom.clone());
+        debug_assert_eq!(built.triangles, tris);
+        return Some((
+            MeshBuild::Probe {
+                geometry: geom,
+                material_index,
+            },
+            tris,
+        ));
+    }
 
     let key = (mesh_key.to_string(), flat_index, overlay, material_index);
     if let Some(&mesh_idx) = ctx.meshes.get(&key) {
-        return Some((mesh_idx, tris));
+        return Some((MeshBuild::Shared { mesh_idx }, tris));
     }
 
-    let resolved = ctx.get_resolved_material(material_path)?;
-    let needs_uv1 = false; // TEXCOORD_1/lightmap UV is F3a-4's concern (§6); wired up but unused for now.
-    let needs_blend = resolved.layers.is_some();
+    let needs_uv1 = lighting == LightingClass::Lightmap;
     let geometry = match build_geometry(
         &mut ctx.builder,
         mesh,
@@ -510,6 +765,7 @@ fn get_or_build_mesh(
         needs_uv1,
         lightmap_uv_scale,
         needs_blend,
+        false,
     ) {
         Ok(g) => g,
         Err(e) => {
@@ -532,7 +788,12 @@ fn get_or_build_mesh(
     if let Some(blend) = geometry.blend {
         attributes.insert("_BLEND".into(), json!(blend));
     }
-    let primitive = json!({ "attributes": Value::Object(attributes), "indices": geometry.indices, "material": material_index });
+    let primitive = json!({
+        "attributes": Value::Object(attributes),
+        "indices": geometry.indices,
+        "material": material_index,
+        "extras": { "lighting": lighting.as_str() },
+    });
     let mesh_json = json!({ "primitives": [primitive] });
     let mesh_idx = ctx.builder.add_mesh(mesh_json);
     ctx.meshes.insert(key, mesh_idx);
@@ -541,7 +802,111 @@ fn get_or_build_mesh(
         "resolved index count must match the draw call's own"
     );
 
-    Some((mesh_idx, tris))
+    Some((MeshBuild::Shared { mesh_idx }, tris))
+}
+
+/// Bakes `_LPV` for one probe-lit instance (§2) and places it: transforms `geometry`'s
+/// model-space vertices to world space with `transform`, binds a probe volume (handshake first,
+/// else `fallback_point_override` when given -- one world AABB centre over every draw call of the
+/// *placement*, not just this one instance's geometry, REPORT.md §2's binding rule -- else this
+/// instance's own world-space bounds centre, else the global volume -- `probes::bind_volume`),
+/// samples the ambient cube + sun visibility per vertex, and adds a fresh primitive/mesh/node
+/// (never shared -- a different instance samples different world positions).
+#[allow(clippy::too_many_arguments)]
+fn bake_and_place_probe_instance(
+    ctx: &mut Ctx,
+    children: &mut Vec<u32>,
+    name: Option<&str>,
+    geometry: &ProbeGeometry,
+    material_index: u32,
+    transform: &[[f32; 4]; 3],
+    light_probe_handshake: i64,
+    overlay_order: Option<i64>,
+    fallback_point_override: Option<[f32; 3]>,
+) {
+    let n = geometry.local_positions.len();
+    let mut world_positions = Vec::with_capacity(n);
+    let mut world_normals = Vec::with_capacity(n);
+    let mut world_min = [f32::INFINITY; 3];
+    let mut world_max = [f32::NEG_INFINITY; 3];
+    for i in 0..n {
+        let p = probes::apply_affine(transform, geometry.local_positions[i]);
+        let raw_n = geometry
+            .local_normals
+            .get(i)
+            .copied()
+            .unwrap_or([0.0, 0.0, 1.0]);
+        let ln = probes::apply_linear(transform, raw_n);
+        let len = (ln[0] * ln[0] + ln[1] * ln[1] + ln[2] * ln[2]).sqrt();
+        let wn = if len > 1e-8 {
+            [ln[0] / len, ln[1] / len, ln[2] / len]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+        for c in 0..3 {
+            world_min[c] = world_min[c].min(p[c]);
+            world_max[c] = world_max[c].max(p[c]);
+        }
+        world_positions.push(p);
+        world_normals.push(wn);
+    }
+    let bounds_center = fallback_point_override.unwrap_or(if n > 0 {
+        [
+            (world_min[0] + world_max[0]) / 2.0,
+            (world_min[1] + world_max[1]) / 2.0,
+            (world_min[2] + world_max[2]) / 2.0,
+        ]
+    } else {
+        [0.0, 0.0, 0.0]
+    });
+
+    let volume = probes::bind_volume(&ctx.probe_volumes, light_probe_handshake, bounds_center);
+    let shadow_channel = ctx.baked_shadow_channel;
+    let mut lpv = Vec::with_capacity(n);
+    for i in 0..n {
+        let sample = volume.and_then(|v| {
+            ctx.probe_atlas
+                .as_ref()
+                .and_then(|a| a.sample(v, world_positions[i], world_normals[i], shadow_channel))
+        });
+        match sample {
+            Some((irr, vis)) => lpv.push([irr[0], irr[1], irr[2], vis]),
+            None => {
+                ctx.report.probe_sample_failures += 1;
+                lpv.push([0.0, 0.0, 0.0, 0.0]);
+            }
+        }
+    }
+
+    let lpv_accessor = ctx.builder.add_lpv_u16(&lpv, LPV_SCALE);
+
+    let mut attributes = serde_json::Map::new();
+    attributes.insert("POSITION".into(), json!(geometry.position));
+    attributes.insert("NORMAL".into(), json!(geometry.normal));
+    if let Some(uv0) = geometry.uv0 {
+        attributes.insert("TEXCOORD_0".into(), json!(uv0));
+    }
+    if let Some(blend) = geometry.blend {
+        attributes.insert("_BLEND".into(), json!(blend));
+    }
+    attributes.insert("_LPV".into(), json!(lpv_accessor));
+    let primitive = json!({
+        "attributes": Value::Object(attributes),
+        "indices": geometry.indices,
+        "material": material_index,
+        "extras": { "lighting": "probe" },
+    });
+    let mesh_idx = ctx.builder.add_mesh(json!({ "primitives": [primitive] }));
+
+    add_instance(
+        ctx,
+        children,
+        name,
+        mesh_idx,
+        transform,
+        overlay_order,
+        light_probe_handshake,
+    );
 }
 
 fn flatten_draw_calls(mesh: &Mesh) -> Vec<&DrawCall> {
@@ -562,6 +927,7 @@ fn add_instance(
     mesh_idx: u32,
     transform: &[[f32; 4]; 3],
     overlay_order: Option<i64>,
+    light_probe_handshake: i64,
 ) {
     let mut node = serde_json::Map::new();
     if let Some(n) = name {
@@ -571,8 +937,15 @@ fn add_instance(
     if *transform != world::IDENTITY_TRANSFORM {
         node.insert("matrix".into(), json!(gltf::node_matrix(transform)));
     }
+    let mut extras = serde_json::Map::new();
     if let Some(order) = overlay_order {
-        node.insert("extras".into(), json!({ "overlayOrder": order }));
+        extras.insert("overlayOrder".into(), json!(order));
+    }
+    if light_probe_handshake != 0 {
+        extras.insert("lightProbeHandshake".into(), json!(light_probe_handshake));
+    }
+    if !extras.is_empty() {
+        node.insert("extras".into(), Value::Object(extras));
     }
     let idx = ctx.builder.add_node(Value::Object(node));
     children.push(idx);
@@ -664,6 +1037,7 @@ fn place_scene_object(
             lightmap_uv_scale,
             so.is_overlay,
             overlay_order,
+            so.light_probe_volume_handshake,
         );
     } else if let Some(renderable) = &so.renderable {
         let path = compiled_path(renderable);
@@ -694,6 +1068,8 @@ fn place_scene_object(
             lightmap_uv_scale,
             so.is_overlay,
             overlay_order,
+            so.light_probe_volume_handshake,
+            None,
         );
     }
 }
@@ -702,7 +1078,12 @@ fn place_scene_object(
 /// || material.material_says_overlay` (§4), with an optional per-draw-call skin remap. Shared by
 /// [`place_model_with_overlay`] (looping over a model's meshes) and `place_scene_object`'s
 /// `m_renderable` path (already just one mesh), so both `m_renderableModel` and `m_renderable`
-/// scene objects place their draw calls the same way (§2/§11).
+/// scene objects place their draw calls the same way (§2/§11). `bounds_center_override`, when
+/// `Some`, is the probe-binding centre used for every probe-lit draw call here instead of this
+/// mesh's own bounds -- `place_model_with_overlay` passes the union over every mesh in the whole
+/// model (REPORT.md's binding rule: one box per model *node*, the union of all its meshes, not
+/// per mesh -- `ModelSceneNode.Bones.cs:76-83`, `Scene.cs:2212`, §13); the `m_renderable` path has
+/// no sibling meshes to union, so it passes `None` and keeps its own single-mesh centre.
 #[allow(clippy::too_many_arguments)]
 fn place_mesh_draw_calls(
     ctx: &mut Ctx,
@@ -716,9 +1097,17 @@ fn place_mesh_draw_calls(
     lightmap_uv_scale: [f32; 2],
     object_overlay: bool,
     overlay_order: Option<i64>,
+    light_probe_handshake: i64,
+    bounds_center_override: Option<[f32; 3]>,
 ) -> u64 {
     let mut triangles = 0u64;
     let flat = flatten_draw_calls(mesh);
+    // §13's fix: one world AABB centre over *every* draw call of this placement (not just a
+    // single probe-lit draw call's own geometry), so every probe-lit draw call belonging to the
+    // same object binds to the same volume instead of a draw-call boundary splitting one object
+    // across two volumes.
+    let placement_bounds_center = bounds_center_override
+        .unwrap_or_else(|| placement_world_bounds_center(mesh, &flat, transform));
     for (i, dc) in flat.iter().enumerate() {
         if !dc.is_triangle_list {
             continue;
@@ -745,7 +1134,7 @@ fn place_mesh_draw_calls(
             .unwrap_or(false);
         let overlay = object_overlay || material_overlay;
         let final_tint = combine_tint(tint_rgba, dc_ref);
-        let Some((mesh_idx, tris)) = get_or_build_mesh(
+        let Some((build, tris)) = get_or_build_mesh(
             ctx,
             mesh_key,
             mesh,
@@ -761,16 +1150,113 @@ fn place_mesh_draw_calls(
         // `m_nOverlayRenderOrder` is a scene-object property: only write it when the *object*
         // itself is the overlay (not merely a regular placement whose material happens to set
         // `F_OVERLAY`, which still gets the vertex offset above but has no such order of its own).
-        add_instance(
-            ctx,
-            children,
-            name,
-            mesh_idx,
-            transform,
-            if object_overlay { overlay_order } else { None },
-        );
+        let final_overlay_order = if object_overlay { overlay_order } else { None };
+        match build {
+            MeshBuild::Shared { mesh_idx } => add_instance(
+                ctx,
+                children,
+                name,
+                mesh_idx,
+                transform,
+                final_overlay_order,
+                light_probe_handshake,
+            ),
+            MeshBuild::Probe {
+                geometry,
+                material_index,
+            } => bake_and_place_probe_instance(
+                ctx,
+                children,
+                name,
+                &geometry,
+                material_index,
+                transform,
+                light_probe_handshake,
+                final_overlay_order,
+                Some(placement_bounds_center),
+            ),
+        }
     }
     triangles
+}
+
+/// Accumulates one mesh's triangle-list draw calls' `POSITION` stream into a running world-space
+/// AABB, placed by `transform` -- the shared core of [`placement_world_bounds_center`] (one mesh)
+/// and [`model_world_bounds_center`] (every mesh of a model, §13).
+fn accumulate_world_bounds(
+    mesh: &Mesh,
+    flat: &[&DrawCall],
+    transform: &[[f32; 4]; 3],
+    min: &mut [f32; 3],
+    max: &mut [f32; 3],
+    any: &mut bool,
+) {
+    for &dc in flat {
+        if !dc.is_triangle_list {
+            continue;
+        }
+        let Some((buf, field)) = find_field(mesh, dc, "POSITION", 0) else {
+            continue;
+        };
+        let Ok(positions) = crate::attributes::decode_positions(buf, field) else {
+            continue;
+        };
+        for &p in &positions {
+            let w = probes::apply_affine(transform, p);
+            for c in 0..3 {
+                min[c] = min[c].min(w[c]);
+                max[c] = max[c].max(w[c]);
+            }
+            *any = true;
+        }
+    }
+}
+
+fn bounds_center(min: [f32; 3], max: [f32; 3], any: bool) -> [f32; 3] {
+    if !any {
+        return [0.0, 0.0, 0.0];
+    }
+    [
+        (min[0] + max[0]) / 2.0,
+        (min[1] + max[1]) / 2.0,
+        (min[2] + max[2]) / 2.0,
+    ]
+}
+
+/// One world AABB centre over every triangle-list draw call's `POSITION` stream, placed by
+/// `transform` (REPORT.md §2's binding rule: the whole *object*'s bounds, not one draw call's) --
+/// decodes only `POSITION` (no normals/UV/index remap), so this is cheap to compute once per
+/// placement even though [`build_geometry`] later re-decodes some of the same draw calls in full.
+/// `[0,0,0]` if nothing decodes (matches the previous per-instance fallback default).
+fn placement_world_bounds_center(
+    mesh: &Mesh,
+    flat: &[&DrawCall],
+    transform: &[[f32; 4]; 3],
+) -> [f32; 3] {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    let mut any = false;
+    accumulate_world_bounds(mesh, flat, transform, &mut min, &mut max, &mut any);
+    bounds_center(min, max, any)
+}
+
+/// Like [`placement_world_bounds_center`], but unioned over every mesh of a model at its lowest
+/// LOD (§13's fix): VRF binds one probe volume per model *node*, the union of all its meshes'
+/// bounds (`ModelSceneNode.Bones.cs:76-83`, `Scene.cs:2212`), not a separate box per mesh -- a
+/// per-mesh box could bind two meshes of the same placement to two different volumes right at a
+/// volume boundary.
+fn model_world_bounds_center(
+    meshes: &[(String, Arc<Mesh>)],
+    transform: &[[f32; 4]; 3],
+) -> [f32; 3] {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    let mut any = false;
+    for (_, mesh) in meshes {
+        let flat = flatten_draw_calls(mesh);
+        accumulate_world_bounds(mesh, &flat, transform, &mut min, &mut max, &mut any);
+    }
+    bounds_center(min, max, any)
 }
 
 /// Like [`place_model`], but resolves the per-draw-call overlay flag as `object_overlay ||
@@ -788,14 +1274,18 @@ fn place_model_with_overlay(
     lightmap_uv_scale: [f32; 2],
     object_overlay: bool,
     overlay_order: Option<i64>,
+    light_probe_handshake: i64,
 ) -> u64 {
     let mut triangles = 0u64;
-    for (mesh_key, mesh) in model_meshes_at_lowest_lod(ctx, model_path, model) {
+    let meshes = model_meshes_at_lowest_lod(ctx, model_path, model);
+    // §13's fix: one binding centre over every mesh of this model, not a fresh one per mesh.
+    let bounds_center_override = model_world_bounds_center(&meshes, transform);
+    for (mesh_key, mesh) in &meshes {
         triangles += place_mesh_draw_calls(
             ctx,
             children,
-            &mesh_key,
-            &mesh,
+            mesh_key,
+            mesh,
             name,
             transform,
             tint_rgba,
@@ -803,6 +1293,8 @@ fn place_model_with_overlay(
             lightmap_uv_scale,
             object_overlay,
             overlay_order,
+            light_probe_handshake,
+            Some(bounds_center_override),
         );
     }
     triangles
@@ -839,6 +1331,7 @@ fn place_aggregate(
             lightmap_uv_scale,
             false,
             None,
+            0,
         );
         return;
     }
@@ -901,7 +1394,7 @@ fn place_aggregate(
             .unwrap_or(false);
         let tint = [placement.tint[0], placement.tint[1], placement.tint[2], 1.0];
         let final_tint = combine_tint(tint, dc);
-        let Some((mesh_idx, _tris)) = get_or_build_mesh(
+        let Some((build, _tris)) = get_or_build_mesh(
             ctx,
             &path,
             &mesh,
@@ -914,7 +1407,34 @@ fn place_aggregate(
             continue;
         };
         ctx.report.fragments_placed += 1;
-        add_instance(ctx, children, None, mesh_idx, &placement.transform, None);
+        match build {
+            MeshBuild::Shared { mesh_idx } => add_instance(
+                ctx,
+                children,
+                None,
+                mesh_idx,
+                &placement.transform,
+                None,
+                placement.light_probe_volume_handshake,
+            ),
+            MeshBuild::Probe {
+                geometry,
+                material_index,
+            } => bake_and_place_probe_instance(
+                ctx,
+                children,
+                None,
+                &geometry,
+                material_index,
+                &placement.transform,
+                placement.light_probe_volume_handshake,
+                None,
+                // No override: an aggregate fragment is already one draw call, i.e. already the
+                // whole "placement" REPORT.md §2's binding rule cares about, so the function's own
+                // per-instance AABB (this fragment's own geometry) *is* the placement AABB.
+                None,
+            ),
+        }
     }
 }
 
@@ -1057,6 +1577,7 @@ fn place_entities(
             lightmap_uv_scale,
             false,
             None,
+            0, // entities carry no precomputed handshake (Scene.cs:2150-2154); AABB-centre fallback binds them.
         );
 
         let stats = ctx
@@ -1083,28 +1604,35 @@ fn entity_lump_path(name: &str) -> String {
     format!("{}_c", name.replace('\\', "/").to_ascii_lowercase())
 }
 
-fn load_entity_lump(sources: &Sources, path: &str) -> Option<EntityLump> {
-    let resource = sources.resource(path).ok()?;
+/// Loads one entity lump file, `Err` describing exactly what went wrong (§2's fix: this used to
+/// collapse "not found" and "found but undecodable" into a silent `None`, dropping both from
+/// `dropped.missingResources`).
+fn load_entity_lump(sources: &Sources, path: &str) -> Result<EntityLump, String> {
+    let resource = sources
+        .resource(path)
+        .map_err(|_| format!("{path}: not found"))?;
     let doc = resource
         .data_kv3()
-        .map_err(|source| crate::source::SourceError::Parse {
-            path: path.to_string(),
-            source,
-        })
-        .ok()?;
-    entities::decode_entity_lump(&doc.root).ok()
+        .map_err(|e| format!("{path}: failed to decode: {e}"))?;
+    entities::decode_entity_lump(&doc.root).map_err(|e| format!("{path}: failed to decode: {e}"))
 }
 
-fn resolve_entity_lumps(sources: &Sources, listed: &[String]) -> Vec<EntityLump> {
+/// Resolves `listed` (`m_entityLumps`) plus their `m_childLumps`, falling back to a directory scan
+/// if the listed lumps can't all be loaded (§3's existing fallback). Every lump-file failure along
+/// the way -- including the one that triggers the fallback scan -- is returned alongside the lumps
+/// that did load, for the caller to fold into `dropped.missingResources` (§2).
+fn resolve_entity_lumps(sources: &Sources, listed: &[String]) -> (Vec<EntityLump>, Vec<String>) {
     let mut out = Vec::new();
+    let mut failures = Vec::new();
     let mut ok = !listed.is_empty();
     let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
     for name in listed {
         let path = entity_lump_path(name);
         visited.insert(path.clone());
         match load_entity_lump(sources, &path) {
-            Some(lump) => out.push(lump),
-            None => {
+            Ok(lump) => out.push(lump),
+            Err(e) => {
+                failures.push(e);
                 ok = false;
                 break;
             }
@@ -1123,21 +1651,39 @@ fn resolve_entity_lumps(sources: &Sources, listed: &[String]) -> Vec<EntityLump>
                 if !visited.insert(path.clone()) {
                     continue;
                 }
-                if let Some(lump) = load_entity_lump(sources, &path) {
-                    out.push(lump);
+                match load_entity_lump(sources, &path) {
+                    Ok(lump) => out.push(lump),
+                    Err(e) => failures.push(e),
                 }
             }
             i += 1;
         }
-        return out;
+        return (out, failures);
     }
     out.clear();
     for path in sources.entries_with_extension("vents_c") {
-        if let Some(lump) = load_entity_lump(sources, &path) {
-            out.push(lump);
+        match load_entity_lump(sources, &path) {
+            Ok(lump) => out.push(lump),
+            Err(e) => failures.push(e),
         }
     }
-    out
+    (out, failures)
+}
+
+/// The sun's baked shadow channel (§1's fix): the first `light_environment` entity's
+/// `bakedshadowindex`, falling back to `bakelightindex` on that *same* entity -- not a second
+/// `light_environment` -- valid only for `0..=3` (`direct_light_shadows`/the probe dlshd atlas are
+/// at most RGBA). `None` (no field, or an out-of-range value) means no baked sun shadow exists on
+/// this map, so probe/lightmap sun visibility is always `1.0`, never a hard-coded channel `0`.
+fn find_baked_shadow_channel(lumps: &[EntityLump]) -> Option<i64> {
+    let env = lumps
+        .iter()
+        .flat_map(|l| l.entities.iter())
+        .find(|e| e.classname().eq_ignore_ascii_case("light_environment"))?;
+    let idx = ent::entity_num(env.get("bakedshadowindex"))
+        .or_else(|| ent::entity_num(env.get("bakelightindex")))?;
+    let ch = idx.round() as i64;
+    (0..=3).contains(&ch).then_some(ch)
 }
 
 /// Exports `map` (already resolved to `sources`) to a `.glb` byte buffer and a `render.json`
@@ -1151,6 +1697,36 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             .root,
     );
 
+    // Entity lumps are loaded up front (rather than after the world-node walk, as F3a-3 had it):
+    // §2's probe-volume binding needs the volumes (`env_combined_light_probe_volume` entities)
+    // and their shared atlas *before* any world scene object or aggregate fragment is placed.
+    let (lumps, lump_failures) = resolve_entity_lumps(sources, &world_doc.entity_lumps);
+    if lumps.is_empty() {
+        return Err(ExportError::NoEntityLumps);
+    }
+    let baked_shadow_channel = find_baked_shadow_channel(&lumps).map(|c| c as usize);
+    let (probe_volumes, probe_volumes_skipped) = probes::collect_volumes(&lumps);
+    let mut pre_missing: Vec<String> = lump_failures;
+    let probe_atlas = match probes::atlas_texture_paths(&lumps) {
+        Some((irr_path, dlshd_path)) => {
+            match ProbeAtlasTextures::load(sources, &irr_path, &dlshd_path) {
+                Ok(atlas) => Some(atlas),
+                Err(e) => {
+                    pre_missing.push(e);
+                    None
+                }
+            }
+        }
+        None if !probe_volumes.is_empty() => {
+            pre_missing.push(
+                "probe volumes present but no lightprobetexture/lightprobetexture_dlshd found"
+                    .to_string(),
+            );
+            None
+        }
+        None => None,
+    };
+
     let mut ctx = Ctx {
         sources,
         budget: TextureBudget {
@@ -1163,9 +1739,16 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         resolved_materials: HashMap::new(),
         gltf_materials: HashMap::new(),
         textures: HashMap::new(),
+        normal_pairs: HashMap::new(),
         meshes: HashMap::new(),
+        probe_geometries: HashMap::new(),
+        probe_volumes,
+        probe_atlas,
+        baked_shadow_channel,
         report: Report::default(),
     };
+    ctx.report.missing_resources.extend(pre_missing);
+    ctx.report.probe_volumes_skipped = probe_volumes_skipped;
 
     let mut world_children: Vec<u32> = Vec::new();
     for prefix in &world_doc.world_node_prefixes {
@@ -1217,10 +1800,6 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         }
     }
 
-    let lumps = resolve_entity_lumps(sources, &world_doc.entity_lumps);
-    if lumps.is_empty() {
-        return Err(ExportError::NoEntityLumps);
-    }
     let mut entity_children: Vec<u32> = Vec::new();
     let mut sun: Option<EntityLight> = None;
     for lump in &lumps {
@@ -1272,8 +1851,78 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             "brightnessScale": s.brightness_scale,
             "skycolor": s.skycolor,
             "skyintensity": s.skyintensity,
+            // §3: unlike the 72 local lights (light_barn/light_omni2/light_rect), which are fully
+            // baked into the lightmap/probes and never evaluated at runtime (REPORT.md §1), the
+            // sun's specular term is always computed at runtime (pbr.slang:159-213,238-251) --
+            // constant `true`, not read from any entity field.
+            "renderSpecular": true,
+            "renderSpecularMeaning": "the sun always contributes a runtime specular term (pbr.slang formula in REPORT.md §1), unlike the fully-baked local lights",
+            "bakedShadowChannel": ctx.baked_shadow_channel,
+            "bakedShadowChannelMeaning": "index (0..3) into direct_light_shadows (and the probe dlshd atlas) that carries this sun's baked visibility, 1 - channel[bakedShadowChannel] = vis; null means this map has no baked sun shadow at all (vis = 1), from the first light_environment's bakedshadowindex (fallback bakelightindex), not m_bakedShadows[0] (that array indexes baked local lights, not the sun)",
         })
     });
+
+    // §1: raw lightmap blocks + their always-generated fallback PNGs.
+    let mut extra_files: Vec<(String, Vec<u8>)> = Vec::new();
+    let (lightmap_files, lightmap_missing) = lightmaps::export_files(
+        sources,
+        &world_doc.light_maps,
+        options.lightmap_quality_high,
+    );
+    let (lightmap_fallbacks, lightmap_fallback_missing) =
+        lightmaps::export_fallback_files(sources, &world_doc.light_maps);
+    ctx.report.missing_resources.extend(lightmap_missing);
+    ctx.report
+        .missing_resources
+        .extend(lightmap_fallback_missing);
+    let lightmaps_json: Vec<serde_json::Value> = lightmap_files
+        .iter()
+        .map(|f| {
+            json!({
+                "file": f.file_name,
+                "format": f.format,
+                "width": f.width,
+                "height": f.height,
+                "mipLevel": f.mip_level,
+                "sha256": f.sha256,
+                "byteLength": f.byte_length,
+            })
+        })
+        .collect();
+    let lightmap_fallbacks_json: Vec<serde_json::Value> = lightmap_fallbacks
+        .iter()
+        .map(|f| {
+            json!({
+                "file": f.file_name,
+                "width": f.width,
+                "height": f.height,
+                "byteLength": f.byte_length,
+                "encoding": f.encoding,
+                "rgbmRange": f.rgbm_range,
+                "decode": f.decode,
+            })
+        })
+        .collect();
+    for f in lightmap_files {
+        extra_files.push((f.file_name, f.bytes));
+    }
+    for f in lightmap_fallbacks {
+        extra_files.push((f.file_name, f.bytes));
+    }
+
+    // §4-§6: sky cube, cube fog, post-processing (tonemap/exposure/bloom/LUT).
+    let env = environment::build(sources, &lumps);
+    ctx.report.missing_resources.extend(env.missing);
+    if let Some(bytes) = env.sky_cube_bytes {
+        extra_files.push(("render_sky_cube.bin".to_string(), bytes));
+    }
+    extra_files.extend(env.sky_fallback_files);
+    if let Some(bytes) = env.fog_cube_bytes {
+        extra_files.push(("render_fog_cube.bin".to_string(), bytes));
+    }
+    if let Some(bytes) = env.lut_bytes {
+        extra_files.push(("render_lut.bin".to_string(), bytes));
+    }
 
     let mut per_material: Vec<(String, u64)> =
         ctx.report.per_material_triangles.into_iter().collect();
@@ -1309,7 +1958,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
     entity_table.sort_by(|a, b| a["classname"].as_str().cmp(&b["classname"].as_str()));
 
     let report = json!({
-        "formatVersion": 1,
+        "formatVersion": 2,
         "textureBudget": { "maxSide": options.max_texture, "jpegQuality": options.jpeg_quality },
         "sun": sun_json,
         "counts": {
@@ -1326,6 +1975,15 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             "aggregatesFallback": ctx.report.aggregates_fallback,
             "fragmentsTotal": ctx.report.fragments_total,
             "fragmentsPlaced": ctx.report.fragments_placed,
+            "lightmapDrawCalls": ctx.report.lightmap_draw_calls,
+            "lightmapTriangles": ctx.report.lightmap_triangles,
+            "probeDrawCalls": ctx.report.probe_draw_calls,
+            "probeTriangles": ctx.report.probe_triangles,
+            "unlitDrawCalls": ctx.report.unlit_draw_calls,
+            "unlitTriangles": ctx.report.unlit_triangles,
+            "probeSampleFailures": ctx.report.probe_sample_failures,
+            "probeVolumesLoaded": ctx.probe_volumes.len(),
+            "probeVolumesSkipped": ctx.report.probe_volumes_skipped,
         },
         "perMaterialTriangles": per_material.into_iter().map(|(k,v)| json!({"material": k, "triangles": v})).collect::<Vec<_>>(),
         "dropped": {
@@ -1338,6 +1996,22 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             "tintColorSpace": "linear (extras.tint is sRGB->linear converted, same as baseColorFactor; extras.layers/extras.tintMask hold glTF texture indices, not colors)",
             "byMaterial": ctx.report.material_extras.iter().map(|(k,v)| (k.to_string(), v.clone())).collect::<serde_json::Map<_,_>>(),
         },
+        "lighting": {
+            "lightmapFormatVersion": world_doc.lightmap_version,
+            "uvScale": world_doc.lightmap_uv_scale,
+            "uvScaleMeaning": "TEXCOORD_1 is already multiplied by this scale at export time (complex.vert.slang:347); the viewer must not multiply again",
+            "lightmaps": lightmaps_json,
+            "lightmapFallbacks": lightmap_fallbacks_json,
+            "lightmapFallbacksMeaning": "always generated (small); use when the browser lacks EXT_texture_compression_bptc/rgtc for the raw BC6H/BC4/BC5/BC7 files above, or when a lightmap file's compressed format has no known WebGL2 mapping at all (that raw file is then skipped and reported in dropped.missingResources instead)",
+            "lpvScale": LPV_SCALE,
+            "lpvScaleMeaning": "_LPV is UNSIGNED_SHORT normalized (VEC4); actual value = accessor value * lpvScale for rgb (irradiance) and a (sun visibility, already 0..1 so effectively unscaled since lpvScale>=1)",
+            "extrasLightingMeaning": "primitive extras.lighting is one of \"lightmap\" (reads TEXCOORD_1 against the lightmap files above), \"unlit\" (no indirect term), \"probe\" (reads the primitive's own _LPV accessor)",
+            "overlayOrderMeaning": "node extras.overlayOrder absent means 0 (no explicit paint order among overlapping overlays)",
+            "lightProbeHandshakeMeaning": "node extras.lightProbeHandshake (when present) is m_nLightProbeVolumePrecomputedHandshake, the scene object/fragment's precomputed probe-volume binding",
+        },
+        "sky": env.sky_json,
+        "fog": env.fog_json,
+        "postProcessing": env.post_json,
     });
 
     let glb = ctx.builder.finish(
@@ -1346,7 +2020,11 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         json!({}),
     )?;
 
-    Ok(ExportResult { glb, report })
+    Ok(ExportResult {
+        glb,
+        report,
+        extra_files,
+    })
 }
 
 #[cfg(test)]
@@ -1441,7 +2119,12 @@ mod tests {
             resolved_materials: HashMap::new(),
             gltf_materials: HashMap::new(),
             textures: HashMap::new(),
+            normal_pairs: HashMap::new(),
             meshes: HashMap::new(),
+            probe_geometries: HashMap::new(),
+            probe_volumes: Vec::new(),
+            probe_atlas: None,
+            baked_shadow_channel: None,
             report: Report::default(),
         }
     }
@@ -1506,6 +2189,7 @@ mod tests {
                     tint_color: None,
                     alpha: None,
                     flags: DrawCallFlags::None,
+                    has_baked_lighting_from_lightmap: false,
                 }],
             }],
         }
@@ -1536,6 +2220,7 @@ mod tests {
             is_overlay: false,
             overlay_render_order: 0,
             layer_index: None,
+            light_probe_volume_handshake: 0,
         };
 
         place_scene_object(&mut ctx, &mut children, &so, [1.0, 1.0]);
@@ -1587,6 +2272,8 @@ mod tests {
             [1.0, 1.0],
             false,
             Some(7),
+            0,
+            None,
         );
         // Material alone says overlay (csgo_static_overlay's shader): gets the vertex offset, but
         // not `overlayOrder` -- that field belongs to an overlay *object*, not a material.
@@ -1602,6 +2289,8 @@ mod tests {
             [1.0, 1.0],
             false,
             Some(7),
+            0,
+            None,
         );
         // Object flag on: gets both the offset and overlayOrder, even on a non-overlay material.
         place_mesh_draw_calls(
@@ -1616,6 +2305,8 @@ mod tests {
             [1.0, 1.0],
             true,
             Some(9),
+            0,
+            None,
         );
 
         assert_eq!(children.len(), 3);
@@ -1628,5 +2319,256 @@ mod tests {
         assert!(nodes[0].get("extras").is_none(), "{:?}", nodes[0]);
         assert!(nodes[1].get("extras").is_none(), "{:?}", nodes[1]);
         assert_eq!(nodes[2]["extras"]["overlayOrder"], 9);
+    }
+
+    fn triangle_mesh_dc(mesh: &Mesh) -> &DrawCall {
+        &mesh.scene_objects[0].draw_calls[0]
+    }
+
+    /// §0's `classify_lighting`: a draw call with `m_bHasBakedLightingFromLightMap` *and* an
+    /// actual TEXCOORD index-3 stream reads the lightmap; an unlit material with neither has no
+    /// indirect term at all; everything else falls back to probes (`Mesh.cs:202-204`,
+    /// `RenderableMesh.cs:314-325`).
+    #[test]
+    fn classify_lighting_covers_all_three_cases() {
+        let mut mesh = triangle_mesh("materials/plain.vmat");
+        // Case 1: lightmap -- has_baked_lighting_from_lightmap *and* a TEXCOORD index-3 field.
+        mesh.vertex_buffers[0].fields.push(InputLayoutField {
+            semantic_name: "TEXCOORD".to_string(),
+            semantic_index: 3,
+            format: DxgiFormat::R16G16Unorm,
+            offset: 0,
+        });
+        mesh.scene_objects[0].draw_calls[0].has_baked_lighting_from_lightmap = true;
+        assert_eq!(
+            classify_lighting(&mesh, triangle_mesh_dc(&mesh), false),
+            LightingClass::Lightmap
+        );
+
+        // Case 2: unlit -- no TEXCOORD index-3 stream, material is unlit.
+        let unlit_mesh = triangle_mesh("materials/plain.vmat");
+        assert_eq!(
+            classify_lighting(&unlit_mesh, triangle_mesh_dc(&unlit_mesh), true),
+            LightingClass::Unlit
+        );
+
+        // Case 3: probe -- neither of the above (the fallback).
+        let probe_mesh = triangle_mesh("materials/plain.vmat");
+        assert_eq!(
+            classify_lighting(&probe_mesh, triangle_mesh_dc(&probe_mesh), false),
+            LightingClass::Probe
+        );
+
+        // Case 4: flag alone isn't enough -- has_baked_lighting_from_lightmap true, but no
+        // TEXCOORD index-3 stream, falls back to probes.
+        let mut flag_only_mesh = triangle_mesh("materials/plain.vmat");
+        flag_only_mesh.scene_objects[0].draw_calls[0].has_baked_lighting_from_lightmap = true;
+        assert_eq!(
+            classify_lighting(&flag_only_mesh, triangle_mesh_dc(&flag_only_mesh), false),
+            LightingClass::Probe
+        );
+
+        // Case 5: the TEXCOORD stream alone isn't enough either -- present, but
+        // has_baked_lighting_from_lightmap false, also falls back to probes.
+        let mut uv_only_mesh = triangle_mesh("materials/plain.vmat");
+        uv_only_mesh.vertex_buffers[0]
+            .fields
+            .push(InputLayoutField {
+                semantic_name: "TEXCOORD".to_string(),
+                semantic_index: 3,
+                format: DxgiFormat::R16G16Unorm,
+                offset: 0,
+            });
+        assert_eq!(
+            classify_lighting(&uv_only_mesh, triangle_mesh_dc(&uv_only_mesh), false),
+            LightingClass::Probe
+        );
+    }
+
+    /// §1's fix: `bakedShadowChannel` comes from the first `light_environment`'s
+    /// `bakedshadowindex` (fallback `bakelightindex`), `0..=3` only -- never `m_bakedShadows[0]`
+    /// (a baked *local* light's channel, not the sun's).
+    #[test]
+    fn baked_shadow_channel_reads_bakedshadowindex_with_bakelightindex_fallback() {
+        use s2fmt::entities::EntityValue;
+
+        let env_with_index = s2fmt::entities::Entity {
+            properties: vec![
+                (
+                    "classname".to_string(),
+                    EntityValue::String("light_environment".to_string()),
+                ),
+                ("bakedshadowindex".to_string(), EntityValue::Int(2)),
+            ],
+            connections: Vec::new(),
+        };
+        let lump = EntityLump {
+            name: String::new(),
+            child_lumps: Vec::new(),
+            entities: vec![env_with_index],
+        };
+        assert_eq!(
+            find_baked_shadow_channel(std::slice::from_ref(&lump)),
+            Some(2)
+        );
+
+        let env_fallback = s2fmt::entities::Entity {
+            properties: vec![
+                (
+                    "classname".to_string(),
+                    EntityValue::String("light_environment".to_string()),
+                ),
+                ("bakelightindex".to_string(), EntityValue::Int(1)),
+            ],
+            connections: Vec::new(),
+        };
+        let lump = EntityLump {
+            name: String::new(),
+            child_lumps: Vec::new(),
+            entities: vec![env_fallback],
+        };
+        assert_eq!(
+            find_baked_shadow_channel(std::slice::from_ref(&lump)),
+            Some(1)
+        );
+
+        let env_out_of_range = s2fmt::entities::Entity {
+            properties: vec![
+                (
+                    "classname".to_string(),
+                    EntityValue::String("light_environment".to_string()),
+                ),
+                ("bakedshadowindex".to_string(), EntityValue::Int(4)),
+            ],
+            connections: Vec::new(),
+        };
+        let lump = EntityLump {
+            name: String::new(),
+            child_lumps: Vec::new(),
+            entities: vec![env_out_of_range],
+        };
+        assert_eq!(find_baked_shadow_channel(std::slice::from_ref(&lump)), None);
+
+        let env_neither = s2fmt::entities::Entity {
+            properties: vec![(
+                "classname".to_string(),
+                EntityValue::String("light_environment".to_string()),
+            )],
+            connections: Vec::new(),
+        };
+        let lump = EntityLump {
+            name: String::new(),
+            child_lumps: Vec::new(),
+            entities: vec![env_neither],
+        };
+        assert_eq!(find_baked_shadow_channel(std::slice::from_ref(&lump)), None);
+    }
+
+    fn bin_chunk(bytes: &[u8]) -> &[u8] {
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let bin_start = 20 + json_len;
+        let bin_len =
+            u32::from_le_bytes(bytes[bin_start..bin_start + 4].try_into().unwrap()) as usize;
+        &bytes[bin_start + 8..bin_start + 8 + bin_len]
+    }
+
+    /// §0: `TEXCOORD_1` must come from vertex field semantic `texcoord` **index 3** (not 0/1),
+    /// multiplied by the world's `m_vLightmapUvScale` -- verified end to end through
+    /// `build_geometry` -> `GltfBuilder::add_uv1_u16` -> the actual `.glb` bytes.
+    #[test]
+    fn uv1_reads_texcoord_index_3_and_applies_the_lightmap_scale() {
+        let raw_u16: [u16; 2] = [32768, 16384]; // ~= (0.500008, 0.250004)
+        let scale = [1.2f32, 0.8f32];
+
+        let mut data = Vec::new();
+        for _ in 0..3 {
+            data.extend_from_slice(&0.0f32.to_le_bytes()); // POSITION.x
+            data.extend_from_slice(&0.0f32.to_le_bytes()); // POSITION.y
+            data.extend_from_slice(&0.0f32.to_le_bytes()); // POSITION.z
+            data.extend_from_slice(&0u16.to_le_bytes()); // TEXCOORD 0, unused
+            data.extend_from_slice(&0u16.to_le_bytes());
+            data.extend_from_slice(&raw_u16[0].to_le_bytes()); // TEXCOORD 3 (the lightmap UV)
+            data.extend_from_slice(&raw_u16[1].to_le_bytes());
+        }
+        let vertex_buffer = Buffer {
+            element_count: 3,
+            element_size: 20,
+            fields: vec![
+                InputLayoutField {
+                    semantic_name: "POSITION".to_string(),
+                    semantic_index: 0,
+                    format: DxgiFormat::R32G32B32Float,
+                    offset: 0,
+                },
+                InputLayoutField {
+                    semantic_name: "TEXCOORD".to_string(),
+                    semantic_index: 0,
+                    format: DxgiFormat::R16G16Unorm,
+                    offset: 12,
+                },
+                InputLayoutField {
+                    semantic_name: "TEXCOORD".to_string(),
+                    semantic_index: 3,
+                    format: DxgiFormat::R16G16Unorm,
+                    offset: 16,
+                },
+            ],
+            data,
+            compression: Compression::default(),
+        };
+        let index_buffer = Buffer {
+            element_count: 3,
+            element_size: 2,
+            fields: vec![],
+            data: [0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect(),
+            compression: Compression::default(),
+        };
+        let mesh = Mesh {
+            vertex_buffers: vec![vertex_buffer],
+            index_buffers: vec![index_buffer],
+            scene_objects: vec![SceneObject {
+                draw_calls: vec![DrawCall {
+                    material_path: Some("materials/plain.vmat".to_string()),
+                    is_triangle_list: true,
+                    base_vertex: 0,
+                    start_index: 0,
+                    index_count: 3,
+                    vertex_count: 3,
+                    index_buffer: 0,
+                    vertex_buffers: vec![0],
+                    tint_color: None,
+                    alpha: None,
+                    flags: DrawCallFlags::None,
+                    has_baked_lighting_from_lightmap: true,
+                }],
+            }],
+        };
+        let dc = &mesh.scene_objects[0].draw_calls[0];
+
+        let mut builder = GltfBuilder::new();
+        let built = build_geometry(&mut builder, &mesh, dc, false, true, scale, false, false)
+            .expect("build_geometry");
+        let uv1_idx = built.uv1.expect("uv1 accessor");
+
+        let glb = builder
+            .finish(Vec::new(), Vec::new(), json!({}))
+            .expect("finish");
+        let doc = glb_json(&glb);
+        let accessor = &doc["accessors"][uv1_idx as usize];
+        let view_idx = accessor["bufferView"].as_u64().unwrap() as usize;
+        let view = &doc["bufferViews"][view_idx];
+        let byte_offset = view["byteOffset"].as_u64().unwrap() as usize;
+        let bin = bin_chunk(&glb);
+        let got0 = u16::from_le_bytes(bin[byte_offset..byte_offset + 2].try_into().unwrap());
+        let got1 = u16::from_le_bytes(bin[byte_offset + 2..byte_offset + 4].try_into().unwrap());
+
+        let raw = [
+            f32::from(raw_u16[0]) / 65535.0,
+            f32::from(raw_u16[1]) / 65535.0,
+        ];
+        let want = [raw[0] * scale[0], raw[1] * scale[1]];
+        let got = [f32::from(got0) / 65535.0, f32::from(got1) / 65535.0];
+        assert!((got[0] - want[0]).abs() < 1e-3, "got {got:?} want {want:?}");
+        assert!((got[1] - want[1]).abs() < 1e-3, "got {got:?} want {want:?}");
     }
 }

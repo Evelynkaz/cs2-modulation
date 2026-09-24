@@ -112,6 +112,11 @@ pub struct WorldDoc {
     pub entity_lumps: Vec<String>,
     pub world_node_prefixes: Vec<String>,
     pub lightmap_uv_scale: [f32; 2],
+    /// `m_worldLightingInfo.m_lightMaps`: every lightmap `.vtex` path this map compiled (`s6f3a4_
+    /// lighting.md` §1 -- files to export are chosen from this list, not a directory scan).
+    pub light_maps: Vec<String>,
+    /// `[m_nLightmapVersionNumber, m_nLightmapGameVersionNumber]` (§1: Mirage is `[8, 2]`).
+    pub lightmap_version: [i64; 2],
 }
 
 /// Turns a stored `m_worldNodePrefix` into the `.vwnod_c` path VPK entries use (same transform as
@@ -143,17 +148,44 @@ pub fn decode_world(root: &Value) -> WorldDoc {
                 .collect()
         })
         .unwrap_or_default();
-    let lightmap_uv_scale = root
-        .get("m_vLightmapUvScale")
+    // `m_vLightmapUvScale` lives under `m_worldLightingInfo` (World.cs:28-37, WorldLoader.cs:
+    // 508-512; Mirage 1.1428397) -- `m_builderParams.m_bakedLightingInfo.m_vLightmapUvScale` is a
+    // separate, always-[1,1] field the compiler leaves at its default and must not be read here.
+    let lighting_info = root.get("m_worldLightingInfo");
+    let lightmap_uv_scale = lighting_info
+        .and_then(|v| v.get("m_vLightmapUvScale"))
         .and_then(Value::as_array)
         .filter(|a| a.len() >= 2)
         .map(|a| [a[0].as_f32().unwrap_or(1.0), a[1].as_f32().unwrap_or(1.0)])
         .unwrap_or([1.0, 1.0]);
 
+    let light_maps = lighting_info
+        .and_then(|v| v.get("m_lightMaps"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let lightmap_version = [
+        lighting_info
+            .and_then(|v| v.get("m_nLightmapVersionNumber"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        lighting_info
+            .and_then(|v| v.get("m_nLightmapGameVersionNumber"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+    ];
+
     WorldDoc {
         entity_lumps,
         world_node_prefixes,
         lightmap_uv_scale,
+        light_maps,
+        lightmap_version,
     }
 }
 
@@ -175,6 +207,10 @@ pub struct SceneObjectRaw {
     /// the field only when this is non-zero, and only for an object-level overlay placement.
     pub overlay_render_order: i64,
     pub layer_index: Option<usize>,
+    /// `m_nLightProbeVolumePrecomputedHandshake` (`WorldLoader.cs:921-927`, `s6f3a4_lighting.md`
+    /// §2): binds this scene object's probe-lit draw calls to a light probe volume by handshake;
+    /// `0` means "no precomputed binding" (fall back to AABB-centre containment).
+    pub light_probe_volume_handshake: i64,
 }
 
 /// One `m_aggregateMeshes[]` entry.
@@ -186,6 +222,9 @@ pub struct FragmentRaw {
     pub tint: Option<[f32; 3]>,
     pub lod_group_mask: i64,
     pub lod_setup_index: i64,
+    /// `m_nLightProbeVolumePrecomputedHandshake` on the fragment itself (`SceneAggregate.cs:
+    /// 299-315`; aggregates carry it per-fragment, not per-aggregate).
+    pub light_probe_volume_handshake: i64,
 }
 
 /// One `m_aggregateSceneObjects[]` entry: pre-combined geometry placed per fragment.
@@ -255,6 +294,10 @@ fn parse_fragment(v: &Value) -> FragmentRaw {
             .get("m_nLODSetupIndex")
             .and_then(Value::as_i64)
             .unwrap_or(-1),
+        light_probe_volume_handshake: v
+            .get("m_nLightProbeVolumePrecomputedHandshake")
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
     }
 }
 
@@ -294,6 +337,10 @@ pub fn decode_world_node(root: &Value) -> Result<WorldNodeRaw, MeshError> {
                         .and_then(|arr| arr.get(i))
                         .and_then(Value::as_i64)
                         .and_then(|i| usize::try_from(i).ok()),
+                    light_probe_volume_handshake: obj
+                        .get("m_nLightProbeVolumePrecomputedHandshake")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0),
                 })
                 .collect()
         })
@@ -353,6 +400,8 @@ pub struct FragmentPlacement {
     pub draw_call_index: usize,
     pub transform: [[f32; 4]; 3],
     pub tint: [f32; 3],
+    /// `m_nLightProbeVolumePrecomputedHandshake` of the fragment that produced this placement.
+    pub light_probe_volume_handshake: i64,
 }
 
 /// Why a fragment's transform slot couldn't be read: the flat transform list ran out before every
@@ -426,6 +475,7 @@ pub fn build_fragment_placements(
             draw_call_index: f.draw_call_index as usize,
             transform,
             tint: f.tint.unwrap_or([1.0, 1.0, 1.0]),
+            light_probe_volume_handshake: f.light_probe_volume_handshake,
         });
     }
     Ok(out)
@@ -446,6 +496,57 @@ mod tests {
 
     fn flat12(vals: [f32; 12]) -> Value {
         Value::Array(vals.iter().map(|&v| Value::Double(v as f64)).collect())
+    }
+
+    /// `decode_world` must read `m_vLightmapUvScale`/`m_lightMaps`/lightmap version numbers from
+    /// `m_worldLightingInfo`, not `m_builderParams.m_bakedLightingInfo` -- the latter is a
+    /// separate, always-`[1,1]` field real compiled `world.vwrld_c` files also carry (a decoy
+    /// this test guards against a regression back to). `m_bakedShadows` is deliberately not read
+    /// here (§1's fix): it indexes baked *local* lights, not the sun -- the sun's baked shadow
+    /// channel comes from the `light_environment` entity instead (`export.rs`'s
+    /// `find_baked_shadow_channel`).
+    #[test]
+    fn decode_world_reads_lighting_info_not_the_builder_params_decoy() {
+        let root = obj(vec![
+            (
+                "m_builderParams",
+                obj(vec![(
+                    "m_bakedLightingInfo",
+                    obj(vec![(
+                        "m_vLightmapUvScale",
+                        Value::Array(vec![Value::Double(1.0), Value::Double(1.0)]),
+                    )]),
+                )]),
+            ),
+            (
+                "m_worldLightingInfo",
+                obj(vec![
+                    ("m_nLightmapVersionNumber", Value::Int(8)),
+                    ("m_nLightmapGameVersionNumber", Value::Int(2)),
+                    (
+                        "m_vLightmapUvScale",
+                        Value::Array(vec![
+                            Value::Double(1.1428396701812744),
+                            Value::Double(1.1428396701812744),
+                        ]),
+                    ),
+                    (
+                        "m_lightMaps",
+                        Value::Array(vec![Value::String(
+                            "maps/de_mirage/lightmaps/irradiance.vtex".into(),
+                        )]),
+                    ),
+                ]),
+            ),
+        ]);
+        let doc = decode_world(&root);
+        assert!((doc.lightmap_uv_scale[0] - 1.1428397).abs() < 1e-5);
+        assert!((doc.lightmap_uv_scale[1] - 1.1428397).abs() < 1e-5);
+        assert_eq!(doc.lightmap_version, [8, 2]);
+        assert_eq!(
+            doc.light_maps,
+            vec!["maps/de_mirage/lightmaps/irradiance.vtex".to_string()]
+        );
     }
 
     #[test]

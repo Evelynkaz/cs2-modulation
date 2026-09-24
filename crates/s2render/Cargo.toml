@@ -16,6 +16,7 @@ ruzstd = { workspace = true }
 meshopt = "0.6"
 serde_json = { workspace = true }
 rayon = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 geom = { workspace = true }

@@ -183,6 +183,64 @@ impl GltfBuilder {
         )
     }
 
+    /// `_LPV` (§2 of `s6f3a4_lighting.md`): rgb = ambient-cube irradiance at the vertex normal,
+    /// a = sun visibility (`1 - dlshd[bakedShadowChannel]`, or `1` when this map has no baked sun
+    /// shadow -- §1), one accessor per probe-lit *instance* (never shared -- each placement
+    /// samples a different world position). Encoded as `UNSIGNED_SHORT` normalized rather than
+    /// `FLOAT`: halves the accessor's bytes (8 vs 16 per vertex) to stay inside REPORT.md §8's
+    /// ~3 MB probe budget, and 65536 steps across `scale` is far finer than the eye can
+    /// distinguish even for the dimmest texels -- `scale` (`render.json`'s `lpvScale`) is a fixed
+    /// constant the caller picked in advance (`export.rs`'s `LPV_SCALE`), not computed from this
+    /// export's own data.
+    pub fn add_lpv_u16(&mut self, values: &[[f32; 4]], scale: f32) -> u32 {
+        let safe_scale = if scale > 0.0 { scale } else { 1.0 };
+        let mut bytes = Vec::with_capacity(values.len() * 8);
+        for v in values {
+            for &c in v {
+                let normalized = (c / safe_scale).clamp(0.0, 1.0);
+                bytes.extend_from_slice(&((normalized * 65535.0).round() as u16).to_le_bytes());
+            }
+        }
+        let view = self.push_buffer_view(&bytes, Some(TARGET_ARRAY_BUFFER));
+        self.push_accessor(
+            view,
+            COMPONENT_TYPE_UNSIGNED_SHORT,
+            values.len(),
+            "VEC4",
+            true,
+            None,
+            None,
+        )
+    }
+
+    /// `TEXCOORD_1` (the lightmap UV, §1 of `s6f3a4_lighting.md`): normalized `UNSIGNED_SHORT`
+    /// rather than `FLOAT` -- halves the accessor's bytes (4 vs 8 per vertex, ~3.9 MB on Mirage)
+    /// with no visible precision loss, since `values` are already scaled into `[0,1]` by the
+    /// caller (`build_geometry`'s `uv1.push([raw[0] * lightmap_uv_scale[0], ...])`). No extension
+    /// needed: core glTF 2.0 already allows a normalized `UNSIGNED_SHORT` `TEXCOORD_n` accessor
+    /// (`KHR_mesh_quantization` only extends POSITION/NORMAL/TANGENT/TEXCOORD to the *signed*
+    /// byte/short types, which this crate never uses, so it's declared nowhere).
+    pub fn add_uv1_u16(&mut self, values: &[[f32; 2]]) -> u32 {
+        let mut bytes = Vec::with_capacity(values.len() * 4);
+        for v in values {
+            for &c in v {
+                bytes.extend_from_slice(
+                    &((c.clamp(0.0, 1.0) * 65535.0).round() as u16).to_le_bytes(),
+                );
+            }
+        }
+        let view = self.push_buffer_view(&bytes, Some(TARGET_ARRAY_BUFFER));
+        self.push_accessor(
+            view,
+            COMPONENT_TYPE_UNSIGNED_SHORT,
+            values.len(),
+            "VEC2",
+            true,
+            None,
+            None,
+        )
+    }
+
     /// Indices, packed as `u16` when they fit (most draw calls) or `u32` otherwise. `u16::MAX`
     /// (0xFFFF) itself is reserved as the primitive-restart value and must never appear as a real
     /// index (glTF 2.0's own indices-accessor rule), so a lone value of exactly 65535 forces the
@@ -391,6 +449,11 @@ pub fn compose(outer: &[[f32; 4]; 3], inner: &[[f32; 4]; 3]) -> [[f32; 4]; 3] {
 mod tests {
     use super::*;
 
+    fn glb_json(bytes: &[u8]) -> Value {
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&bytes[20..20 + json_len]).unwrap()
+    }
+
     #[test]
     fn glb_round_trip_parses_as_valid_header_and_json() {
         let mut b = GltfBuilder::new();
@@ -455,6 +518,35 @@ mod tests {
         let composed = compose(&translate_y, &translate_x);
         assert_eq!(composed[0][3], 5.0);
         assert_eq!(composed[1][3], 7.0);
+    }
+
+    #[test]
+    fn lpv_u16_round_trips_within_quantization_error() {
+        let mut b = GltfBuilder::new();
+        let idx = b.add_lpv_u16(&[[1.0, 2.0, 4.0, 0.5]], 8.0);
+        let acc = &b.accessors[idx as usize];
+        assert_eq!(acc["componentType"], COMPONENT_TYPE_UNSIGNED_SHORT);
+        assert_eq!(acc["type"], "VEC4");
+        assert_eq!(acc["normalized"], true);
+    }
+
+    #[test]
+    fn uv1_u16_does_not_declare_mesh_quantization() {
+        let mut b = GltfBuilder::new();
+        let pos = b.add_positions(&[[0.0, 0.0, 0.0]]);
+        let idx = b.add_uv1_u16(&[[0.5, 1.0]]);
+        let acc = &b.accessors[idx as usize];
+        assert_eq!(acc["componentType"], COMPONENT_TYPE_UNSIGNED_SHORT);
+        assert_eq!(acc["type"], "VEC2");
+        assert_eq!(acc["normalized"], true);
+        let mesh = b.add_mesh(
+            json!({ "primitives": [{ "attributes": { "POSITION": pos, "TEXCOORD_1": idx } }] }),
+        );
+        let node = b.add_node(json!({ "mesh": mesh }));
+        let bytes = b.finish(vec![node], Vec::new(), json!({})).unwrap();
+        let doc = glb_json(&bytes);
+        assert!(doc.get("extensionsUsed").is_none(), "{doc:?}");
+        assert!(doc.get("extensionsRequired").is_none(), "{doc:?}");
     }
 
     #[test]

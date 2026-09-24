@@ -26,8 +26,13 @@ const MAX_ENCODE_SIDE: u32 = u16::MAX as u32;
 /// Rejects hostile/mismatched inputs before either encoder touches them:
 /// `jpeg-encoder` truncates `width`/`height` to `u16` silently, and both
 /// encoders only check that the buffer is *long enough*, not that it's
-/// exactly `width * height * 4`.
-fn validate_dimensions(rgba: &[u8], width: u32, height: u32) -> Result<(), TexError> {
+/// exactly `width * height * channels`.
+fn validate_dimensions(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    channels: u64,
+) -> Result<(), TexError> {
     if width > MAX_ENCODE_SIDE || height > MAX_ENCODE_SIDE {
         return Err(TexError::EncodeDimensionsTooLarge {
             width,
@@ -35,13 +40,13 @@ fn validate_dimensions(rgba: &[u8], width: u32, height: u32) -> Result<(), TexEr
             max: MAX_ENCODE_SIDE,
         });
     }
-    let expected = u64::from(width) * u64::from(height) * 4;
-    if rgba.len() as u64 != expected {
+    let expected = u64::from(width) * u64::from(height) * channels;
+    if data.len() as u64 != expected {
         return Err(TexError::EncodeBufferSizeMismatch {
             width,
             height,
             expected,
-            actual: rgba.len(),
+            actual: data.len(),
         });
     }
     Ok(())
@@ -84,7 +89,7 @@ pub fn encode(
     jpeg_quality: u8,
     lossless: bool,
 ) -> Result<Encoded, TexError> {
-    validate_dimensions(rgba, width, height)?;
+    validate_dimensions(rgba, width, height, 4)?;
     if lossless || alpha_is_significant(rgba) {
         Ok(Encoded {
             format: EncodedFormat::Png,
@@ -94,6 +99,59 @@ pub fn encode(
         Ok(Encoded {
             format: EncodedFormat::Jpeg,
             bytes: encode_jpeg(rgba, width, height, jpeg_quality)?,
+        })
+    }
+}
+
+fn encode_jpeg_gray(
+    gray: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+) -> Result<Vec<u8>, TexError> {
+    let mut out = Vec::new();
+    let encoder = jpeg_encoder::Encoder::new(&mut out, quality);
+    encoder.encode(
+        gray,
+        width as u16,
+        height as u16,
+        jpeg_encoder::ColorType::Luma,
+    )?;
+    Ok(out)
+}
+
+fn encode_png_gray(gray: &[u8], width: u32, height: u32) -> Result<Vec<u8>, TexError> {
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, width, height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(gray)?;
+    }
+    Ok(out)
+}
+
+/// Encodes a single-channel (one byte per pixel) image: JPEG luma at `jpeg_quality` normally, or
+/// an 8-bit grayscale PNG when `lossless` is set (a mask channel that would band under JPEG's
+/// chroma-adjacent quantization -- `s6f3a4_lighting.md` change item 11).
+pub fn encode_gray(
+    gray: &[u8],
+    width: u32,
+    height: u32,
+    jpeg_quality: u8,
+    lossless: bool,
+) -> Result<Encoded, TexError> {
+    validate_dimensions(gray, width, height, 1)?;
+    if lossless {
+        Ok(Encoded {
+            format: EncodedFormat::Png,
+            bytes: encode_png_gray(gray, width, height)?,
+        })
+    } else {
+        Ok(Encoded {
+            format: EncodedFormat::Jpeg,
+            bytes: encode_jpeg_gray(gray, width, height, jpeg_quality)?,
         })
     }
 }
@@ -150,6 +208,29 @@ mod tests {
     fn mismatched_buffer_length_is_rejected() {
         let rgba = vec![0u8; 3]; // not width * height * 4
         let err = encode(&rgba, 4, 4, 85, false).unwrap_err();
+        assert!(matches!(err, TexError::EncodeBufferSizeMismatch { .. }));
+    }
+
+    #[test]
+    fn encode_gray_not_lossless_is_jpeg_luma() {
+        let gray = vec![128u8; 16]; // 4x4, one byte per pixel
+        let encoded = encode_gray(&gray, 4, 4, 90, false).unwrap();
+        assert_eq!(encoded.format, EncodedFormat::Jpeg);
+        assert!(!encoded.bytes.is_empty());
+    }
+
+    #[test]
+    fn encode_gray_lossless_is_png_grayscale() {
+        let gray = vec![128u8; 16];
+        let encoded = encode_gray(&gray, 4, 4, 90, true).unwrap();
+        assert_eq!(encoded.format, EncodedFormat::Png);
+        assert_eq!(&encoded.bytes[1..4], b"PNG");
+    }
+
+    #[test]
+    fn encode_gray_mismatched_buffer_length_is_rejected() {
+        let gray = vec![0u8; 3]; // not width * height
+        let err = encode_gray(&gray, 4, 4, 90, false).unwrap_err();
         assert!(matches!(err, TexError::EncodeBufferSizeMismatch { .. }));
     }
 }

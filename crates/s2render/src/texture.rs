@@ -99,3 +99,85 @@ pub fn load_and_encode(
         height: decoded.height,
     })
 }
+
+/// A normal map's tangent-space RGB image (alpha forced to `255`, as [`load_and_encode`] does)
+/// plus the standalone one-channel roughness image recovered from its alpha before that --
+/// `s2tex::transform::decode_hemi_oct`'s "packed roughness moves to alpha" (`s6f3a4_lighting.md`
+/// change item 7: "шероховатость ... вывести отдельной одноканальной текстурой"). One decode
+/// serves both, instead of decoding the same `vtex_c` twice.
+pub struct NormalAndRoughness {
+    pub normal: EncodedTexture,
+    pub roughness: EncodedTexture,
+}
+
+/// Like [`load_and_encode`] with `is_normal = true`, but also returns the roughness image split
+/// out of the alpha channel before it's zeroed. Roughness is encoded as a single-channel JPEG at
+/// the budget's quality (`s6f3a4_lighting.md` change item 11: measured 4.19 MB for all 112 of
+/// Mirage's normal maps, vs 34.8 MB for a naive 4-channel PNG) -- `export.rs`'s caller shares this
+/// function's own cache for every path that needs a normal map's pixels, including a layer-2
+/// normal, so the same `vtex_c` is never decoded/embedded twice.
+pub fn load_and_encode_normal_pair(
+    sources: &Sources,
+    path: &str,
+    budget: TextureBudget,
+) -> Result<NormalAndRoughness, TextureError> {
+    let bytes = sources.read(path).ok_or_else(|| TextureError::Missing {
+        path: path.to_string(),
+    })?;
+    let decoded =
+        s2tex::decode_bytes(&bytes, budget.max_side).map_err(|source| TextureError::Decode {
+            path: path.to_string(),
+            source,
+        })?;
+
+    let mut normal_rgba = decoded.rgba.clone();
+    let mut roughness_gray = Vec::with_capacity((decoded.width * decoded.height) as usize);
+    for chunk in decoded.rgba.as_chunks::<4>().0 {
+        roughness_gray.push(chunk[3]);
+    }
+    for px in normal_rgba.as_chunks_mut::<4>().0.iter_mut() {
+        px[3] = 255;
+    }
+
+    let normal_encoded = s2tex::encode_image(
+        &normal_rgba,
+        decoded.width,
+        decoded.height,
+        budget.jpeg_quality,
+        decoded.format.is_mask(),
+    )
+    .map_err(|source| TextureError::Encode {
+        path: path.to_string(),
+        source,
+    })?;
+    let roughness_encoded = s2tex::encode_image_gray(
+        &roughness_gray,
+        decoded.width,
+        decoded.height,
+        budget.jpeg_quality,
+        false,
+    )
+    .map_err(|source| TextureError::Encode {
+        path: path.to_string(),
+        source,
+    })?;
+
+    let mime_of = |f: EncodedFormat| match f {
+        EncodedFormat::Jpeg => "image/jpeg",
+        EncodedFormat::Png => "image/png",
+    };
+    Ok(NormalAndRoughness {
+        normal: EncodedTexture {
+            bytes: normal_encoded.bytes,
+            mime_type: mime_of(normal_encoded.format),
+            width: decoded.width,
+            height: decoded.height,
+        },
+        roughness: EncodedTexture {
+            bytes: roughness_encoded.bytes,
+            mime_type: mime_of(roughness_encoded.format),
+            width: decoded.width,
+            height: decoded.height,
+        },
+    })
+}

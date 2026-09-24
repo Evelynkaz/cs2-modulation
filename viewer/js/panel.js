@@ -159,10 +159,13 @@ export function createPanel(container, handlers) {
       }
     });
 
+    const fpvBtn = el("button", { type: "button", textContent: strings.fpv.button });
+    fpvBtn.addEventListener("click", () => handlers.onFirstPerson?.(l));
+
     selectArea.append(title, stats, flags);
     row.append(
       selectArea,
-      el("div", { className: "lineup-copy" }, copyBtn, copyStatus, copyInput),
+      el("div", { className: "lineup-copy" }, copyBtn, copyStatus, copyInput, fpvBtn),
     );
     return row;
   }

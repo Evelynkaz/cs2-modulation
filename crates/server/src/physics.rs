@@ -113,6 +113,10 @@ fn round_points(points: &[[f32; 3]]) -> Vec<[f64; 3]> {
 
 // ---- /api/trajectory ------------------------------------------------------------------------
 
+/// `get_trajectory`'s blocking computation result: flight-tick points, bounce contact points, and
+/// the sim's own summary.
+type TrajectoryCompute = (Vec<[f32; 3]>, Vec<[f32; 3]>, sim::TrajectoryResult);
+
 #[derive(Debug, Deserialize)]
 pub struct TrajectoryQuery {
     map: Option<String>,
@@ -176,7 +180,7 @@ pub async fn get_trajectory(
         return resp;
     }
     let constants = state.constants;
-    let compute = move || -> Result<(Vec<[f32; 3]>, sim::TrajectoryResult), String> {
+    let compute = move || -> Result<TrajectoryCompute, String> {
         let collider = grenade_collider_for(&entry, &broken)?;
         let eye = V3::new(x, y, z + eye_height(throw_type));
         let spec = ThrowSpec {
@@ -188,26 +192,35 @@ pub async fn get_trajectory(
             run_yaw_offset_deg: run_deg,
         };
         let mut ticks: Vec<(V3, V3)> = Vec::new();
+        let mut bounces: Vec<sim::BounceRecord> = Vec::new();
         let result = simulate_exact(
             collider.as_ref(),
             &spec,
             &constants,
             Trace {
                 ticks: Some(&mut ticks),
-                bounces: None,
+                bounces: Some(&mut bounces),
             },
         );
         let points: Vec<[f32; 3]> = ticks.iter().map(|(p, _)| [p.x, p.y, p.z]).collect();
-        Ok((points, result))
+        let contacts: Vec<[f32; 3]> = bounces
+            .iter()
+            .map(|b| [b.contact.x, b.contact.y, b.contact.z])
+            .collect();
+        Ok((points, contacts, result))
     };
-    let (points, result) = match tokio::task::spawn_blocking(compute).await {
+    let (points, contacts, result) = match tokio::task::spawn_blocking(compute).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
+    // `contacts`: the sim's own `BounceRecord.contact` list (viewer bounce marks - `s6f3b_viewer3d.md`
+    // - used to draw exact touchdown points instead of guessing them from a Z-local-minimum over
+    // `points`).
     let mut resp = Json(json!({
         "points": round_points(&points),
         "bounces": result.bounces,
+        "contacts": round_points(&contacts),
         "flightTime": round3(result.flight_time),
         "lost": result.lost,
     }))

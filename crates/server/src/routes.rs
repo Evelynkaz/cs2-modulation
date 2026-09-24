@@ -3,9 +3,11 @@
 //! citation below names the exact lines this endpoint's behaviour comes from.
 
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Path as AxPath, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
@@ -14,6 +16,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::io::{AsyncRead, ReadBuf};
 
 use geom::collider::Collider;
 use geom::math::V3;
@@ -74,6 +77,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/standspots", post(jobs::post_standspots))
         .route("/api/jobs/viewerdata", post(jobs::post_viewerdata))
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
+        .route("/data/maps/{map}/{file}", get(get_render_asset))
         .route("/", get(get_index))
         .route("/viewer/{*rest}", get(get_viewer_asset))
         .layer(middleware::from_fn(security_headers))
@@ -635,6 +639,124 @@ async fn get_radar_png(
         bytes,
     )
         .into_response();
+    set_etag_headers(resp.headers_mut(), &etag);
+    resp
+}
+
+// ---- render*: the textured 3D export (`s6f3b_viewer3d.md` F3b-1a) -------------------------------
+
+/// Whitelists exactly the file names `s6f3b_viewer3d.md` names for the map cache directory's
+/// `render*` files - never a path, never anything the CLI's export step didn't itself write.
+fn is_render_asset_name(name: &str) -> bool {
+    if matches!(name, "render.glb" | "render.json" | "render_sky.glb") {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix("render_") else {
+        return false;
+    };
+    let Some((stem, ext)) = rest.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && matches!(ext, "bin" | "png")
+}
+
+fn render_asset_content_type(name: &str) -> &'static str {
+    if name.ends_with(".glb") {
+        "model/gltf-binary"
+    } else if name.ends_with(".json") {
+        "application/json"
+    } else if name.ends_with(".png") {
+        "image/png"
+    } else {
+        "application/octet-stream"
+    }
+}
+
+/// `64 KiB` read chunks for [`FileStream`] - large enough to keep syscall overhead low for a
+/// multi-megabyte `render.glb`, small enough not to balloon memory per concurrent download.
+const FILE_STREAM_CHUNK: usize = 64 * 1024;
+
+/// Streams an open file as a `Body` without ever holding the whole thing in memory
+/// (`s6f3b_viewer3d.md`: "отдача потоком без чтения целиком в память"), the same hand-rolled
+/// `Stream` idiom `solve.rs::RxStream` uses over a channel, here over `tokio::fs::File` directly.
+struct FileStream {
+    file: tokio::fs::File,
+    buf: Box<[u8; FILE_STREAM_CHUNK]>,
+}
+
+impl futures_core::Stream for FileStream {
+    type Item = Result<Bytes, std::io::Error>;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let mut read_buf = ReadBuf::new(this.buf.as_mut_slice());
+        match Pin::new(&mut this.file).poll_read(cx, &mut read_buf) {
+            Poll::Ready(Ok(())) => {
+                let n = read_buf.filled().len();
+                if n == 0 {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Ready(Some(Ok(Bytes::copy_from_slice(read_buf.filled()))))
+                }
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+async fn get_render_asset(
+    State(state): State<Arc<AppState>>,
+    AxPath((map, file)): AxPath<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_render_asset_name(&file) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let entry = match get_entry(&state, &map) {
+        Ok(e) => e,
+        Err(r) => return *r,
+    };
+    let path = entry.dir.join(&file);
+    let Some(etag) = file_identity_etag(&path) else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            "render assets not built yet for this map (run `cs2mod export-glb`)",
+        );
+    };
+    if if_none_match_hits(&headers, &etag) {
+        let mut resp = StatusCode::NOT_MODIFIED.into_response();
+        set_etag_headers(resp.headers_mut(), &etag);
+        return resp;
+    }
+    let file_handle = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => {
+            return api_error(
+                StatusCode::NOT_FOUND,
+                "render assets not built yet for this map (run `cs2mod export-glb`)",
+            );
+        }
+    };
+    let content_length = file_handle.metadata().await.ok().map(|m| m.len());
+    let body = Body::from_stream(FileStream {
+        file: file_handle,
+        buf: Box::new([0u8; FILE_STREAM_CHUNK]),
+    });
+    let mut resp = Response::new(body);
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(render_asset_content_type(&file)),
+    );
+    if let Some(len) = content_length {
+        resp.headers_mut().insert(
+            header::CONTENT_LENGTH,
+            HeaderValue::from_str(&len.to_string()).unwrap(),
+        );
+    }
     set_etag_headers(resp.headers_mut(), &etag);
     resp
 }

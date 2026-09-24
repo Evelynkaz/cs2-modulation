@@ -508,3 +508,48 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
+
+## three.js
+
+- URL: https://github.com/mrdoob/three.js
+- Copyright (c) 2010-2026 three.js authors
+- Version 0.186.0, npm package `three`, downloaded as the registry tarball
+  (`https://registry.npmjs.org/three/-/three-0.186.0.tgz`, sha1
+  `08f70ce80dffa9247a567b421165bec630e86f8d`) - no npm and no CDN at
+  runtime, see `viewer/lib/README.md`.
+- Vendored unmodified into `viewer/lib/three/`: `build/{three.module.js,
+  three.core.js}` (the ES module build, split across two files in this
+  version of the package; no minified `three.module.min.js` is published
+  for it, so the unminified build is used), `examples/jsm/loaders/
+  GLTFLoader.js`, its two dependencies
+  `examples/jsm/utils/{BufferGeometryUtils,SkeletonUtils}.js`, and
+  `examples/jsm/controls/OrbitControls.js` (the orbit-around-a-point mode;
+  free flight and the first-person view use this project's own pointer-lock
+  and yaw/pitch code instead, since the package's `PointerLockControls.js`
+  assumes a Y-up scene and ours is Z-up). Used by `viewer/js/scene3d.js` to
+  load `render.glb` and fly a free camera around it (`s6f3b_viewer3d.md`
+  F3b-1b).
+
+```
+The MIT License
+
+Copyright (c) 2010-2026 three.js authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```

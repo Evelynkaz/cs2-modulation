@@ -19,6 +19,7 @@ import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
 import { createMapView } from "./map2d.js?v=1";
 import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=1";
 import { createPanel, TYPE_LABELS } from "./panel.js?v=1";
+import { createSceneView } from "./scene3d.js?v=1";
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -39,13 +40,18 @@ function el(tag, props, ...children) {
 
 const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
-let radarView = null; // { recolor(): void } for the current map screen's canvas, if any.
+let radarView = null; // { recolor(): void } for the current map screen's 2D canvas, if any.
 // AMBER-7: the map view owns a ResizeObserver, a devicePixelRatio listener and a recolored
-// canvas - each `showMapScreen` must destroy the previous one instead of leaking it.
-let currentMapView = null;
+// canvas - each `showMapScreen` must destroy the previous one instead of leaking it. F3b-1b: a
+// map screen may now hold up to two views at once (2D + a lazily-created 3D scene, kept alive
+// together so the 2D/3D toggle is instant instead of reloading `render.glb` every switch) - both
+// go in `currentViews` and are destroyed together.
+let currentViews = [];
 function destroyCurrentMapView() {
-  currentMapView?.destroy();
-  currentMapView = null;
+  for (const v of currentViews) {
+    v.destroy();
+  }
+  currentViews = [];
 }
 
 // Screen changes go through the dedicated `#status` live region, not `#app` itself - `#app`'s
@@ -755,8 +761,23 @@ async function showMapScreen(map, opts = {}) {
   );
   const wrap = el("div", { className: "radar-wrap" });
   const canvas = el("canvas", { id: "radar-canvas", role: "img", "aria-label": `Радар карты ${map}` });
-  wrap.append(canvas);
+  const threeContainer = el("div", { className: "three-container", hidden: true });
+  const fpvOverlay = el("div", { className: "fpv-overlay", hidden: true });
+  wrap.append(canvas, threeContainer, fpvOverlay);
   const caption = el("p", { className: "hint" });
+
+  // F3b-1b: the 2D/3D toggle plus the 3D-only controls ("show collisions", fly/orbit).
+  const toggle2dBtn = el("button", { type: "button", textContent: strings.view3d.toggle2d, className: "primary" });
+  const toggle3dBtn = el("button", { type: "button", textContent: strings.view3d.toggle3d });
+  const collisionsBtn = el("button", { type: "button", textContent: strings.view3d.collisionsOn, hidden: true });
+  const cameraModeBtn = el("button", { type: "button", textContent: strings.view3d.modeOrbit, hidden: true });
+  const view3dStatus = el("span", { className: "hint" });
+  const viewToolbar = el(
+    "div",
+    { className: "view-toolbar" },
+    el("div", { className: "field-row", role: "group", "aria-label": "2D/3D" }, toggle2dBtn, toggle3dBtn, collisionsBtn, cameraModeBtn),
+    view3dStatus,
+  );
 
   // RED-1: params is the tallest box by far - it goes last, collapsed, so target/run/results
   // (what a two-minute solve actually needs seen) are the ones sitting in the visible band.
@@ -773,7 +794,7 @@ async function showMapScreen(map, opts = {}) {
   const sidebar = el("div", { className: "map-sidebar" }, targetBox, runBox, panelBox, paramsBox);
   const layout = el("div", { className: "solve-layout" }, wrap, sidebar);
 
-  app.append(header, caption, layout);
+  app.append(header, viewToolbar, caption, layout);
 
   const { data: radarData, error: radarError } = await fetchRadar(map);
   if (radarError !== undefined) {
@@ -792,9 +813,23 @@ async function showMapScreen(map, opts = {}) {
   };
   let pendingLevels = null; // { x, y, levels }
   let mapView = null;
+  let sceneView = null; // lazily created on first switch to 3D, kept alive alongside mapView
+  let viewMode = "2d"; // "2d" | "3d"
   let originStatusBox = null;
   let runRefs = null;
   let scopeSelectRef = null;
+  // The last result/selection, replayed into a 3D view created after they already happened
+  // (`ensureSceneView`) - `panel.js` owns the definitive copies, these just let a freshly built
+  // view catch up without re-running the solve.
+  let lastLineups = [];
+  let lastSelectedId = null;
+
+  // Every view currently alive for this screen - state changes (target/origin/lineups/selected)
+  // broadcast to all of them, so whichever is visible after a toggle is already correct
+  // (`s6f3b_viewer3d.md`: "состояние общее").
+  function views() {
+    return [mapView, sceneView].filter(Boolean);
+  }
 
   // AMBER-12: a right-click origin must be reflected in the "where to throw from" select, not
   // just on the map - otherwise the control keeps reading "по всей карте" while the request
@@ -813,15 +848,23 @@ async function showMapScreen(map, opts = {}) {
   }
 
   const panel = createPanel(panelBox, {
-    onSelect: (id) => mapView?.setSelected(id),
-    onHoverEnter: (id) => mapView?.setHover(id),
-    onHoverLeave: () => mapView?.setHover(null),
+    onSelect: (id) => {
+      lastSelectedId = id;
+      for (const v of views()) v.setSelected(id);
+    },
+    onHoverEnter: (id) => {
+      for (const v of views()) v.setHover(id);
+    },
+    onHoverLeave: () => {
+      for (const v of views()) v.setHover(null);
+    },
+    onFirstPerson: (l) => handleFirstPerson(l),
   });
 
   function applyTarget(t) {
     solveState.target = t;
     pendingLevels = null;
-    mapView?.setTarget(t);
+    for (const v of views()) v.setTarget(t);
     renderTargetBox();
   }
 
@@ -829,10 +872,18 @@ async function showMapScreen(map, opts = {}) {
   // target (and its cross on the map) in place - otherwise "run" solves for the old point.
   function clearTarget() {
     solveState.target = null;
-    mapView?.clearTarget();
+    for (const v of views()) v.clearTarget();
   }
 
-  async function handleMapClick(wx, wy) {
+  // `wz`, when given (a 3D click - the ray already hit a real surface), skips the `/api/levels`
+  // lookup entirely: there is no ambiguity to resolve, the hit point IS the target
+  // (`s6f3b_viewer3d.md`: "точка попадания с высотой = цель").
+  async function handleMapClick(wx, wy, wz) {
+    if (wz !== undefined) {
+      caption.textContent = "";
+      applyTarget({ x: wx, y: wy, z: wz, label: null });
+      return;
+    }
     const { data, error } = await fetchLevels(map, wx, wy);
     if (error !== undefined) {
       caption.className = "status status-error";
@@ -871,7 +922,7 @@ async function showMapScreen(map, opts = {}) {
 
   function handleOriginClick(wx, wy) {
     solveState.origin = { x: wx, y: wy, reach: solveState.params.originReach };
-    mapView?.setOrigin(solveState.origin);
+    for (const v of views()) v.setOrigin(solveState.origin);
     updateOriginStatus();
     syncScopeSelect();
   }
@@ -917,7 +968,7 @@ async function showMapScreen(map, opts = {}) {
       solveState.params.scope = scopeSelect.value;
       if (solveState.origin) {
         solveState.origin = null;
-        mapView?.clearOrigin();
+        for (const v of views()) v.clearOrigin();
         updateOriginStatus();
         syncScopeSelect();
       }
@@ -937,7 +988,7 @@ async function showMapScreen(map, opts = {}) {
       solveState.params.originReach = v;
       if (solveState.origin) {
         solveState.origin.reach = v;
-        mapView?.setOrigin(solveState.origin);
+        for (const v2 of views()) v2.setOrigin(solveState.origin);
         updateOriginStatus();
       }
     });
@@ -1074,12 +1125,24 @@ async function showMapScreen(map, opts = {}) {
     refs.status.textContent = `${label} - ${strings.solve.elapsed(elapsed)} - ${strings.solve.checkedCount(checkedTotal)}, ${strings.solve.verifiedCount(verifiedTotal)}`;
   }
 
-  function applyResult(data, cameFromCache) {
+  function applyResult(data, cameFromCache, broken) {
     const lineups = data.lineups ?? [];
     // AMBER-5: the progress cloud has done its job once a result is in - leaving it drawn just
     // buries the result overlays under however many search points were streamed.
-    mapView?.clearPoints();
-    mapView?.setLineups(lineups.map((l) => ({ id: l.id, feet: l.feet, rest: l.rest })));
+    // F3b-1b: the full lineup objects go to the views (not just id/feet/rest) - the 3D view also
+    // needs yaw/pitch/type/strength/runDeg to draw the aim line and drive the first-person view;
+    // the 2D view only ever reads id/feet/rest and ignores the rest.
+    // The `broken` groups the solve actually ran with (a snapshot from when the solve started, not
+    // whatever the params panel holds now) - the 3D trajectory must match the same world state.
+    for (const l of lineups) {
+      l.broken = broken;
+    }
+    lastLineups = lineups;
+    lastSelectedId = null;
+    for (const v of views()) {
+      v.clearPoints();
+      v.setLineups(lineups);
+    }
     // BLUE-19: use the server's own settled target (it can differ from the clicked point by a
     // few units), not `solveState.target`.
     const settledTarget = data.target ? { x: data.target[0], y: data.target[1], z: data.target[2] } : solveState.target;
@@ -1115,9 +1178,13 @@ async function showMapScreen(map, opts = {}) {
       return;
     }
     solveState.running = true;
-    mapView?.clearPoints();
-    mapView?.setLineups([]);
-    mapView?.setSelected(null);
+    lastLineups = [];
+    lastSelectedId = null;
+    for (const v of views()) {
+      v.clearPoints();
+      v.setLineups([]);
+      v.setSelected(null);
+    }
     panel.clear();
     runRefs.runBtn.disabled = true;
     runRefs.cancelBtn.hidden = false;
@@ -1126,6 +1193,9 @@ async function showMapScreen(map, opts = {}) {
 
     const body = bodyOverride ?? buildQuery(map, solveState.target, solveState.origin, solveState.params);
     syncHash(body);
+    // Snapshot now, not read back from `solveState.params.broken` in `onResult` - the panel stays
+    // interactive while the solve runs, so those checkboxes could have changed by the time it ends.
+    const brokenAtStart = [...(body.broken ?? [])];
 
     const startedAt = Date.now();
     let lastPhase = "queued";
@@ -1150,12 +1220,14 @@ async function showMapScreen(map, opts = {}) {
         }
         if (msg.checked) {
           checkedTotal += msg.checked.length;
-          mapView?.addCheckedPoints(msg.checked.map((p) => ({ x: p[0], y: p[1] })));
+          const pts = msg.checked.map((p) => ({ x: p[0], y: p[1] }));
+          for (const v of views()) v.addCheckedPoints(pts);
         } else if (msg.verified) {
           verifiedTotal += msg.verified.length;
           // AMBER-4: `ok` (index 3) tells a verified-and-failed candidate apart from a real find
           // - painting both in the bright "found" colour would misrepresent the search.
-          mapView?.addVerifiedPoints(msg.verified.map((p) => ({ x: p[0], y: p[1], ok: !!p[3] })));
+          const pts = msg.verified.map((p) => ({ x: p[0], y: p[1], ok: !!p[3] }));
+          for (const v of views()) v.addVerifiedPoints(pts);
         }
       },
       onResult: (data, streamed) => {
@@ -1163,7 +1235,7 @@ async function showMapScreen(map, opts = {}) {
         // AMBER-8: "came from cache" is whether the stream reader ever saw a non-terminal line,
         // not whether any points happened to land on the map - a first solve that streams
         // nothing (a target inside solid geometry) is not a cache hit.
-        applyResult(data, !streamed);
+        applyResult(data, !streamed, brokenAtStart);
       },
       onError: (message) => {
         finish();
@@ -1193,7 +1265,7 @@ async function showMapScreen(map, opts = {}) {
     applyTarget({ x: body.target[0], y: body.target[1], z: body.target[2], label: null });
     if (body.origin) {
       solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
-      mapView?.setOrigin(solveState.origin);
+      for (const v of views()) v.setOrigin(solveState.origin);
     }
     if (body.scope) {
       solveState.params.scope = body.scope;
@@ -1218,11 +1290,150 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
+  // ---- F3b-1b: the 2D/3D toggle, "show collisions", camera mode, and the first-person view ------
+
+  function ensureSceneView() {
+    if (sceneView) {
+      return sceneView;
+    }
+    sceneView = createSceneView(threeContainer, map, mapSummary, state.theme);
+    currentViews.push(sceneView);
+    sceneView.onClick((wx, wy, wz) => handleMapClick(wx, wy, wz));
+    sceneView.onLoadProgress((loaded, total) => {
+      const percent = total > 0 ? Math.round((loaded / total) * 100) : null;
+      view3dStatus.className = "hint";
+      view3dStatus.textContent = strings.view3d.loading(percent);
+    });
+    sceneView.onLoadDone(() => {
+      view3dStatus.textContent = strings.view3d.flyHint;
+    });
+    sceneView.onLoadError((msg) => {
+      view3dStatus.className = "hint status-error";
+      view3dStatus.textContent = `${strings.view3d.loadError} ${msg ?? ""}`.trim();
+    });
+    // Catch up on state this view missed by not existing yet.
+    if (solveState.target) {
+      sceneView.setTarget(solveState.target);
+    }
+    if (solveState.origin) {
+      sceneView.setOrigin(solveState.origin);
+    }
+    sceneView.setLineups(lastLineups);
+    if (lastSelectedId) {
+      sceneView.setSelected(lastSelectedId);
+    }
+    return sceneView;
+  }
+
+  function switchViewMode(mode) {
+    if (viewMode === mode) {
+      return;
+    }
+    if (mode === "3d" && !mapSummary.hasRender) {
+      view3dStatus.className = "hint status-error";
+      view3dStatus.textContent = strings.view3d.noRender;
+      return;
+    }
+    viewMode = mode;
+    if (mode === "3d") {
+      // Unhide *before* creating/resizing the scene view - `threeContainer.getBoundingClientRect()`
+      // reads 0x0 while `hidden` (`display: none`), and nothing else is guaranteed to correct that
+      // later (a `ResizeObserver` on a non-rendered box doesn't fire until it renders again).
+      canvas.hidden = true;
+      threeContainer.hidden = false;
+      const view = ensureSceneView();
+      view.resize();
+      radarView = null; // theme toggle no-ops while 3D is shown, same as off the map screen
+      toggle3dBtn.className = "primary";
+      toggle2dBtn.className = "";
+      collisionsBtn.hidden = false;
+      cameraModeBtn.hidden = false;
+      view3dStatus.className = "hint";
+      view3dStatus.textContent = strings.view3d.flyHint;
+    } else {
+      canvas.hidden = false;
+      threeContainer.hidden = true;
+      radarView = mapView;
+      toggle2dBtn.className = "primary";
+      toggle3dBtn.className = "";
+      collisionsBtn.hidden = true;
+      cameraModeBtn.hidden = true;
+      view3dStatus.className = "hint";
+      view3dStatus.textContent = "";
+    }
+  }
+  toggle2dBtn.addEventListener("click", () => switchViewMode("2d"));
+  toggle3dBtn.addEventListener("click", () => switchViewMode("3d"));
+
+  let collisionsOn = false;
+  collisionsBtn.addEventListener("click", () => {
+    collisionsOn = !collisionsOn;
+    sceneView?.setCollisionOverlay(collisionsOn);
+    collisionsBtn.textContent = collisionsOn ? strings.view3d.collisionsOff : strings.view3d.collisionsOn;
+  });
+  cameraModeBtn.addEventListener("click", () => {
+    if (!sceneView) {
+      return;
+    }
+    const next = sceneView.getCameraMode() === "orbit" ? "fly" : "orbit";
+    sceneView.setCameraMode(next);
+    cameraModeBtn.textContent = next === "orbit" ? strings.view3d.modeFly : strings.view3d.modeOrbit;
+  });
+
+  function onFpvKeydown(e) {
+    if (e.key === "Escape") {
+      sceneView?.exitFirstPerson();
+    }
+  }
+
+  function copyFpvConsole(text) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+  }
+
+  function renderFpvOverlay(info) {
+    fpvOverlay.replaceChildren(
+      el("div", { className: "fpv-crosshair", "aria-hidden": "true" }),
+      el(
+        "div",
+        { className: "fpv-label" },
+        el("div", { textContent: `${info.how} - ${info.click}` }),
+        el("p", { className: "hint", textContent: strings.fpv.exitHint }),
+      ),
+      el(
+        "div",
+        { className: "fpv-controls" },
+        el("button", { type: "button", textContent: strings.fpv.copyButton, onclick: () => copyFpvConsole(info.console) }),
+        el("button", { type: "button", textContent: strings.fpv.exitButton, onclick: () => sceneView?.exitFirstPerson() }),
+      ),
+    );
+  }
+
+  function handleFirstPerson(l) {
+    if (viewMode !== "3d") {
+      switchViewMode("3d");
+      if (viewMode !== "3d") {
+        return; // `switchViewMode` refused (no render.glb for this map) - `view3dStatus` said why.
+      }
+    }
+    const view = ensureSceneView();
+    const info = view.enterFirstPerson(l, () => {
+      fpvOverlay.hidden = true;
+      document.removeEventListener("keydown", onFpvKeydown);
+    });
+    renderFpvOverlay(info);
+    fpvOverlay.hidden = false;
+    document.addEventListener("keydown", onFpvKeydown);
+  }
+
   const img = new Image();
   img.onload = () => {
     mapView = createMapView(canvas, radarData, img, state.theme);
-    radarView = mapView;
-    currentMapView = mapView;
+    currentViews.push(mapView);
+    if (viewMode === "2d") {
+      radarView = mapView;
+    }
     mapView.onClick((wx, wy) => handleMapClick(wx, wy));
     mapView.onRightClick((wx, wy) => handleOriginClick(wx, wy));
     if (opts.autoBody) {

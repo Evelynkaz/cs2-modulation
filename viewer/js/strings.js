@@ -149,6 +149,27 @@ export const strings = {
     emptyReasonPrefix: "Ничего не найдено",
   },
 
+  view3d: {
+    toggle2d: "2D",
+    toggle3d: "3D",
+    loading: (percent) => (percent != null ? `Загрузка модели: ${percent}%` : "Загрузка модели..."),
+    loadError: "Не удалось загрузить 3D-модель карты.",
+    noRender: "Для этой карты ещё не готова текстурованная 3D-модель (render.glb).",
+    modeFly: "Полёт",
+    modeOrbit: "Облёт",
+    collisionsOn: "Показать коллизии",
+    collisionsOff: "Скрыть коллизии",
+    flyHint: "WASD - движение, ПКМ - смотреть, Shift - быстрее, Space/Ctrl - вверх/вниз, колесо - скорость.",
+  },
+
+  fpv: {
+    button: "Вид игрока",
+    exitButton: "Выйти (Esc)",
+    exitHint: "Esc или кнопка - выход из вида игрока.",
+    notReady: "Сначала переключитесь на 3D и дождитесь загрузки модели.",
+    copyButton: "Скопировать setpos/setang",
+  },
+
   errors: {
     serverDown: "Сервер cs2mod serve не отвечает.",
     streamBroken: "Соединение с задачей прервалось. Переподключиться?",

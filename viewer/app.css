@@ -226,6 +226,7 @@ table.maps tr:last-child td {
   background: var(--panel);
   height: 70vh;
   min-height: 320px;
+  position: relative;
 }
 
 canvas#radar-canvas {
@@ -238,6 +239,93 @@ canvas#radar-canvas {
 
 canvas#radar-canvas:active {
   cursor: grabbing;
+}
+
+/* `[hidden]` alone loses to the plain-id rules above on specificity - these re-assert it for the
+   three elements `main.js`'s 2D/3D/first-person toggle shows and hides. */
+canvas#radar-canvas[hidden],
+.three-container[hidden],
+.fpv-overlay[hidden] {
+  display: none;
+}
+
+.view-toolbar {
+  margin-bottom: 0.5rem;
+}
+
+.three-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: #0b1220;
+}
+
+.three-container canvas {
+  display: block;
+  outline: none;
+}
+
+.fpv-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.fpv-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+}
+
+.fpv-crosshair::before,
+.fpv-crosshair::after {
+  content: "";
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 0 2px #000;
+}
+
+.fpv-crosshair::before {
+  left: 7px;
+  top: 0;
+  width: 2px;
+  height: 16px;
+}
+
+.fpv-crosshair::after {
+  top: 7px;
+  left: 0;
+  width: 16px;
+  height: 2px;
+}
+
+.fpv-label {
+  align-self: flex-start;
+  margin: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.fpv-label .hint {
+  color: #d7dae0;
+}
+
+.fpv-controls {
+  align-self: center;
+  margin: 0 0 0.75rem;
+  display: flex;
+  gap: 0.5rem;
+  pointer-events: auto;
 }
 
 .solve-layout {

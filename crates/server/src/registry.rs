@@ -159,6 +159,10 @@ impl MapEntry {
     pub fn has_radar(&self) -> bool {
         self.dir.join("viewer-map.png").is_file()
     }
+
+    pub fn has_render(&self) -> bool {
+        self.dir.join("render.glb").is_file()
+    }
 }
 
 /// `GET /api/maps`' shape.
@@ -171,6 +175,11 @@ pub struct MapSummary {
     pub has_radar: bool,
     pub has_glass: bool,
     pub has_doors: bool,
+    /// `render.glb` exists in this map's cache directory (`s6f3b_viewer3d.md` F3b-1a).
+    pub has_render: bool,
+    /// `render.json`'s own `formatVersion`, when `has_render` and the file parses; `None`
+    /// otherwise (including a `render.glb` written without a readable `render.json` yet).
+    pub render_version: Option<u32>,
     pub build: String,
     /// True when there's no complete cache directory for this map's current `.vpk` hash (or
     /// when there's no configured game install to compare against at all).
@@ -413,6 +422,7 @@ fn map_summary(map: &str, dir: &Path, stale: bool) -> Option<MapSummary> {
         ),
         Err(_) => (false, false),
     };
+    let has_render = dir.join("render.glb").is_file();
     Some(MapSummary {
         map: map.to_string(),
         has_lineups: dir.join("nav.json").is_file(),
@@ -420,9 +430,22 @@ fn map_summary(map: &str, dir: &Path, stale: bool) -> Option<MapSummary> {
         has_radar: dir.join("viewer-map.png").is_file(),
         has_glass,
         has_doors,
+        has_render,
+        render_version: has_render.then(|| render_json_version(dir)).flatten(),
         build: manifest.meta.game_build,
         stale,
     })
+}
+
+/// `render.json`'s `formatVersion` field, if the file is present and parses (`s6f3a3_map.md`
+/// §6). Any read/parse failure -> `None`, same "no error, just missing" treatment as the rest of
+/// this function's optional fields.
+fn render_json_version(dir: &Path) -> Option<u32> {
+    let text = fs::read_to_string(dir.join("render.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    json.get("formatVersion")
+        .and_then(serde_json::Value::as_u64)
+        .map(|v| v as u32)
 }
 
 /// A fresh `OnceLock` holding a clone of `cell`'s value, if it was already set - used by

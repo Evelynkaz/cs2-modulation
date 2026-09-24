@@ -19,7 +19,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }
 # Only the `Stream` trait, to implement `axum::body::Body::from_stream` by hand over a
 # `tokio::sync::mpsc` channel (`s6d_solve_api.md`'s streaming mechanism); already compiled into
 # the tree as an `axum-core` dependency, so this adds no new crate to the build.

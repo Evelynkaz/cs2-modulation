@@ -63,6 +63,47 @@ export async function fetchLevels(map, x, y) {
   return getJson(`/api/levels?map=${encodeURIComponent(map)}&x=${x}&y=${y}`);
 }
 
+// `s6f3b_viewer3d.md` F3b-1a: `render*` files served under `/data/maps/<map>/`, same whitelist
+// and ETag/304 machinery as `viewer-map.png`.
+export function renderGlbUrl(map) {
+  return `/data/maps/${encodeURIComponent(map)}/render.glb`;
+}
+
+export async function fetchRenderJson(map) {
+  return getJson(`/data/maps/${encodeURIComponent(map)}/render.json`);
+}
+
+export function meshUrl(map) {
+  return `/api/mesh?map=${encodeURIComponent(map)}`;
+}
+
+// `GET /api/trajectory`: a single throw's flight ticks. `spec`: `{x,y,z,type,pitch,yaw,strength,
+// runDeg,broken}` (feet + throw parameters, same names the query string uses).
+export async function fetchTrajectory(map, spec) {
+  const params = new URLSearchParams({
+    map,
+    x: spec.x,
+    y: spec.y,
+    z: spec.z,
+    type: spec.type,
+    pitch: spec.pitch,
+    yaw: spec.yaw,
+    strength: spec.strength,
+  });
+  if (spec.runDeg) {
+    params.set("runDeg", spec.runDeg);
+  }
+  if (spec.broken && spec.broken.length > 0) {
+    params.set("broken", spec.broken.join(","));
+  }
+  return getJson(`/api/trajectory?${params.toString()}`);
+}
+
+// `GET /api/smoke`: the resting cloud's voxel cell centers around `(x,y,z)`.
+export async function fetchSmoke(map, x, y, z) {
+  return getJson(`/api/smoke?map=${encodeURIComponent(map)}&x=${x}&y=${y}&z=${z}`);
+}
+
 // Runs `POST /api/lineup` and reads its NDJSON stream. `onLine(msg)` fires for every progress
 // line (`phase`/`checked`/`verified`); the terminal `result`/`error` line is not passed to it -
 // it becomes this function's own resolution instead. `signal` aborts the fetch and the read loop

@@ -106,6 +106,45 @@ fn one_triangle_mesh() -> CollisionMesh {
     mesh
 }
 
+/// A large flat floor at `z=0` (two triangles, CCW from above so the normal points +Z) - big
+/// enough that a grenade thrown from well above its center bounces and settles without ever
+/// leaving the floor's footprint.
+fn floor_mesh() -> CollisionMesh {
+    let mut mesh = CollisionMesh::new();
+    let a = mesh
+        .add_attribute(CollisionAttribute {
+            name: "Default".to_string(),
+            interact_as: vec![],
+            interact_with: vec![],
+            interact_exclude: vec![],
+            synthetic: false,
+        })
+        .unwrap();
+    let o = mesh.add_object(MeshObject {
+        kind: ObjectKind::WorldHull,
+        classname: None,
+        targetname: None,
+        model: None,
+        hammer_id: None,
+        source_index: 0,
+        hull_flags: None,
+    });
+    mesh.push_triangles(
+        &[
+            [-5000.0, -5000.0, 0.0],
+            [5000.0, -5000.0, 0.0],
+            [5000.0, 5000.0, 0.0],
+            [-5000.0, 5000.0, 0.0],
+        ],
+        &[[0, 1, 2], [0, 2, 3]],
+        a,
+        |_| SurfaceProperty::NONE,
+        o,
+    )
+    .unwrap();
+    mesh
+}
+
 /// Writes a complete cache directory for `de_test` with the given mesh/nav/entities under
 /// `cache_root` (a fake install root nested inside it, cleaned up along with everything else),
 /// and returns the map's own cache dir.
@@ -672,6 +711,139 @@ async fn radar_png_success_path() {
         .await
         .unwrap();
     assert_eq!(&bytes[..], b"fake png bytes");
+}
+
+#[tokio::test]
+async fn render_asset_success_path_streams_bytes_with_etag_and_304() {
+    let cache_root = temp_dir("render_glb");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    fs::write(dir.join("render.glb"), b"fake glb bytes").unwrap();
+    let router = router_over(&cache_root);
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/data/maps/de_test/render.glb")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        "model/gltf-binary"
+    );
+    let etag = resp
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"fake glb bytes");
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/data/maps/de_test/render.glb")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn render_asset_name_whitelist_rejects_everything_else() {
+    let cache_root = temp_dir("render_whitelist");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    fs::write(dir.join("render.glb"), b"fake glb bytes").unwrap();
+    fs::write(dir.join("world.cgeo"), b"do not serve me").unwrap();
+    let router = router_over(&cache_root);
+
+    for uri in [
+        "/data/maps/de_test/world.cgeo",
+        "/data/maps/de_test/render.glb.tmp-1",
+        "/data/maps/de_test/render_..bin",
+        "/data/maps/de_test/render_%2e%2e.bin",
+    ] {
+        let resp = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), StatusCode::OK, "{uri}");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!bytes.starts_with(b"do not serve me"), "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn render_json_reports_missing_render_with_404() {
+    let cache_root = temp_dir("render_missing");
+    let _dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
+
+    let (status, body) = get(&router, "/data/maps/de_test/render.json").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("render assets not built yet")
+    );
+}
+
+#[tokio::test]
+async fn maps_has_render_and_render_version() {
+    let cache_root = temp_dir("render_summary");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    fs::write(dir.join("render.glb"), b"fake glb bytes").unwrap();
+    fs::write(dir.join("render.json"), r#"{"formatVersion":1}"#).unwrap();
+    let router = router_over(&cache_root);
+
+    let (status, body) = get(&router, "/api/maps").await;
+    assert_eq!(status, StatusCode::OK);
+    let maps = body.as_array().unwrap();
+    assert_eq!(maps.len(), 1);
+    assert_eq!(maps[0]["hasRender"], json!(true));
+    assert_eq!(maps[0]["renderVersion"], json!(1));
+}
+
+// `s6f3b_viewer3d.md` F3b-1b: the viewer draws bounce marks from `/api/trajectory`'s own
+// `contacts`, not a Z-local-minimum guess - a near-vertical throw onto a flat floor bounces
+// (losing 55% of its speed per `ThrowConstants::default().elasticity` each time) several times
+// before settling, so `contacts` must be non-empty and agree with `bounces`.
+#[tokio::test]
+async fn trajectory_contacts_match_recorded_bounces_on_a_flat_floor() {
+    let cache_root = temp_dir("traj_contacts");
+    let _dir = sample_cache_dir(&cache_root, floor_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
+
+    let (status, body) = get(
+        &router,
+        "/api/trajectory?map=de_test&x=0&y=0&z=200&type=Stand&pitch=80&yaw=0&strength=1&runDeg=0",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let bounces = body["bounces"].as_u64().expect("bounces");
+    assert!(bounces > 0, "expected at least one bounce: {body}");
+    let contacts = body["contacts"].as_array().expect("contacts array");
+    assert_eq!(contacts.len() as u64, bounces, "{body}");
+    for c in contacts {
+        let pt = c.as_array().expect("contact triple");
+        let cz = pt[2].as_f64().expect("contact z");
+        assert!(cz.abs() < 20.0, "contact {pt:?} not on the z=0 floor");
+    }
 }
 
 #[tokio::test]

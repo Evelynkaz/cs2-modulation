@@ -30,7 +30,7 @@ attribute vec2 uv1;
 #ifdef LIGHTING_PROBE
 attribute vec4 _lpv;
 #endif
-#ifdef HAS_LAYERS
+#if defined( HAS_LAYERS ) || defined( HAS_ENV_LAYER2 )
 attribute float _blend;
 #endif
 
@@ -43,7 +43,7 @@ varying vec2 vUv1;
 #ifdef LIGHTING_PROBE
 varying vec4 vLpv;
 #endif
-#ifdef HAS_LAYERS
+#if defined( HAS_LAYERS ) || defined( HAS_ENV_LAYER2 )
 varying float vBlendW;
 #endif
 
@@ -64,7 +64,7 @@ void main() {
 #ifdef LIGHTING_PROBE
   vLpv = _lpv;
 #endif
-#ifdef HAS_LAYERS
+#if defined( HAS_LAYERS ) || defined( HAS_ENV_LAYER2 )
   vBlendW = _blend;
 #endif
   gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
@@ -87,7 +87,7 @@ varying vec2 vUv1;
 #ifdef LIGHTING_PROBE
 varying vec4 vLpv;
 #endif
-#ifdef HAS_LAYERS
+#if defined( HAS_LAYERS ) || defined( HAS_ENV_LAYER2 )
 varying float vBlendW;
 #endif
 
@@ -134,6 +134,68 @@ uniform sampler2D uBlendModMap;
 #elif defined( HAS_BLEND_MOD_CONST )
 uniform vec3 uBlendModConstant;
 #endif
+#ifdef HAS_LAYER2_NORMAL_MAP
+uniform sampler2D uLayer2NormalMap;
+#endif
+#endif
+
+// csgo_environment(_blend) height-band blend + roughness/AO-levels/metalness remap
+// (s6f3a7_env_materials.md change items 1/3, csgo_environment.frag.slang:57-73,348-377,
+// 769,795-897,1046). HAS_ENV_HEIGHT1 alone: plain (non-blend) csgo_environment, roughness
+// remap + AO levels + metalness only. HAS_ENV_LAYER2 (always paired with HAS_ENV_HEIGHT1):
+// csgo_environment_blend, mixes layer 2 in by the height-band weight below.
+#ifdef HAS_ENV_HEIGHT1
+uniform sampler2D uEnvHeight1;
+uniform float uEnvRoughnessContrast1;
+uniform float uEnvRoughnessBrightness1;
+uniform float uEnvNormalContrast1;
+uniform vec3 uEnvAoLevels1;
+uniform float uEnvMetalness1Enabled;
+#endif
+// review fix item 1 (s6f3a7_env_materials.md review): per-layer colour correction --
+// csgo_environment.frag.slang:781-787,804-810. uCCnColorAdjust/uCCnAdjust are
+// g_mTextureColorAdjust{n}/g_mTextureAdjust{n} (RenderMaterial.cs:671-744,
+// crates/s2render/src/color_correct.rs); uCCnMode is g_nColorCorrectionMode{n}; uCCnTm is
+// (tintMaskContrast{n}, tintMaskBrightness{n}), remapping height{n}.g into the tintMask{n} this
+// mixes colorAdjust in by.
+#ifdef HAS_CC1
+uniform mat4 uCC1ColorAdjust;
+uniform mat4 uCC1Adjust;
+uniform float uCC1Mode;
+uniform vec2 uCC1Tm;
+#endif
+#ifdef HAS_CC2
+uniform mat4 uCC2ColorAdjust;
+uniform mat4 uCC2Adjust;
+uniform float uCC2Mode;
+uniform vec2 uCC2Tm;
+#endif
+#ifdef HAS_ENV_LAYER2
+// review fix item 2: layer 2's own UV transform (csgo_environment.vert.slang:175-180,
+// utils.slang:135-138 RotateVector2D) -- (scale.x, scale.y, offset.x, offset.y) plus a rotation
+// in degrees (90 on a couple of Ancient/Train materials); the centre is always the default 0.5
+// on every material surveyed, so it is folded into the formula below.
+uniform vec4 uEnvUv2;
+uniform float uEnvUvRot2;
+#ifdef ENV_FACING2
+// F_BLEND_BY_FACING_DIRECTION_2 (csgo_environment.vert.slang:246-252): the paint weight is
+// scaled by how much the surface faces g_vFacingDirection2 -- e.g. moss only on upward faces.
+uniform vec3 uEnvFacingDir2;
+uniform vec2 uEnvFacingMinMax2;
+#endif
+uniform sampler2D uEnvColor2;
+uniform sampler2D uEnvNormal2;
+uniform sampler2D uEnvHeight2;
+uniform float uEnvRoughnessContrast2;
+uniform float uEnvRoughnessBrightness2;
+uniform float uEnvNormalContrast2;
+uniform vec3 uEnvAoLevels2;
+uniform float uEnvMetalness2Enabled;
+uniform float uEnvHeightScale1;
+uniform float uEnvHeightZeroPoint1;
+uniform float uEnvHeightScale2;
+uniform float uEnvHeightZeroPoint2;
+uniform float uEnvBlendSoftness2;
 #endif
 
 // review fix item 1: complex.frag.slang:191,227-231 GetStandardSelfIllumination -
@@ -219,13 +281,92 @@ void main() {
   // texture (spec §3.9.3) - not (0,0,0,0), which is what a real, unbound sampler2D returns and
   // was making BLEND water materials (factor 1,1,1,1, no texture) invisible.
   vec4 albedoColor = uBaseColorFactor;
+// review fix item 2: layer 2's own UV (csgo_environment.vert.slang:175-180's RotateVector2D
+// around a fixed center=(0.5,0.5), rotation=0) -- every layer-2 sample (height2/color2/normal2/
+// metalness2) reads through this, not the mesh's raw vUv.
+// review fix item 10 (load time): uEnvHeight1/2 sampled exactly once each here and reused below
+// (tint-mask lookup, blend weight, metalness) -- previously sampled up to 3x per fragment.
+#ifdef HAS_ENV_HEIGHT1
+  vec4 envHeight1Sample = texture2D( uEnvHeight1, vUv );
+#endif
+#ifdef HAS_ENV_LAYER2
+  vec2 vUv2;
+  {
+    vec2 p = uEnvUv2.xy * ( vUv - 0.5 );
+    float r = radians( uEnvUvRot2 );
+    vUv2 = vec2( cos( r ) * p.x - sin( r ) * p.y, sin( r ) * p.x + cos( r ) * p.y ) + 0.5 + uEnvUv2.zw;
+  }
+  vec4 envHeight2Sample = texture2D( uEnvHeight2, vUv2 );
+#endif
+
 #ifdef HAS_ALBEDO_MAP
   {
     vec4 s = texture2D( uAlbedoMap, vUv );
 #ifdef ALBEDO_MANUAL_SRGB
     s.rgb = srgbToLinear( s.rgb );
 #endif
+    // review fix item 1: csgo_environment.frag.slang:781-787 -- tintMask1 = remap(height1.g),
+    // mixes the untinted-or-raw colour with the tinted colour-adjust matrix's own output.
+#ifdef HAS_CC1
+    {
+      float tm = clamp( ( ( envHeight1Sample.g - 0.5 ) * uCC1Tm.x + 0.5 ) * uCC1Tm.y, 0.0, 1.0 );
+      vec3 base = uCC1Mode > 0.5 ? ( uCC1Adjust * s ).rgb : s.rgb;
+      s.rgb = mix( base, ( uCC1ColorAdjust * s ).rgb, tm );
+    }
+#endif
     albedoColor *= s;
+  }
+#endif
+
+// Height-band blend weight (csgo_environment.frag.slang:348-377 GetBlendWeights, legacy
+// F_USE_NEW_BLENDING==0 path only -- always run here regardless of what the material actually
+// sets; render.json's own extras.envLayer2.unsupported (crates/s2render/src/material.rs review
+// fix item 8) flags a material that needs BlendLayer/BlendBandWeight instead, which this shader
+// does not implement). Computed once, up front, and reused below for colour/normal/roughness/AO/
+// metalness -- every one of those is mix(layer1, layer2, envWeight2), i.e. the reference's own
+// CombineColor/CombineNormal/CombineRoughness/CombineOcclusion at their default
+// overlay=0/replace=1/combine=0 (:250-260,238-241,243-247,233-236) -- this shader does not read
+// a material's own values for those params if it overrides any of them.
+// The per-vertex softness bias (vColorBlendValues.w) is not carried by _blend (that varying
+// only ever held the paint weight, vColorBlendValues.x) -- only the material's own
+// g_flBlendSoftness2 constant widens the seam here, so a level-painted softness override
+// would render a slightly harder-edged seam than the game's.
+#ifdef HAS_ENV_LAYER2
+  float envWeight2;
+  {
+    float baseHeight1 = envHeight1Sample.r - uEnvHeightZeroPoint1;
+    float baseHeight2 = envHeight2Sample.r - uEnvHeightZeroPoint2;
+    float softness = clamp( uEnvBlendSoftness2, 0.001, 1.0 );
+    float hh1 = uEnvHeightScale1 + softness;
+    float height1w = baseHeight1 * hh1;
+    float hh2 = uEnvHeightScale2 + softness;
+    float h22 = baseHeight2 * ( uEnvHeightScale2 - softness );
+    float b1 = ( -uEnvHeightZeroPoint1 * hh1 - ( 1.0 - uEnvHeightZeroPoint2 ) * hh2 ) - softness;
+    float b2 = ( 1.0 - uEnvHeightZeroPoint1 ) * hh1 - ( -uEnvHeightZeroPoint2 * hh2 );
+    float envPaint2 = vBlendW;
+#ifdef ENV_FACING2
+    envPaint2 *= smoothstep( uEnvFacingMinMax2.x, uEnvFacingMinMax2.y, dot( uEnvFacingDir2, normalize( vNormal ) ) * 0.5 + 0.5 );
+#endif
+    float h2x = h22 + mix( b1, b2, envPaint2 );
+    float mx = max( height1w, h2x );
+    float w1 = max( height1w - mx + softness, 0.0 ) + 0.001;
+    float w2 = max( h2x - mx + softness, 0.0 );
+    envWeight2 = w2 / ( w1 + w2 );
+  }
+  {
+    vec4 s2 = texture2D( uEnvColor2, vUv2 );
+#ifdef ENV_COLOR2_MANUAL_SRGB
+    s2.rgb = srgbToLinear( s2.rgb );
+#endif
+#ifdef HAS_CC2
+    {
+      float tm = clamp( ( ( envHeight2Sample.g - 0.5 ) * uCC2Tm.x + 0.5 ) * uCC2Tm.y, 0.0, 1.0 );
+      vec3 base = uCC2Mode > 0.5 ? ( uCC2Adjust * s2 ).rgb : s2.rgb;
+      s2.rgb = mix( base, ( uCC2ColorAdjust * s2 ).rgb, tm );
+    }
+#endif
+    albedoColor.rgb = mix( albedoColor.rgb, s2.rgb, envWeight2 );
+    albedoColor.a = mix( albedoColor.a, s2.a, envWeight2 );
   }
 #endif
 
@@ -236,6 +377,7 @@ void main() {
   }
 #endif
 #ifdef HAS_LAYERS
+  float layerBlendB;
   {
 #ifdef HAS_LAYER2_MAP
     vec3 layer2Color = texture2D( uLayer2Map, vUv ).rgb;
@@ -252,8 +394,8 @@ void main() {
 #else
     vec3 m = vec3( 0.0, 1.0, 0.0 );
 #endif
-    float b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );
-    albedoColor.rgb = mix( albedoColor.rgb, layer2Color, b );
+    layerBlendB = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );
+    albedoColor.rgb = mix( albedoColor.rgb, layer2Color, layerBlendB );
   }
 #endif
 
@@ -271,10 +413,29 @@ void main() {
 #ifdef HAS_AO
   ao *= texture2D( uAoMap, vUv )[ AO_CHANNEL ];
 #endif
+
+// s6f3a7_env_materials.md change item 1: layer 1/2's own g_vAmbientOcclusionLevels{1,2} and
+// g_tHeight{1,2}.a metalness (gated by g_bMetalness{1,2}), mixed by envWeight2 the same way
+// as colour above (csgo_environment.frag.slang:1046,873-898).
+#ifdef HAS_ENV_HEIGHT1
+  vec3 envAoLevels = uEnvAoLevels1;
+  float envMetalness = envHeight1Sample.a * uEnvMetalness1Enabled;
+#ifdef HAS_ENV_LAYER2
+  envMetalness = mix( envMetalness, envHeight2Sample.a * uEnvMetalness2Enabled, envWeight2 );
+  envAoLevels = mix( uEnvAoLevels1, uEnvAoLevels2, envWeight2 );
+#endif
+#endif
 #ifdef ALBEDO_ALPHA_AO
   // review fix item 6: extras.baseColorAlphaMeaning == "ao" (csgo_environment/_blend, opaque) -
-  // REPORT.md's channel table; the sqrt-ish remap matches the reference's own AO curve.
+  // REPORT.md's channel table.
+#ifdef HAS_ENV_HEIGHT1
+  // s6f3a7_env_materials.md change item 1: the reference's own AO curve
+  // (csgo_environment.frag.slang:1046) -- mix(x,z,pow(ao,y)); at the shader's default levels
+  // (0,0.5,1) this is exactly the sqrt approximation replaced below.
+  ao *= mix( envAoLevels.x, envAoLevels.z, pow( max( albedoColor.a, 0.0 ), max( envAoLevels.y, 0.001 ) ) );
+#else
   ao *= pow( max( albedoColor.a, 0.0 ), 0.5 );
+#endif
 #endif
   float metalness = uMetalnessFactor;
 #ifdef HAS_METALNESS_MAP
@@ -283,6 +444,8 @@ void main() {
   // review fix item 6: extras.baseColorAlphaMeaning == "metalness" (F_METALNESS_TEXTURE, opaque,
   // no separate g_tMetalness texture -- complex.frag.slang:618).
   metalness = albedoColor.a;
+#elif defined( HAS_ENV_HEIGHT1 )
+  metalness = envMetalness;
 #endif
   float roughness = uRoughnessFactor;
 
@@ -295,6 +458,13 @@ void main() {
 #ifdef HAS_NORMAL_MAP
   {
     vec4 t = texture2D( uNormalMap, vUv );
+#ifdef HAS_LAYER2_NORMAL_MAP
+    // s6f3a7_env_materials.md change item 5, complex.frag.slang:455-456: "more correct to
+    // blend normals after decoding, but it's not actually how S2 does it" -- the two layers' raw
+    // (still HemiOct-encoded) texels are mixed here, before any decode, same layerBlendB as the
+    // colour blend above; roughness (packed in .b) rides along for free.
+    t = mix( t, texture2D( uLayer2NormalMap, vUv ), layerBlendB );
+#endif
     vec3 nSample;
 #if defined( NORMAL_CODEC_DXT5NM )
     // review fix item 8: s2tex::transform's dxt5nm codec swaps R<->A before reconstructing Z
@@ -318,9 +488,41 @@ void main() {
       vec2 e = vec2( t.r + t.g - 1.003922, t.r - t.g );
       nSample = normalize( vec3( e, 1.0 - abs( e.x ) - abs( e.y ) ) );
       roughness = t.b; // packed roughness -- HemiOct only.
+#ifdef HAS_ENV_HEIGHT1
+      // s6f3a7_env_materials.md change item 3: csgo_environment.frag.slang:769's contrast/
+      // brightness remap on the roughness channel -- unimplemented before this change for every
+      // csgo_environment(_blend) material (the raw t.b above was used as-is).
+      roughness = clamp( ( ( t.b - 0.5 ) * uEnvRoughnessContrast1 + 0.5 ) * uEnvRoughnessBrightness1, 0.0, 1.0 );
+#endif
     }
 #endif
     nSample.y = -nSample.y; // VRF utils.slang:261 - GLTFLoader's normalScale.y=-1 used to do this; done explicitly now.
+#ifdef HAS_ENV_HEIGHT1
+    // review fix item 7: csgo_environment.frag.slang:486-505 LayerNormal's own contrast remap --
+    // Up=(0,0,1) is invariant under the Y-flip above, so applying it before/after is equivalent.
+    nSample = normalize( mix( vec3( 0.0, 0.0, 1.0 ), nSample, uEnvNormalContrast1 ) );
+#endif
+#ifdef HAS_ENV_LAYER2
+    {
+      // Layer 2's own HemiOct normal + remapped roughness, mixed with layer 1's in tangent space
+      // before the TBN transform -- CombineNormal/CombineRoughness at their default params
+      // (csgo_environment.frag.slang:238-247,892,896), same envWeight2 as colour above.
+      vec4 t2 = texture2D( uEnvNormal2, vUv2 );
+      vec2 e2 = vec2( t2.r + t2.g - 1.003922, t2.r - t2.g );
+      vec3 nSample2 = normalize( vec3( e2, 1.0 - abs( e2.x ) - abs( e2.y ) ) );
+      nSample2.y = -nSample2.y;
+      // The normal turns with its UVs; negated because the decode's Y flip mirrors the angle
+      // (csgo_environment.frag.slang:493-495).
+      {
+        float r = radians( -uEnvUvRot2 );
+        nSample2.xy = vec2( cos( r ) * nSample2.x - sin( r ) * nSample2.y, sin( r ) * nSample2.x + cos( r ) * nSample2.y );
+      }
+      nSample2 = normalize( mix( vec3( 0.0, 0.0, 1.0 ), nSample2, uEnvNormalContrast2 ) );
+      float roughness2 = clamp( ( ( t2.b - 0.5 ) * uEnvRoughnessContrast2 + 0.5 ) * uEnvRoughnessBrightness2, 0.0, 1.0 );
+      nSample = mix( nSample, nSample2, envWeight2 );
+      roughness = mix( roughness, roughness2, envWeight2 );
+    }
+#endif
     mat3 TBN = cotangentFrame( Ngeom, vWorldPos, vUv );
     N = normalize( TBN * normalize( nSample ) );
   }
@@ -493,6 +695,24 @@ function buildDefines(recipe) {
     }
     if (recipe.blendModMap) d.HAS_BLEND_MOD_MAP = "";
     else if (recipe.blendModConstant) d.HAS_BLEND_MOD_CONST = "";
+    // `s6f3a7_env_materials.md` change item 5: layer 2's raw (pre-decode) normal texel, mixed in
+    // with layer 1's before the HemiOct decode.
+    if (recipe.layer2NormalMap) d.HAS_LAYER2_NORMAL_MAP = "";
+  }
+  // `s6f3a7_env_materials.md` change items 1/3: csgo_environment(_blend)'s own height/roughness-
+  // remap/AO-levels/metalness inputs.
+  if (recipe.env1) {
+    d.HAS_ENV_HEIGHT1 = "";
+    // review fix item 1: per-layer colour-correction (only when the material actually carries a
+    // non-identity-enough matrix -- always exported when a colour texture loaded, so this is
+    // really "did env1/envLayer2 load a colour matrix at all").
+    if (recipe.env1.colorAdjust) d.HAS_CC1 = "";
+    if (recipe.envLayer2) {
+      d.HAS_ENV_LAYER2 = "";
+      if (recipe.envLayer2.color2ManualSrgb) d.ENV_COLOR2_MANUAL_SRGB = "";
+      if (recipe.envLayer2.colorAdjust) d.HAS_CC2 = "";
+      if (recipe.envLayer2.facingDir) d.ENV_FACING2 = "";
+    }
   }
   if (recipe.hasSelfIllum) {
     d.HAS_SELF_ILLUM = "";
@@ -558,6 +778,50 @@ export function buildWorldMaterial(recipe) {
     else uniforms.uLayer2ConstantColor = { value: recipe.layer2ConstantColor ?? new THREE.Vector3(1, 1, 1) };
     if (recipe.blendModMap) uniforms.uBlendModMap = { value: recipe.blendModMap };
     else if (recipe.blendModConstant) uniforms.uBlendModConstant = { value: recipe.blendModConstant };
+    if (recipe.layer2NormalMap) uniforms.uLayer2NormalMap = { value: recipe.layer2NormalMap };
+  }
+  if (recipe.env1) {
+    uniforms.uEnvHeight1 = { value: recipe.env1.heightMap };
+    uniforms.uEnvRoughnessContrast1 = { value: recipe.env1.roughnessContrast };
+    uniforms.uEnvRoughnessBrightness1 = { value: recipe.env1.roughnessBrightness };
+    uniforms.uEnvNormalContrast1 = { value: recipe.env1.normalContrast ?? 1 };
+    uniforms.uEnvAoLevels1 = { value: recipe.env1.aoLevels };
+    uniforms.uEnvMetalness1Enabled = { value: recipe.env1.metalnessEnabled ? 1 : 0 };
+    if (recipe.env1.colorAdjust) {
+      uniforms.uCC1ColorAdjust = { value: recipe.env1.colorAdjust };
+      uniforms.uCC1Adjust = { value: recipe.env1.adjust };
+      uniforms.uCC1Mode = { value: recipe.env1.colorCorrectionMode === 1 ? 1 : 0 };
+      uniforms.uCC1Tm = { value: new THREE.Vector2(recipe.env1.tintMaskContrast, recipe.env1.tintMaskBrightness) };
+    }
+    if (recipe.envLayer2) {
+      const l2 = recipe.envLayer2;
+      uniforms.uEnvColor2 = { value: l2.colorMap };
+      uniforms.uEnvNormal2 = { value: l2.normalMap };
+      uniforms.uEnvHeight2 = { value: l2.heightMap };
+      uniforms.uEnvRoughnessContrast2 = { value: l2.roughnessContrast };
+      uniforms.uEnvRoughnessBrightness2 = { value: l2.roughnessBrightness };
+      uniforms.uEnvNormalContrast2 = { value: l2.normalContrast ?? 1 };
+      uniforms.uEnvAoLevels2 = { value: l2.aoLevels };
+      uniforms.uEnvMetalness2Enabled = { value: l2.metalnessEnabled ? 1 : 0 };
+      uniforms.uEnvHeightScale1 = { value: l2.heightScale1 };
+      uniforms.uEnvHeightZeroPoint1 = { value: l2.heightZeroPoint1 };
+      uniforms.uEnvHeightScale2 = { value: l2.heightScale2 };
+      uniforms.uEnvHeightZeroPoint2 = { value: l2.heightZeroPoint2 };
+      uniforms.uEnvBlendSoftness2 = { value: l2.blendSoftness2 };
+      // review fix item 2.
+      uniforms.uEnvUv2 = { value: new THREE.Vector4(l2.uvScale[0], l2.uvScale[1], l2.uvOffset[0], l2.uvOffset[1]) };
+      uniforms.uEnvUvRot2 = { value: l2.uvRotation ?? 0 };
+      if (l2.facingDir) {
+        uniforms.uEnvFacingDir2 = { value: new THREE.Vector3(...l2.facingDir) };
+        uniforms.uEnvFacingMinMax2 = { value: new THREE.Vector2(...l2.facingMinMax) };
+      }
+      if (l2.colorAdjust) {
+        uniforms.uCC2ColorAdjust = { value: l2.colorAdjust };
+        uniforms.uCC2Adjust = { value: l2.adjust };
+        uniforms.uCC2Mode = { value: l2.colorCorrectionMode === 1 ? 1 : 0 };
+        uniforms.uCC2Tm = { value: new THREE.Vector2(l2.tintMaskContrast, l2.tintMaskBrightness) };
+      }
+    }
   }
   if (recipe.hasSelfIllum) {
     if (recipe.selfIllumMap) uniforms.uSelfIllumMap = { value: recipe.selfIllumMap };

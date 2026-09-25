@@ -8,6 +8,7 @@
 
 pub mod attributes;
 pub mod buffer;
+pub mod color_correct;
 pub mod entity;
 pub mod environment;
 pub mod error;

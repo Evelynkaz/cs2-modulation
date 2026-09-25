@@ -53,6 +53,11 @@ pub struct Header {
     pub depth: u16,
     pub format: VTexFormat,
     pub num_mip_levels: u8,
+    /// The compiler's precomputed average-colour-ish reflectivity (RGBA, linear), read but never
+    /// consumed before `s6f3a7_env_materials.md`'s colour-correction fix: `csgo_environment`'s
+    /// per-layer `g_mTextureColorAdjust{N}`/`g_mTextureAdjust{N}` matrices use this as the
+    /// contrast pivot (`RenderMaterial.cs:727-730`'s `colorTexture.Reflectivity`).
+    pub reflectivity: [f32; 4],
     pub metadata: Option<Metadata>,
     /// `COMPRESSED_MIP_SIZE`'s `int1` flag: whether mips are *actually*
     /// LZ4-compressed, as opposed to the entry merely being present
@@ -88,7 +93,7 @@ pub fn parse(bytes: &[u8]) -> Result<Header, TexError> {
         return Err(TexError::UnsupportedVersion { actual: version });
     }
     let flags = VTexFlags(c.u16()?);
-    let _reflectivity = [c.f32()?, c.f32()?, c.f32()?, c.f32()?];
+    let reflectivity = [c.f32()?, c.f32()?, c.f32()?, c.f32()?];
     let width = c.u16()?;
     let height = c.u16()?;
     let depth = c.u16()?;
@@ -118,6 +123,7 @@ pub fn parse(bytes: &[u8]) -> Result<Header, TexError> {
         depth,
         format,
         num_mip_levels,
+        reflectivity,
         metadata: None,
         is_actually_compressed_mips: false,
         compressed_mip_sizes: None,

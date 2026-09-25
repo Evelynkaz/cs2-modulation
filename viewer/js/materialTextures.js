@@ -174,6 +174,24 @@ function buildRgba8Texture(entry, buffer, anisotropy) {
   return tex;
 }
 
+// Review fix item 4 (s6f3a7_env_materials.md): a 4x4-constant `g_tHeight{1,2}` source (folded to
+// one representative texel, the `Loaded::Constant` path) is uploaded as a real 1x1 texture
+// instead of being dropped entirely - the env-blend shader always samples `uEnvHeight{1,2}`
+// through `texture2D`, and a 1x1 clamp-wrapped/nearest-filtered texture returns that one texel
+// everywhere, exactly like a real constant would. `raw` is already the pre-codec RGBA bytes a
+// real sample would be (`Loaded::Constant`'s own doc comment); height's codec is always "none".
+export function buildConstantTexture(raw) {
+  const tex = new THREE.DataTexture(new Uint8Array(raw), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.generateMipmaps = false;
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /**
  * Builds a per-map loader over `renderJson.textures[]`: `get(index)` returns a `Promise` for the
  * `THREE.Texture` at that index (shared/memoized across every caller), decoded to the same
@@ -191,6 +209,9 @@ export function createMaterialTextureLoader(
   const queue = [];
   let active = 0;
   let bytesLoaded = 0;
+  // Set by dispose(): queued jobs that have not started yet resolve to `null` (a missing texture
+  // to every caller) instead of downloading and uploading for a view that is already gone.
+  let disposed = false;
 
   function pump() {
     while (active < concurrency && queue.length > 0) {
@@ -205,11 +226,7 @@ export function createMaterialTextureLoader(
 
   function schedule(fn) {
     return new Promise((resolve, reject) => {
-      queue.push(() =>
-        fn()
-          .then(resolve)
-          .catch(reject),
-      );
+      queue.push(() => (disposed ? Promise.resolve(null) : fn()).then(resolve, reject));
       pump();
     });
   }
@@ -257,6 +274,7 @@ export function createMaterialTextureLoader(
       return cache.size;
     },
     dispose() {
+      disposed = true;
       for (const p of cache.values()) {
         p.then((t) => t.dispose()).catch(() => {});
       }

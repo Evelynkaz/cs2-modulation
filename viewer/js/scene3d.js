@@ -65,6 +65,11 @@ const GAME_MATERIAL_TEXTURE_UNIFORMS = [
   "uLayer2Map",
   "uBlendModMap",
   "uSelfIllumMap",
+  "uLayer2NormalMap",
+  "uEnvHeight1",
+  "uEnvColor2",
+  "uEnvNormal2",
+  "uEnvHeight2",
 ];
 
 function disposeGameMaterial(material) {
@@ -155,7 +160,12 @@ function manualSrgbMapPatch(shader) {
 // `color = mix(layer1, layer2, b)`, `w` = the `_BLEND` vertex attribute. Without a modulation
 // texture (`F_FANCY_BLENDING` wasn't mode 1) `m` falls back to `(0,1,0)` - `smoothstep(0,1,w)`,
 // i.e. `b = w` - so the weight alone still blends, just without the softened edge.
-function makeLayerPatch(layer2Tex, modTex) {
+// review fix item 3 (s6f3a7_env_materials.md review): `linear` skips the blend-modulation
+// formula entirely for `float b = vBlendW;` - the no-`modTex` fallback below
+// (`m = vec3(0,1,0)`) makes `smoothstep(max(0,m.g-m.r), min(1,m.g+m.r), w)` ==
+// `smoothstep(1, 1, w)`, a division-by-zero edge case that measured 0 everywhere rather than the
+// intended `b = w`, silently no-opping `envLayer2`'s "simple" mode colour blend.
+function makeLayerPatch(layer2Tex, modTex, linear) {
   const layer2ManualSrgb = layer2Tex.userData?.manualSrgb === true; // review fix item 7
   return (shader) => {
     shader.uniforms.layer2Map = { value: layer2Tex };
@@ -165,6 +175,9 @@ function makeLayerPatch(layer2Tex, modTex) {
       .replace("#include <common>", "#include <common>\nattribute float _blend;\nvarying float vBlendW;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvBlendW = _blend;");
     const layer2SrgbFix = layer2ManualSrgb ? "\n\t\tlayer2Sample = sRGBTransferEOTF( layer2Sample );" : "";
+    const blendFactor = linear
+      ? "float b = vBlendW;"
+      : "vec3 m = hasBlendMod > 0.5 ? texture2D( blendModMap, vMapUv ).rgb : vec3( 0.0, 1.0, 0.0 );\n\t\tfloat b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );";
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
@@ -172,7 +185,7 @@ function makeLayerPatch(layer2Tex, modTex) {
       )
       .replace(
         "#include <map_fragment>",
-        `#include <map_fragment>\n#ifdef USE_MAP\n\t{\n\t\tvec4 layer2Sample = texture2D( layer2Map, vMapUv );${layer2SrgbFix}\n\t\tvec3 m = hasBlendMod > 0.5 ? texture2D( blendModMap, vMapUv ).rgb : vec3( 0.0, 1.0, 0.0 );\n\t\tfloat b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );\n\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, layer2Sample.rgb, b );\n\t}\n#endif`,
+        `#include <map_fragment>\n#ifdef USE_MAP\n\t{\n\t\tvec4 layer2Sample = texture2D( layer2Map, vMapUv );${layer2SrgbFix}\n\t\t${blendFactor}\n\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, layer2Sample.rgb, b );\n\t}\n#endif`,
       );
   };
 }
@@ -302,6 +315,19 @@ async function applyMaterialExtras(gltf, renderer, texLoader, renderJson, tintIs
       if (layer2Tex) {
         patches.push(makeLayerPatch(layer2Tex, modTex));
         kinds.push("layers");
+      }
+    }
+    // `s6f3a7_env_materials.md` change item 1, "simple" mode ("as far as practical"): colour-only,
+    // vertex-paint-weight blend, no height bands (that formula needs `uEnvHeight1/2` sampling and
+    // several more uniforms this onBeforeCompile patch system isn't set up to carry -- see the
+    // receipt). Review fix item 3: `linear=true` so `makeLayerPatch` uses `b = vBlendW` directly
+    // instead of its modulation-texture formula, which silently evaluates to 0 with no `modTex`
+    // (`smoothstep(1,1,w)`, not `smoothstep(0,1,w)` as this comment previously claimed).
+    if (extras.envLayer2?.color2Texture != null && material.map) {
+      const color2Tex = await getTex(extras.envLayer2.color2Texture);
+      if (color2Tex) {
+        patches.push(makeLayerPatch(color2Tex, null, true));
+        kinds.push("envLayer2");
       }
     }
     // review fix item 7: applied last so its patch text lands directly after `#include <map_fragment>`,
@@ -726,6 +752,34 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
         reportProgress();
       },
     });
+  });
+  // Review fix item 10 (s6f3a7_env_materials.md review, load time): `applyMaterialExtras`/
+  // `buildGameMaterials` walk meshes one at a time and `await` each material's own textures
+  // before moving to the next, so with ~930 materials on Inferno (191 of them newly needing
+  // env1/envLayer2's up to 5 extra textures each) the *first* material's fetch doesn't even start
+  // until render.glb has finished parsing, and every later material waits its turn behind
+  // whichever came before it - `texLoader.get(index)` is memoized and its own concurrency queue
+  // starts pumping the moment it's called, not the moment its caller awaits it, so firing every
+  // texture index referenced anywhere in `materialExtras.byMaterial` here - as soon as the loader
+  // exists, in parallel with render.glb's own fetch - lets the concurrent queue work through them
+  // while the mesh loop is still building, instead of gating each one behind a whole material's
+  // sequential turn.
+  Promise.all([renderJsonReady, materialTexLoaderReady]).then(([{ data }, texLoader]) => {
+    if (destroyed || !texLoader || !data?.materialExtras?.byMaterial) {
+      return;
+    }
+    const indices = new Set();
+    const collect = (obj) => {
+      if (!obj || typeof obj !== "object") return;
+      for (const [k, v] of Object.entries(obj)) {
+        if (k.endsWith("Texture") && typeof v === "number") indices.add(v);
+        else if (v && typeof v === "object") collect(v);
+      }
+    };
+    for (const extras of Object.values(data.materialExtras.byMaterial)) collect(extras);
+    for (const idx of indices) {
+      texLoader.get(idx)?.catch(() => {}); // real consumers await the same promise and report errors themselves
+    }
   });
 
   // ---- render.glb load (progress + Cache Storage by ETag + cancel via AbortController) -----------

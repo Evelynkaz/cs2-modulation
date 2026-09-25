@@ -257,6 +257,9 @@ pub struct ResolvedMaterial {
     /// change item 5's fix: these were never resolved before, so every blend material rendered
     /// with only its first layer and no normal map.
     pub env_layer2: Option<EnvLayer2>,
+    /// `csgo_environment`/`csgo_environment_blend` layer 1's own height/roughness/AO/metalness
+    /// inputs (`s6f3a7_env_materials.md` change items 1/3), `None` for every other shader.
+    pub env1: Option<EnvHeightParams>,
     /// What the base color texture's alpha channel means for this shader
     /// (`REPORT.md`'s "Colour alpha meaning per shader"): alpha-test/translucent always read it as
     /// opacity; otherwise `csgo_environment`/`csgo_environment_blend` read it as AO
@@ -265,12 +268,139 @@ pub struct ResolvedMaterial {
     pub base_color_alpha_meaning: &'static str,
 }
 
+/// `csgo_environment`/`csgo_environment_blend` layer N's height/roughness/AO/metalness/colour
+/// inputs, N = "1" or "2" (`csgo_environment.frag.slang:57-73` for layer 1, `:127-143` for layer
+/// 2 -- same fields, `N`-suffixed). `g_tHeight{N}`: R = height (the blend-weight input,
+/// `s6f3a7_env_materials.md` change item 1), G = the **tint mask** (review fix item 1 -- this
+/// doc previously called it irrelevant because it conflated it with per-instance *model* tint;
+/// `tintMask{N} = remap(height{N}.g, tintMaskContrast{N}, tintMaskBrightness{N})` actually gates
+/// two separate things: how much of this layer's built-in colour-correction tint
+/// (`colorTint`/`colorAdjust`) shows through -- always active, this struct's own fields below --
+/// and, separately, how much per-instance model tint applies when `g_bModelTint{N}` is set
+/// (review fix item 5, not implemented in this pass -- see the receipt)), B = AO for alpha-tested
+/// materials only (not implemented -- out of this change's scope, see the receipt), A =
+/// metalness, gated by `g_bMetalness{N}` (shader default `true`).
+#[derive(Debug, Clone)]
+pub struct EnvHeightParams {
+    pub height_texture: Option<String>,
+    pub roughness_contrast: f32,
+    pub roughness_brightness: f32,
+    pub ao_levels: [f32; 3],
+    pub metalness_enabled: bool,
+    /// `g_fTextureColorContrast{N}`/`g_fTextureColorSaturation{N}`/`g_fTextureColorBrightness{N}`
+    /// (review fix item 1) -- `MatrixColorCorrect2`'s `(contrast, saturation, brightness)` input.
+    pub color_csb: [f32; 3],
+    /// `g_vTextureColorTint{N}` (linear -- unlike `g_vColorTint`, this one carries no
+    /// `SrgbRead(true)` annotation in `csgo_environment.frag.slang`).
+    pub color_tint: [f32; 3],
+    /// `g_nColorCorrectionMode{N}`: `1` reads the *untinted* colour-adjust matrix as the base
+    /// before the tint-mask mix (`csgo_environment.frag.slang:781,804`); any other value skips
+    /// straight to the raw texel there.
+    pub color_correction_mode: i64,
+    pub tint_mask_contrast: f32,
+    pub tint_mask_brightness: f32,
+    /// `g_vTexCoordScale{N}`/`g_vTexCoordOffset{N}` (review fix item 2): the vertex shader's
+    /// `RotateVector2D(uv, rotation, scale, offset, center)` around a fixed `center=(0.5,0.5)`
+    /// with `rotation` always `0` on every material surveyed (`csgo_environment.vert.slang:
+    /// 166-171,175-180`) -- exported for both layers; only layer 2's is actually applied to
+    /// sampling today (layer 1 already samples at the mesh's own UV0, which every material
+    /// surveyed leaves at `scale=(1,1)`/`offset=(0,0)` anyway).
+    pub uv_scale: [f32; 2],
+    pub uv_offset: [f32; 2],
+    /// `g_fTextureNormalContrast{N}` (review fix item 7): `normalize(mix(Up, decodedNormal,
+    /// contrast))` after the HemiOct decode (`csgo_environment.frag.slang:486-505 LayerNormal`).
+    pub normal_contrast: f32,
+    /// `g_flTexCoordRotation{N}` in degrees (default 0). Not always 0: 90 on Ancient
+    /// `hr_ancient_blend_wall_02_trims_grey-moss-wet-b` layer 2 and on both layers of Train
+    /// `hrts2_blend_metalpanelling03-painted`. The viewer applies it to layer 2 only.
+    pub uv_rotation: f32,
+}
+
+fn env_height_params(mat: &RawMaterial, n: &str) -> EnvHeightParams {
+    EnvHeightParams {
+        height_texture: mat.texture(&format!("g_tHeight{n}")).map(str::to_string),
+        roughness_contrast: mat
+            .float(&format!("g_fTextureRoughnessContrast{n}"))
+            .unwrap_or(1.0),
+        roughness_brightness: mat
+            .float(&format!("g_fTextureRoughnessBrightness{n}"))
+            .unwrap_or(1.0),
+        ao_levels: mat
+            .vector(&format!("g_vAmbientOcclusionLevels{n}"))
+            .map(|v| [v[0], v[1], v[2]])
+            .unwrap_or([0.0, 0.5, 1.0]),
+        metalness_enabled: mat
+            .int_params
+            .get(&format!("g_bMetalness{n}"))
+            .map(|&v| v != 0)
+            .unwrap_or(true),
+        color_csb: [
+            mat.float(&format!("g_fTextureColorContrast{n}"))
+                .unwrap_or(1.0),
+            mat.float(&format!("g_fTextureColorSaturation{n}"))
+                .unwrap_or(1.0),
+            mat.float(&format!("g_fTextureColorBrightness{n}"))
+                .unwrap_or(1.0),
+        ],
+        color_tint: mat
+            .vector(&format!("g_vTextureColorTint{n}"))
+            .map(|v| [v[0], v[1], v[2]])
+            .unwrap_or([1.0, 1.0, 1.0]),
+        color_correction_mode: mat
+            .int_params
+            .get(&format!("g_nColorCorrectionMode{n}"))
+            .copied()
+            .unwrap_or(0),
+        tint_mask_contrast: mat.float(&format!("g_fTintMaskContrast{n}")).unwrap_or(1.0),
+        tint_mask_brightness: mat
+            .float(&format!("g_fTintMaskBrightness{n}"))
+            .unwrap_or(1.0),
+        uv_scale: mat
+            .vector(&format!("g_vTexCoordScale{n}"))
+            .map(|v| [v[0], v[1]])
+            .unwrap_or([1.0, 1.0]),
+        uv_offset: mat
+            .vector(&format!("g_vTexCoordOffset{n}"))
+            .map(|v| [v[0], v[1]])
+            .unwrap_or([0.0, 0.0]),
+        uv_rotation: mat
+            .float(&format!("g_flTexCoordRotation{n}"))
+            .unwrap_or(0.0),
+        normal_contrast: mat
+            .float(&format!("g_fTextureNormalContrast{n}"))
+            .unwrap_or(1.0),
+    }
+}
+
 /// `csgo_environment_blend`'s second layer: `g_tColor2` (sRGB, same "color" role as the primary
-/// base color) and `g_tNormal2` (linear, HemiOct, same as any other normal map).
+/// base color), `g_tNormal2` (linear, HemiOct, same as any other normal map), and the height-band
+/// blend-weight formula's own inputs (`csgo_environment.frag.slang:348-377 GetBlendWeights` --
+/// the legacy, non-`F_USE_NEW_BLENDING` path; every `csgo_environment_blend` material in the
+/// `s6f3_native_tex` survey and this change's own re-check of all 69 Inferno blend materials
+/// leaves `F_USE_NEW_BLENDING` unset, i.e. `0`/legacy).
 #[derive(Debug, Clone)]
 pub struct EnvLayer2 {
     pub color2: Option<String>,
     pub normal2: Option<String>,
+    /// Layer 2's own height/roughness/AO/metalness inputs.
+    pub height: EnvHeightParams,
+    /// Layer 1's height-blend inputs, duplicated here rather than on `ResolvedMaterial::env1`
+    /// because `GetBlendWeights` is the only place either is read.
+    pub height_scale1: f32,
+    pub height_zero_point1: f32,
+    pub height_scale2: f32,
+    pub height_zero_point2: f32,
+    /// `g_flBlendSoftness2` (vertex-shader default `0.01`, `csgo_environment.vert.slang:71`) --
+    /// widens the seam; the per-vertex bias `csgo_environment.vert.slang:273` adds to it
+    /// (`vTEXCOORD4.w`) is not exported (`s6f3a7_env_materials.md`'s receipt explains why).
+    pub blend_softness2: f32,
+    /// F_BLEND_BY_FACING_DIRECTION_2: (normalised facing direction, smoothstep min/max).
+    pub facing2: Option<([f32; 3], [f32; 2])>,
+    /// Review fix item 8: paths the legacy `GetBlendWeights`/`mix(layer1,layer2,weight2)` formula
+    /// this exporter/viewer implements cannot reproduce, each `(flag name, why)` -- checked per
+    /// material rather than assumed absent, since earlier revisions of this file claimed "every
+    /// material surveyed" without re-checking on every map this exporter re-exports.
+    pub unsupported: Vec<(&'static str, &'static str)>,
 }
 
 /// `complex.frag.slang:227-230 GetStandardSelfIllumination`: `exp2(brightness) * scale * tint *
@@ -441,7 +571,81 @@ fn env_layer2(mat: &RawMaterial) -> Option<EnvLayer2> {
     if color2.is_none() && normal2.is_none() {
         return None;
     }
-    Some(EnvLayer2 { color2, normal2 })
+    let mut unsupported = Vec::new();
+    if mat.int("F_USE_NEW_BLENDING") == 1 {
+        unsupported.push((
+            "newBlending",
+            "F_USE_NEW_BLENDING==1: this material uses BlendLayer/BlendBandWeight \
+             (csgo_environment.frag.slang:314-346), not the legacy GetBlendWeights this exporter/\
+             viewer implements; the exported weight2 formula will not match the game here",
+        ));
+    }
+    if mat.int("F_ENABLE_LAYER_3") == 1 {
+        unsupported.push((
+            "layer3",
+            "F_ENABLE_LAYER_3==1: this material has a third layer (g_tColor3/...) this exporter \
+             never reads; only layers 1/2 are mixed",
+        ));
+    }
+    let uv_set = |key: &str| mat.int_params.get(key).copied().unwrap_or(1);
+    if uv_set("g_nUVSet1") == 0 || uv_set("g_nUVSet2") == 0 {
+        unsupported.push((
+            "biplanar",
+            "g_nUVSet{1,2}==0 (biplanar/triplanar projection, csgo_environment.frag.slang:\
+             403-460): this exporter always samples at the mesh's own UV0/UV1, never the \
+             world-space biplanar projection",
+        ));
+    }
+    Some(EnvLayer2 {
+        color2,
+        normal2,
+        height: env_height_params(mat, "2"),
+        height_scale1: mat.float("g_flHeightMapScale1").unwrap_or(1.0),
+        height_zero_point1: mat.float("g_flHeightMapZeroPoint1").unwrap_or(0.5),
+        height_scale2: mat.float("g_flHeightMapScale2").unwrap_or(1.0),
+        height_zero_point2: mat.float("g_flHeightMapZeroPoint2").unwrap_or(0.5),
+        blend_softness2: mat.float("g_flBlendSoftness2").unwrap_or(0.01),
+        facing2: env_facing2(mat),
+        unsupported,
+    })
+}
+
+/// `F_BLEND_BY_FACING_DIRECTION_2 > 0` (csgo_environment.vert.slang:73-81, 246-252): the paint
+/// weight is multiplied by `smoothstep(minMax.x, minMax.y, dot(direction, N) * 0.5 + 0.5)`.
+/// Returns the normalised direction (z nudged off 0 as the reference does) and that min/max.
+fn env_facing2(mat: &RawMaterial) -> Option<([f32; 3], [f32; 2])> {
+    if mat.int("F_BLEND_BY_FACING_DIRECTION_2") <= 0 {
+        return None;
+    }
+    let d = mat
+        .vector("g_vFacingDirection2")
+        .map(|v| [v[0], v[1], v[2]])
+        .unwrap_or([0.0, 0.0, 1.0]);
+    let d = [d[0], d[1], if d[2] == 0.0 { 0.0001 } else { d[2] }];
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let dir = [d[0] / len, d[1] / len, d[2] / len];
+    let spread = mat.float("g_flFacingDirectionMaskSpread2").unwrap_or(0.5);
+    let falloff = mat
+        .float("g_vFacingDirectionMaskFalloff2")
+        .or_else(|| mat.vector("g_vFacingDirectionMaskFalloff2").map(|v| v[0]))
+        .unwrap_or(0.1);
+    let min_max = [
+        ((1.0 - spread) - falloff).max(0.0),
+        ((1.0 - spread) + 0.001 + falloff).min(1.0),
+    ];
+    Some((dir, min_max))
+}
+
+/// `csgo_environment`/`csgo_environment_blend` layer 1's height-blend inputs (`s6f3a7_env_
+/// materials.md` change item 1); `None` for every other shader.
+fn env1(mat: &RawMaterial) -> Option<EnvHeightParams> {
+    if !matches!(
+        mat.shader.as_str(),
+        "csgo_environment" | "csgo_environment_blend"
+    ) {
+        return None;
+    }
+    Some(env_height_params(mat, "1"))
 }
 
 /// `REPORT.md`'s "Colour alpha meaning per shader": alpha-test/translucent always win (the alpha
@@ -526,6 +730,7 @@ pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
         fog_enabled: mat.int_params.get("g_bFogEnabled").copied().unwrap_or(1) != 0,
         self_illum: self_illum(mat),
         env_layer2: env_layer2(mat),
+        env1: env1(mat),
         base_color_alpha_meaning: base_color_alpha_meaning(mat, alpha_mode),
     }
 }
@@ -836,6 +1041,98 @@ mod tests {
         // csgo_environment_blend with neither texture set: None, not Some(empty).
         let empty = base_material("csgo_environment_blend");
         assert!(resolve(&empty).env_layer2.is_none());
+    }
+
+    /// `s6f3a7_env_materials.md` change item 1: `g_tHeight1`/`g_tHeight2` and the height-band
+    /// blend/roughness-remap parameters are resolved for both layers, with the shader's own
+    /// defaults where a material leaves a param unset.
+    #[test]
+    fn env_height_params_resolve_with_shader_defaults_and_overrides() {
+        // Plain (non-blend) csgo_environment still gets `env1` -- roughness remap (item 3)
+        // applies with or without a second layer.
+        let mut plain = base_material("csgo_environment");
+        plain
+            .texture_params
+            .insert("g_tHeight1".into(), "materials/h1.vtex".into());
+        let env1 = resolve(&plain).env1.expect("csgo_environment has env1");
+        assert_eq!(env1.height_texture.as_deref(), Some("materials/h1.vtex"));
+        assert_eq!(env1.roughness_contrast, 1.0);
+        assert_eq!(env1.roughness_brightness, 1.0);
+        assert_eq!(env1.ao_levels, [0.0, 0.5, 1.0]);
+        assert!(env1.metalness_enabled, "g_bMetalness1 defaults true");
+
+        let mut blend = base_material("csgo_environment_blend");
+        blend
+            .texture_params
+            .insert("g_tColor2".into(), "materials/c2.vtex".into());
+        blend
+            .texture_params
+            .insert("g_tHeight2".into(), "materials/h2.vtex".into());
+        blend
+            .float_params
+            .insert("g_fTextureRoughnessContrast2".into(), 2.0);
+        blend
+            .float_params
+            .insert("g_fTextureRoughnessBrightness2".into(), 0.64);
+        blend
+            .float_params
+            .insert("g_flHeightMapZeroPoint2".into(), 0.4);
+        blend.int_params.insert("g_bMetalness2".into(), 0);
+        let layer2 = resolve(&blend).env_layer2.expect("env layer2");
+        assert_eq!(
+            layer2.height.height_texture.as_deref(),
+            Some("materials/h2.vtex")
+        );
+        assert_eq!(layer2.height.roughness_contrast, 2.0);
+        assert_eq!(layer2.height.roughness_brightness, 0.64);
+        assert!(!layer2.height.metalness_enabled);
+        assert_eq!(layer2.height_zero_point1, 0.5, "layer 1 default unchanged");
+        assert_eq!(layer2.height_zero_point2, 0.4);
+        assert_eq!(layer2.height_scale1, 1.0);
+        assert_eq!(layer2.height_scale2, 1.0);
+        assert_eq!(
+            layer2.blend_softness2, 0.01,
+            "g_flBlendSoftness2 shader default"
+        );
+        assert!(
+            layer2.unsupported.is_empty(),
+            "no unsupported flags set on this material"
+        );
+    }
+
+    /// Review fix item 8: `F_USE_NEW_BLENDING`/`F_ENABLE_LAYER_3`/a biplanar `g_nUVSet{1,2}`
+    /// each add a distinct `(flag, why)` to `env_layer2`'s `unsupported` list -- none of these
+    /// flags change the weight2/colour/normal formula this exporter/viewer actually implements,
+    /// they only get flagged so a reader of render.json knows the result is wrong there.
+    #[test]
+    fn env_layer2_flags_paths_this_exporter_does_not_implement() {
+        let mut mat = base_material("csgo_environment_blend");
+        mat.texture_params
+            .insert("g_tColor2".into(), "materials/c2.vtex".into());
+        mat.int_params.insert("F_USE_NEW_BLENDING".into(), 1);
+        mat.int_params.insert("F_ENABLE_LAYER_3".into(), 1);
+        mat.int_params.insert("g_nUVSet2".into(), 0);
+        let flags: Vec<&str> = resolve(&mat)
+            .env_layer2
+            .expect("env layer2")
+            .unsupported
+            .iter()
+            .map(|(flag, _)| *flag)
+            .collect();
+        assert_eq!(flags, vec!["newBlending", "layer3", "biplanar"]);
+
+        // A material that leaves every one of those flags at its default: no unsupported entries.
+        let mut clean = base_material("csgo_environment_blend");
+        clean
+            .texture_params
+            .insert("g_tColor2".into(), "materials/c2.vtex".into());
+        assert!(
+            resolve(&clean)
+                .env_layer2
+                .expect("env layer2")
+                .unsupported
+                .is_empty()
+        );
     }
 
     #[test]

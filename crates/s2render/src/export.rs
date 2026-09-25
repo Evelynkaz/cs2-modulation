@@ -11,6 +11,7 @@ use s2fmt::entities::{self, Entity, EntityLump, entity_transform};
 use serde_json::{Value, json};
 
 use crate::buffer::Buffer;
+use crate::color_correct;
 use crate::entity as ent;
 use crate::environment;
 use crate::gltf::{self, GltfBuilder};
@@ -268,6 +269,25 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Review fix item 1: a `csgo_environment` layer's two colour-correction matrices
+    /// (`color_correct::layer_color_matrices`), reading `color_texture_path`'s vtex-header
+    /// `Reflectivity` as the contrast pivot (`(1,1,1)` when there is no colour texture or the
+    /// read fails, matching `RenderMaterial.cs`'s own `Vector3.One` fallback).
+    fn layer_color_matrices(
+        &mut self,
+        color_texture_path: Option<&str>,
+        params: &material::EnvHeightParams,
+    ) -> color_correct::LayerColorMatrices {
+        let reflectivity = color_texture_path
+            .and_then(|path| {
+                self.tex_catalog
+                    .reflectivity(self.sources, &compiled_path(path))
+            })
+            .map(|r| [r[0], r[1], r[2]])
+            .unwrap_or([1.0, 1.0, 1.0]);
+        color_correct::layer_color_matrices(params.color_csb, params.color_tint, reflectivity)
+    }
+
     /// Builds (or reuses) the glTF material for `vmat_path` tinted by `tint_rgba`; `None` if the
     /// material failed to load or is a tools material (caller checks the latter separately so it
     /// can also skip the draw call and bucket it in the report).
@@ -384,33 +404,141 @@ impl<'a> Ctx<'a> {
         }
 
         // `s6f3a6_native_tex.md` change item 5's fix: `g_tColor2`/`g_tNormal2` are now resolved
-        // (previously dropped entirely for every `csgo_environment_blend` material) -- see
-        // `EnvLayer2`'s own doc comment for why the viewer doesn't mix this layer in yet.
-        if let Some(env2) = &resolved.env_layer2 {
+        // (previously dropped entirely for every `csgo_environment_blend` material).
+        // `s6f3a7_env_materials.md` change item 1: `g_tHeight2` and the height-band blend-weight/
+        // roughness-remap/AO-levels/metalness inputs are exported alongside them so the viewer
+        // can mix this layer in with the reference's own formula
+        // (`csgo_environment.frag.slang:795-897`) instead of dropping it, as before.
+        if let Some(env2) = &resolved.env_layer2
+            && let Some(p) = &env2.color2
+            && let Some(color2) = self.get_texture(p, TextureRole::Color, ColorSpace::Srgb)
+            && let Some(p) = &env2.normal2
+            && let Some(normal2) = self.get_texture(p, TextureRole::Normal, ColorSpace::Linear)
+            && let Some(p) = &env2.height.height_texture
+            && let Some(height2) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
+        {
+            // Requires all three (color/normal/height) to resolve to *something* -- a real
+            // texture or a 4x4-constant (`Loaded::Constant`, review fix item 4: the viewer now
+            // uploads those as a 1x1 texture instead of treating them as missing) both count.
+            // Every one of the 69 csgo_environment_blend materials surveyed carries all three in
+            // one form or the other, so falling back to layer-1-only rendering (rather than
+            // mixing in a black/flat layer 2) never actually happens on the maps this exporter
+            // re-exports; a handful (Ancient/Train/Vertigo) do have a constant `g_tHeight2`.
             let mut env_json = serde_json::Map::new();
-            if let Some(p) = &env2.color2
-                && let Some(loaded) = self.get_texture(p, TextureRole::Color, ColorSpace::Srgb)
-            {
-                insert_loaded(&mut env_json, "color2", loaded, Some(ColorSpace::Srgb));
-            }
-            if let Some(p) = &env2.normal2
-                && let Some(loaded) = self.get_texture(p, TextureRole::Normal, ColorSpace::Linear)
-            {
-                insert_loaded(&mut env_json, "normal2", loaded, None);
-            }
-            if !env_json.is_empty() {
+            insert_loaded(&mut env_json, "color2", color2, Some(ColorSpace::Srgb));
+            insert_loaded(&mut env_json, "normal2", normal2, None);
+            insert_loaded(&mut env_json, "height2", height2, None);
+            env_json.insert(
+                "roughnessContrast2".into(),
+                json!(env2.height.roughness_contrast),
+            );
+            env_json.insert(
+                "roughnessBrightness2".into(),
+                json!(env2.height.roughness_brightness),
+            );
+            // review fix item 7.
+            env_json.insert("normalContrast2".into(), json!(env2.height.normal_contrast));
+            env_json.insert("aoLevels2".into(), json!(env2.height.ao_levels));
+            env_json.insert(
+                "metalnessEnabled2".into(),
+                json!(env2.height.metalness_enabled),
+            );
+            env_json.insert("heightScale1".into(), json!(env2.height_scale1));
+            env_json.insert("heightZeroPoint1".into(), json!(env2.height_zero_point1));
+            env_json.insert("heightScale2".into(), json!(env2.height_scale2));
+            env_json.insert("heightZeroPoint2".into(), json!(env2.height_zero_point2));
+            env_json.insert("blendSoftness2".into(), json!(env2.blend_softness2));
+            // review fix item 8: which formula paths this material needs that the legacy
+            // GetBlendWeights/mix(layer1,layer2,weight2) implementation above cannot reproduce.
+            if !env2.unsupported.is_empty() {
                 env_json.insert(
-                    "note".into(),
+                    "unsupported".into(),
                     json!(
-                        "g_tColor2/g_tNormal2 data only -- the blend-weight source for \
-                         csgo_environment_blend wasn't identified within the F3a-6 survey scope \
-                         (REPORT.md item 5 only flagged the missing textures, not the mix \
-                         formula), so the viewer does not mix this layer in yet; exported so a \
-                         follow-up can wire it without a second export"
+                        env2.unsupported
+                            .iter()
+                            .map(|(flag, why)| json!({ "flag": flag, "why": why }))
+                            .collect::<Vec<_>>()
                     ),
                 );
-                extras.insert("envLayer2".into(), Value::Object(env_json));
             }
+            // review fix item 2: layer 2's own UV transform (`csgo_environment.vert.slang:
+            // 175-180`, rotation/center always default on every material surveyed).
+            env_json.insert("uvScale2".into(), json!(env2.height.uv_scale));
+            env_json.insert("uvOffset2".into(), json!(env2.height.uv_offset));
+            env_json.insert("uvRotation2".into(), json!(env2.height.uv_rotation));
+            if let Some((dir, min_max)) = env2.facing2 {
+                env_json.insert("facingDirection2".into(), json!(dir));
+                env_json.insert("facingMinMax2".into(), json!(min_max));
+            }
+            // review fix item 1: per-layer colour-correction matrices (`RenderMaterial.cs:
+            // 671-744`, `color_correct` module).
+            let cc2 = self.layer_color_matrices(env2.color2.as_deref(), &env2.height);
+            env_json.insert("colorAdjust2".into(), json!(cc2.color_adjust));
+            env_json.insert("adjust2".into(), json!(cc2.adjust));
+            env_json.insert(
+                "colorCorrectionMode2".into(),
+                json!(env2.height.color_correction_mode),
+            );
+            env_json.insert(
+                "tintMaskContrast2".into(),
+                json!(env2.height.tint_mask_contrast),
+            );
+            env_json.insert(
+                "tintMaskBrightness2".into(),
+                json!(env2.height.tint_mask_brightness),
+            );
+            env_json.insert(
+                "formula".into(),
+                json!(
+                    "weight2 from csgo_environment.frag.slang:348-377 GetBlendWeights (legacy \
+                     path only -- see this material's own 'unsupported' key if it needs \
+                     F_USE_NEW_BLENDING instead), vertex paint _BLEND = vColorBlendValues.x + \
+                     height1/height2.r bands; colour/roughness/AO/metalness/normal each \
+                     mix(layer1, layer2, weight2), i.e. the reference's own CombineColor/\
+                     CombineRoughness/CombineOcclusion/CombineNormal at their default \
+                     overlay=0/replace=1/combine=0 (this material's own values, if it overrides \
+                     any of them, are not read)"
+                ),
+            );
+            extras.insert("envLayer2".into(), Value::Object(env_json));
+        }
+
+        // `s6f3a7_env_materials.md` change items 1/3: layer 1's own height/roughness-remap/
+        // AO-levels/metalness inputs, for both plain `csgo_environment` and the blend shader
+        // (`csgo_environment.frag.slang:63-73,769,1046`).
+        if let Some(env1) = &resolved.env1
+            && let Some(p) = &env1.height_texture
+            && let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
+        {
+            let mut env1_json = serde_json::Map::new();
+            insert_loaded(&mut env1_json, "height1", loaded, None);
+            env1_json.insert("roughnessContrast1".into(), json!(env1.roughness_contrast));
+            env1_json.insert(
+                "roughnessBrightness1".into(),
+                json!(env1.roughness_brightness),
+            );
+            // review fix item 7.
+            env1_json.insert("normalContrast1".into(), json!(env1.normal_contrast));
+            env1_json.insert("aoLevels1".into(), json!(env1.ao_levels));
+            env1_json.insert("metalnessEnabled1".into(), json!(env1.metalness_enabled));
+            // review fix item 2: layer 1's own UV transform (exported for completeness; not
+            // applied to layer-1 sampling today, see `EnvHeightParams::uv_scale`'s own doc).
+            env1_json.insert("uvScale1".into(), json!(env1.uv_scale));
+            env1_json.insert("uvOffset1".into(), json!(env1.uv_offset));
+            // review fix item 1: layer 1's own colour-correction matrices.
+            let cc1 = self.layer_color_matrices(resolved.base_color_texture.as_deref(), env1);
+            env1_json.insert("colorAdjust1".into(), json!(cc1.color_adjust));
+            env1_json.insert("adjust1".into(), json!(cc1.adjust));
+            env1_json.insert(
+                "colorCorrectionMode1".into(),
+                json!(env1.color_correction_mode),
+            );
+            env1_json.insert("tintMaskContrast1".into(), json!(env1.tint_mask_contrast));
+            env1_json.insert(
+                "tintMaskBrightness1".into(),
+                json!(env1.tint_mask_brightness),
+            );
+            extras.insert("env1".into(), Value::Object(env1_json));
         }
 
         // §7: AO/metalness/roughness aren't part of glTF's metallic-roughness texture (that would
@@ -789,7 +917,11 @@ fn get_or_build_mesh(
         }
     }
 
-    let needs_blend = resolved.layers.is_some();
+    // `s6f3a7_env_materials.md` change item 1: `csgo_environment_blend` reads the exact same
+    // TEXCOORD4/`VertexPaintBlendParams` vertex stream as `csgo_lightmappedgeneric`'s `F_LAYERS`
+    // blend (`vColorBlendValues.x`, `csgo_environment.vert.slang:26,242` vs.
+    // `complex.frag.slang:413`) -- same `_BLEND` accessor, no new vertex attribute needed.
+    let needs_blend = resolved.layers.is_some() || resolved.env_layer2.is_some();
 
     if lighting == LightingClass::Probe {
         let geom_key = (mesh_key.to_string(), flat_index, overlay);
@@ -2056,7 +2188,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             "byType": {
                 "color": { "maxSide": TextureRole::Color.max_side(options.max_texture), "note": "base color, layer-2/env-layer-2 color, self-illum" },
                 "normal": { "maxSide": TextureRole::Normal.max_side(options.max_texture), "note": "normal map (HemiOct RG + roughness in B), layer-2/env-layer-2 normal" },
-                "mask": { "maxSide": TextureRole::Mask.max_side(options.max_texture), "note": "AO, metalness, blend modulation, tint mask" },
+                "mask": { "maxSide": TextureRole::Mask.max_side(options.max_texture), "note": "AO, metalness, blend modulation, tint mask, csgo_environment(_blend) g_tHeight1/2" },
             },
             "dedup": {
                 "meaning": "a texture whose raw multi-level blob hashes the same as an earlier one (different vtex path, or the same texture reused in a different role at the same base mip level) is written to render_tex/ once and reused (s6f3a6_native_tex.md change item 1's 'по пути+L, затем по SHA-256 содержимого')",
@@ -2111,6 +2243,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         "materialExtras": {
             "tintColorSpace": "linear (extras.tint is sRGB->linear converted, same as baseColorFactor)",
             "textureRefMeaning": "every *Texture key (baseColorTexture, normalTexture, aoTexture, metalnessTexture, layers.layer2ColorTexture, ...) is an index into this file's top-level textures[], never a glTF texture/image index (this exporter writes neither); a 4x4 single-mip source instead appears as the sibling *Constant key (raw pre-codec RGBA8 bytes) plus *ConstantCodec (and, for a color-space-sensitive slot, *ConstantColorSpace) -- see textures[]/texturesMeaning and native_texture::Loaded's doc comment",
+            "envMaterialsMeaning": "csgo_environment/csgo_environment_blend materials (s6f3a7_env_materials.md): extras.env1 is layer 1's own height/roughness/colour inputs, present whenever g_tHeight1 resolves; extras.envLayer2 additionally carries layer 2's (only when csgo_environment_blend AND colour/normal/height all resolve). height{1,2}Texture/height{1,2}Constant: R = height (the blend-weight input to GetBlendWeights, csgo_environment.frag.slang:348-377), G = tintMask{1,2}'s source (remapped by tintMaskContrast{1,2}/tintMaskBrightness{1,2} into 0..1, gates how much of colorAdjust{1,2} shows through, csgo_environment.frag.slang:767,781-787), B = AO for alpha-tested materials only (not read by this viewer), A = metalness (zeroed unless metalnessEnabled{1,2}). roughnessContrast{1,2}/roughnessBrightness{1,2}: the same remap applied to the normal map's own B channel (roughness), csgo_environment.frag.slang:769. normalContrast{1,2}: normalize(mix(Up, decodedNormal, contrast)) after the HemiOct decode (csgo_environment.frag.slang:486-505 LayerNormal). aoLevels{1,2} = (x,y,z): the ambient-occlusion curve mix(x,z,pow(ao,max(y,0.001))) applied to the base-colour alpha (csgo_environment.frag.slang:1046), lerped between layers by the blend weight for envLayer2. colorAdjust{1,2}/adjust{1,2}: 16-float column-major mat4 (crates/s2render/src/color_correct.rs, RenderMaterial.cs:671-744) -- colorAdjust is g_mTextureColorAdjust{1,2} (tinted), adjust is g_mTextureAdjust{1,2} (tint forced white), mixed by tintMask{1,2} and, when colorCorrectionMode{1,2}==1, adjust replaces the raw texel as the base before that mix. envLayer2 additionally carries heightScale{1,2}/heightZeroPoint{1,2}/blendSoftness2 (GetBlendWeights' own inputs) and uvScale2/uvOffset2 (layer 2's UV transform, csgo_environment.vert.slang:175-180, applied to every layer-2 sample). envLayer2.unsupported (present only when non-empty): [{flag, why}] for a material that sets F_USE_NEW_BLENDING/F_ENABLE_LAYER_3/a biplanar g_nUVSet -- none of which this exporter/viewer implements, so weight2 (and everything mixed by it) is wrong for that material.",
             "byMaterial": ctx.report.material_extras.iter().map(|(k,v)| (k.to_string(), v.clone())).collect::<serde_json::Map<_,_>>(),
         },
         "lighting": {

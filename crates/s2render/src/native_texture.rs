@@ -190,6 +190,10 @@ pub struct TextureCatalog {
     files: Vec<(String, Vec<u8>)>,
     dedup_hits: u32,
     dedup_bytes_saved: u64,
+    /// `compiled path` -> its vtex header's `Reflectivity`, or `None` if the read/parse failed
+    /// (`reflectivity`'s own cache, keyed independently of `by_path_level` since a reflectivity
+    /// read doesn't depend on budget/colour-space).
+    reflectivity_cache: HashMap<String, Option<[f32; 4]>>,
 }
 
 /// First 6 bytes of a SHA-256 digest, as 12 lowercase hex characters -- matches the server's
@@ -363,6 +367,29 @@ impl TextureCatalog {
         };
         self.by_path_level.insert(key, result);
         Ok(result)
+    }
+
+    /// Reads just `Reflectivity` from `compiled_path`'s vtex header (`s6f3a7_env_materials.md`
+    /// review fix item 1: the colour-correction matrices' contrast pivot,
+    /// `RenderMaterial.cs:727-730`) -- cheap (header-only, no mip decode/registration), cached by
+    /// path since several materials can share the same layer colour texture. `None` on any
+    /// read/parse failure; the reference's own fallback there is `Vector3.One`, which the caller
+    /// substitutes itself (`REPORT.md`-style: don't fail the whole material over one missing
+    /// texture).
+    pub fn reflectivity(&mut self, sources: &Sources, compiled_path: &str) -> Option<[f32; 4]> {
+        if let Some(&cached) = self.reflectivity_cache.get(compiled_path) {
+            return cached;
+        }
+        let result = (|| {
+            let bytes = sources.read(compiled_path)?;
+            let resource = Resource::parse(bytes.clone()).ok()?;
+            let data_block = resource.block(FourCC::DATA)?;
+            let header = s2tex::header::parse(resource.block_bytes(data_block)).ok()?;
+            Some(header.reflectivity)
+        })();
+        self.reflectivity_cache
+            .insert(compiled_path.to_string(), result);
+        result
     }
 
     /// `render.json`'s `textures[]` array (change item 2).

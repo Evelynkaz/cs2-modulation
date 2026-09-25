@@ -217,6 +217,7 @@ mod tests {
             depth,
             format,
             num_mip_levels: mips,
+            reflectivity: [1.0, 1.0, 1.0, 1.0],
             metadata: None,
             is_actually_compressed_mips: false,
             compressed_mip_sizes: None,

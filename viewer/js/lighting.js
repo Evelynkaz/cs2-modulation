@@ -24,7 +24,7 @@ import { buildWorldMaterial } from "./lightingShader.js?v=1";
 import { createSkyPass, inverseRotation } from "./lightingSky.js?v=1";
 import { createHdrTarget, createPostPass } from "./lightingPost.js?v=1";
 import { renderAssetUrl } from "./api.js?v=1";
-import { decodeHemiOctConstant, srgbToLinear } from "./materialTextures.js?v=1";
+import { decodeHemiOctConstant, srgbToLinear, buildConstantTexture } from "./materialTextures.js?v=1";
 
 function findLightmap(lighting, needle) {
   return lighting.lightmaps.find((f) => f.file.includes(needle));
@@ -244,10 +244,44 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
   const layers = extras.layers ?? null;
   const layer2Color = layers ? resolveSlot(layers, "layer2Color") : { textureIndex: null, constant: null };
   const blendMod = layers ? resolveSlot(layers, "blendModulation") : { textureIndex: null, constant: null };
+  // `s6f3a7_env_materials.md` change item 5: layer 2's raw normal texel (mixed with layer 1's
+  // before decode, same as colour) -- exported since F3a-6 but unused until now.
+  const layer2Normal = layers ? resolveSlot(layers, "layer2Normal") : { textureIndex: null, constant: null };
   const layer2MapPromise = getTex(layer2Color.textureIndex);
   const blendModMapPromise = getTex(blendMod.textureIndex);
+  const layer2NormalMapPromise = getTex(layer2Normal.textureIndex);
 
-  const [albedoMap, normalMap, aoMap, metalnessMap, selfIllumMap, layer2Map, blendModMap] = await Promise.all([
+  // `s6f3a7_env_materials.md` change item 1: csgo_environment(_blend)'s own height/roughness-
+  // remap/AO-levels/metalness inputs (`extras.env1`/`extras.envLayer2`).
+  const env1Extras = extras.env1 ?? null;
+  const env1Height = env1Extras ? resolveSlot(env1Extras, "height1") : { textureIndex: null, constant: null };
+  // Review fix item 4: a 4x4-constant height source is a real texture, not "missing" - build a
+  // 1x1 `DataTexture` from it (`buildConstantTexture`) instead of letting `env1`/`envLayer2` be
+  // silently dropped whenever `g_tHeight{1,2}` folded to a constant.
+  const env1HeightMapPromise = env1Height.textureIndex != null ? getTex(env1Height.textureIndex) : env1Height.constant ? buildConstantTexture(env1Height.constant.raw) : null;
+
+  const envLayer2Extras = extras.envLayer2 ?? null;
+  const envColor2 = envLayer2Extras ? resolveSlot(envLayer2Extras, "color2") : { textureIndex: null, constant: null };
+  const envNormal2 = envLayer2Extras ? resolveSlot(envLayer2Extras, "normal2") : { textureIndex: null, constant: null };
+  const envHeight2 = envLayer2Extras ? resolveSlot(envLayer2Extras, "height2") : { textureIndex: null, constant: null };
+  const envColor2MapPromise = getTex(envColor2.textureIndex);
+  const envNormal2MapPromise = getTex(envNormal2.textureIndex);
+  const envHeight2MapPromise = envHeight2.textureIndex != null ? getTex(envHeight2.textureIndex) : envHeight2.constant ? buildConstantTexture(envHeight2.constant.raw) : null;
+
+  const [
+    albedoMap,
+    normalMap,
+    aoMap,
+    metalnessMap,
+    selfIllumMap,
+    layer2Map,
+    blendModMap,
+    layer2NormalMap,
+    env1HeightMap,
+    envColor2Map,
+    envNormal2Map,
+    envHeight2Map,
+  ] = await Promise.all([
     albedoMapPromise,
     normalMapPromise,
     aoMapPromise,
@@ -255,6 +289,11 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
     selfIllumMapPromise,
     layer2MapPromise,
     blendModMapPromise,
+    layer2NormalMapPromise,
+    env1HeightMapPromise,
+    envColor2MapPromise,
+    envNormal2MapPromise,
+    envHeight2MapPromise,
   ]);
 
   // A flat (materials/default/) normal's constant: only its baked-in roughness matters (change
@@ -291,6 +330,63 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
     blendModConstant = new THREE.Vector3(r / 255, g / 255, b / 255);
   }
   const hasLayers = !!layers && (!!layer2Map || !!layer2ConstantColor);
+
+  // `s6f3a7_env_materials.md` change items 1/3: `env1` is `null` unless the height texture
+  // actually loaded (matches `export.rs`'s own "only emit extras.env1 when it loads" rule, review
+  // fix item 4's constant-texture fallback included); `envLayer2` additionally requires
+  // colour/normal/height all present (`EnvLayer2`'s own doc comment -- every csgo_environment_
+  // blend material surveyed has all three, in texture or constant form).
+  let env1 = null;
+  if (env1HeightMap) {
+    env1 = {
+      heightMap: env1HeightMap,
+      roughnessContrast: env1Extras.roughnessContrast1 ?? 1,
+      roughnessBrightness: env1Extras.roughnessBrightness1 ?? 1,
+      normalContrast: env1Extras.normalContrast1 ?? 1, // review fix item 7
+      aoLevels: new THREE.Vector3(...(env1Extras.aoLevels1 ?? [0, 0.5, 1])),
+      metalnessEnabled: env1Extras.metalnessEnabled1 !== false,
+      // review fix item 1: per-layer colour-correction matrices (`RenderMaterial.cs:671-744`,
+      // `crates/s2render/src/color_correct.rs`), gated by tintMask1 = remap(height1.g).
+      colorAdjust: env1Extras.colorAdjust1 ? new THREE.Matrix4().fromArray(env1Extras.colorAdjust1) : null,
+      adjust: env1Extras.adjust1 ? new THREE.Matrix4().fromArray(env1Extras.adjust1) : null,
+      colorCorrectionMode: env1Extras.colorCorrectionMode1 ?? 0,
+      tintMaskContrast: env1Extras.tintMaskContrast1 ?? 1,
+      tintMaskBrightness: env1Extras.tintMaskBrightness1 ?? 1,
+    };
+  }
+  let envLayer2 = null;
+  if (env1 && envColor2Map && envNormal2Map && envHeight2Map) {
+    envLayer2 = {
+      colorMap: envColor2Map,
+      color2ManualSrgb: envColor2Map?.userData?.manualSrgb === true,
+      normalMap: envNormal2Map,
+      heightMap: envHeight2Map,
+      roughnessContrast: envLayer2Extras.roughnessContrast2 ?? 1,
+      roughnessBrightness: envLayer2Extras.roughnessBrightness2 ?? 1,
+      normalContrast: envLayer2Extras.normalContrast2 ?? 1, // review fix item 7
+      aoLevels: new THREE.Vector3(...(envLayer2Extras.aoLevels2 ?? [0, 0.5, 1])),
+      metalnessEnabled: envLayer2Extras.metalnessEnabled2 !== false,
+      heightScale1: envLayer2Extras.heightScale1 ?? 1,
+      heightZeroPoint1: envLayer2Extras.heightZeroPoint1 ?? 0.5,
+      heightScale2: envLayer2Extras.heightScale2 ?? 1,
+      heightZeroPoint2: envLayer2Extras.heightZeroPoint2 ?? 0.5,
+      blendSoftness2: envLayer2Extras.blendSoftness2 ?? 0.01,
+      // review fix item 2: layer 2's own UV transform (`csgo_environment.vert.slang:175-180`),
+      // applied to every layer-2 sample (height2/color2/normal2/metalness2).
+      uvScale: envLayer2Extras.uvScale2 ?? [1, 1],
+      uvOffset: envLayer2Extras.uvOffset2 ?? [0, 0],
+      uvRotation: envLayer2Extras.uvRotation2 ?? 0,
+      // F_BLEND_BY_FACING_DIRECTION_2: present only on materials that set it.
+      facingDir: envLayer2Extras.facingDirection2 ?? null,
+      facingMinMax: envLayer2Extras.facingMinMax2 ?? null,
+      // review fix item 1.
+      colorAdjust: envLayer2Extras.colorAdjust2 ? new THREE.Matrix4().fromArray(envLayer2Extras.colorAdjust2) : null,
+      adjust: envLayer2Extras.adjust2 ? new THREE.Matrix4().fromArray(envLayer2Extras.adjust2) : null,
+      colorCorrectionMode: envLayer2Extras.colorCorrectionMode2 ?? 0,
+      tintMaskContrast: envLayer2Extras.tintMaskContrast2 ?? 1,
+      tintMaskBrightness: envLayer2Extras.tintMaskBrightness2 ?? 1,
+    };
+  }
 
   // review fix item 1: `mask.r` only (`complex.frag.slang:546`'s own `.r`), sRGB-linearised the
   // same way a real texture sample would be (GPU-native decode, or the manual fallback the shader
@@ -337,6 +433,9 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
     layer2ConstantColor,
     blendModMap,
     blendModConstant,
+    layer2NormalMap,
+    env1,
+    envLayer2,
     hasSelfIllum,
     selfIllumMap,
     selfIllumManualSrgb: selfIllumMap?.userData?.manualSrgb === true,

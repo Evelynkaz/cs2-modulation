@@ -288,6 +288,41 @@ async fn validation_errors_are_400_with_expected_text() {
                 "zMin": 100.0, "zMax": 0.0 }),
             "zMin must not be greater than zMax",
         ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "targetArea": [[100.0,100.0],[300.0,100.0],[300.0,300.0],[100.0,300.0]] }),
+            "mutually exclusive",
+        ),
+        (
+            json!({ "map": "de_test",
+                "targetArea": [[100.0,100.0],[300.0,300.0]] }),
+            "between 3 and 64 vertices",
+        ),
+        (
+            json!({ "map": "de_test",
+                "targetArea": [[100.0,100.0],[300.0,100.0],"bad"] }),
+            "must be [x,y] with finite numbers",
+        ),
+        (
+            json!({ "map": "de_test",
+                "targetArea": [[0.0,0.0],[9000.0,0.0],[9000.0,100.0],[0.0,100.0]] }),
+            "outside the map bounds",
+        ),
+        (
+            json!({ "map": "de_test",
+                "targetArea": [[0.0,0.0],[100.0,0.0],[200.0,0.0]] }),
+            "non-zero area",
+        ),
+        (
+            json!({ "map": "de_test",
+                "targetArea": [[100.0,100.0],[300.0,100.0],[300.0,300.0],[100.0,300.0]],
+                "targetZMin": 100.0, "targetZMax": 0.0 }),
+            "targetZMin must not be greater than targetZMax",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0], "targetZMin": "bad" }),
+            "targetZMin must be a finite number",
+        ),
     ];
     for (body, expected) in cases {
         let (status, bytes) = post_lineup(&router, &body).await;
@@ -652,4 +687,128 @@ async fn origin_area_limits_candidate_origins() {
         2,
         "the area query must not collide with the unrestricted one on cache key"
     );
+}
+
+/// Even-odd point-in-polygon, mirroring `solver::target::point_in_area_polygon` for this test's
+/// own containment checks (kept independent so a bug in the server's `insideTargetArea` flag
+/// can't hide behind reusing the exact same implementation it is meant to check).
+fn point_in_polygon(polygon: &[[f64; 2]], x: f64, y: f64) -> bool {
+    let n = polygon.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (polygon[i][0], polygon[i][1]);
+        let (xj, yj) = (polygon[j][0], polygon[j][1]);
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// `s6g2_target_area.md`: `targetArea` must actually restrict where a lineup's grenade comes to
+/// rest, every returned lineup's `insideTargetArea` flag must read `true`, and the cache key must
+/// not collide with an equivalent point-target query.
+#[tokio::test]
+async fn target_area_restricts_rest_points_and_flags_them() {
+    let cache_root = temp_dir("target_area");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
+
+    let point = json!({ "map": "de_test", "target": [200.0, 200.0, 0.0], "tolerance": 80.0 });
+    let (status, bytes) = post_lineup(&router, &point).await;
+    assert_eq!(status, StatusCode::OK);
+    let last = assert_well_formed_ndjson(&bytes);
+    let point_lineups = last["result"]["lineups"].as_array().unwrap();
+    assert!(!point_lineups.is_empty(), "{last}");
+    assert!(
+        point_lineups[0].get("insideTargetArea").is_none(),
+        "a point-target solve must not carry insideTargetArea at all: {}",
+        point_lineups[0]
+    );
+
+    let polygon = [
+        [100.0, 100.0],
+        [300.0, 100.0],
+        [300.0, 300.0],
+        [100.0, 300.0],
+    ];
+    let area = json!({ "map": "de_test", "targetArea": polygon });
+    let (status2, bytes2) = post_lineup(&router, &area).await;
+    assert_eq!(status2, StatusCode::OK);
+    let last2 = assert_well_formed_ndjson(&bytes2);
+    let result2 = &last2["result"];
+    let area_lineups = result2["lineups"].as_array().unwrap();
+    assert!(!area_lineups.is_empty(), "{result2}");
+    for l in area_lineups {
+        assert_eq!(l["insideTargetArea"], json!(true), "{l}");
+        let rest = l["rest"].as_array().unwrap();
+        let (rx, ry) = (rest[0].as_f64().unwrap(), rest[1].as_f64().unwrap());
+        assert!(
+            point_in_polygon(&polygon, rx, ry),
+            "rest point ({rx},{ry}) must be inside the polygon: {l}"
+        );
+    }
+
+    assert_eq!(
+        count_cache_files(&cache_root),
+        2,
+        "the target-area query must not collide with the point-target one on cache key"
+    );
+}
+
+/// `s6g2_target_area.md`'s check 3: an origin area and a target area at once - both constraints
+/// hold simultaneously (every origin inside the throw area, every rest point inside the landing
+/// area).
+#[tokio::test]
+async fn origin_area_and_target_area_combine() {
+    let cache_root = temp_dir("both_areas");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
+
+    let origin_polygon = [
+        [-500.0, -500.0],
+        [-200.0, -500.0],
+        [-200.0, -200.0],
+        [-500.0, -200.0],
+    ];
+    let target_polygon = [
+        [100.0, 100.0],
+        [300.0, 100.0],
+        [300.0, 300.0],
+        [100.0, 300.0],
+    ];
+    let body = json!({
+        "map": "de_test",
+        "originArea": origin_polygon,
+        "targetArea": target_polygon,
+    });
+    let (status, bytes) = post_lineup(&router, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let last = assert_well_formed_ndjson(&bytes);
+    let result = &last["result"];
+    let lineups = result["lineups"].as_array().unwrap();
+    assert!(!lineups.is_empty(), "{result}");
+    for l in lineups {
+        assert_eq!(l["insideTargetArea"], json!(true), "{l}");
+        let rest = l["rest"].as_array().unwrap();
+        assert!(
+            point_in_polygon(
+                &target_polygon,
+                rest[0].as_f64().unwrap(),
+                rest[1].as_f64().unwrap()
+            ),
+            "{l}"
+        );
+        let feet = l["feet"].as_array().unwrap();
+        assert!(
+            point_in_polygon(
+                &origin_polygon,
+                feet[0].as_f64().unwrap(),
+                feet[1].as_f64().unwrap()
+            ),
+            "{l}"
+        );
+    }
 }

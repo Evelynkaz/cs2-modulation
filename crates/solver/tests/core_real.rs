@@ -173,6 +173,7 @@ fn de_mirage_bombsite_a_sweep_and_verify() {
         constants: Some(&k),
         aim_target: Some(target),
         tolerance: Some(32.0),
+        area_accept: None,
         collider_glass_gone: None,
         on_candidate: None,
         cancel: None,

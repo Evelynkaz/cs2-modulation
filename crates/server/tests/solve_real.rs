@@ -142,9 +142,11 @@ fn direct_solve_first_ranked() -> rank::RankedLineup {
         attribute_filter,
     };
     let query = SolveQuery {
-        target: geom::math::V3::new(-1227.0001, -1071.9951, -168.0),
-        has_target_z: true,
-        tolerance: 80.0,
+        target: solver::target::Target::Point {
+            pos: geom::math::V3::new(-1227.0001, -1071.9951, -168.0),
+            has_z: true,
+            tolerance: 80.0,
+        },
         origin_reach: 3100.0,
         min_stability: 0.4,
         spawn_fronts,

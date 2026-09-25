@@ -21,7 +21,8 @@ use geom::filter::names_mask;
 use geom::math::V3;
 use sim::{ThrowConstants, ThrowSpec, Trace, eye_height, simulate_exact};
 use solver::target::{
-    MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve, solve_for_target,
+    MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, Target, TargetArea, TargetSolve,
+    point_in_area_polygon, solve_for_target,
 };
 use solver::verify::within_tolerance;
 
@@ -113,6 +114,72 @@ fn assert_exact(solve: &TargetSolve, target: V3, tolerance: f32, k: &ThrowConsta
     }
 }
 
+/// Same promise as `assert_exact`, but for `Target::Area`: every returned lineup's exact
+/// re-simulated rest point falls inside the polygon (review G2, bug 1 - `verify_exact`'s no-aim
+/// branch used to keep offset (0,0) without checking it settled and accepted on its own, leaving
+/// `rest_point` on the coarse, unverified sweep rest for lineups that should have been rejected).
+fn assert_exact_area(solve: &TargetSolve, area: &TargetArea, k: &ThrowConstants) {
+    assert!(!solve.lineups.is_empty(), "expected at least one lineup");
+    for l in &solve.lineups {
+        let eye = l.feet + V3::new(0.0, 0.0, eye_height(l.throw_type));
+        let spec = ThrowSpec {
+            eye,
+            yaw_deg: l.yaw_deg,
+            pitch_deg: l.pitch_deg,
+            throw_type: l.throw_type,
+            strength: l.strength,
+            run_yaw_offset_deg: l.run_yaw_offset_deg,
+        };
+        let result = simulate_exact(&solve.collider, &spec, k, Trace::default());
+        assert!(!result.lost, "lineup {l:?} re-simulated as lost");
+        let inside = point_in_area_polygon(&area.polygon, result.rest.x, result.rest.y)
+            && area.z_min.is_none_or(|lo| result.rest.z >= lo)
+            && area.z_max.is_none_or(|hi| result.rest.z <= hi);
+        assert!(
+            inside,
+            "lineup {l:?} re-simulated rest {:?} outside the target area",
+            result.rest
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs CS2_GAME_DIR"]
+fn de_mirage_narrow_target_area() {
+    let map = load_map("de_mirage");
+    let k = ThrowConstants::default();
+    let cancel = AtomicBool::new(false);
+
+    let area = TargetArea {
+        polygon: vec![
+            [-1327.0, -1172.0],
+            [-1127.0, -1172.0],
+            [-1127.0, -972.0],
+            [-1327.0, -972.0],
+        ],
+        z_min: None,
+        z_max: None,
+    };
+    let q = SolveQuery {
+        target: Target::Area(area.clone()),
+        ..Default::default()
+    };
+    let start = Instant::now();
+    let hooks = SolveHooks {
+        progress: &|_, _| {},
+        on_origin: None,
+        on_candidate: None,
+    };
+    let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
+    println!(
+        "(narrow area) {} origins, {} lineups in {:.2}s",
+        solve.origins,
+        solve.lineups.len(),
+        start.elapsed().as_secs_f64()
+    );
+    assert_exact_area(&solve, &area, &k);
+}
+
 #[test]
 #[ignore = "needs CS2_GAME_DIR"]
 fn de_mirage_three_target_queries() {
@@ -123,12 +190,15 @@ fn de_mirage_three_target_queries() {
     // query `a`, but with the CLI's own reach-300 default for a click solve
     // (the harness's own query `a` uses reach 600).
     {
+        let tolerance = 32.0;
         let q = SolveQuery {
-            target: V3::new(-662.5, -1612.5, 0.0),
-            has_target_z: false,
+            target: Target::Point {
+                pos: V3::new(-662.5, -1612.5, 0.0),
+                has_z: false,
+                tolerance,
+            },
             origin_click: Some([-104.5, -1796.0]),
             origin_reach: 300.0,
-            tolerance: 32.0,
             ..Default::default()
         };
         let start = Instant::now();
@@ -144,18 +214,21 @@ fn de_mirage_three_target_queries() {
             solve.lineups.len(),
             start.elapsed().as_secs_f64()
         );
-        assert_exact(&solve, solve.target, q.tolerance, &k);
+        assert_exact(&solve, solve.target, tolerance, &k);
     }
 
     // query `c`: exact origin, originz given explicitly.
     {
+        let tolerance = 32.0;
         let q = SolveQuery {
-            target: V3::new(-662.5, -1612.5, 0.0),
-            has_target_z: false,
+            target: Target::Point {
+                pos: V3::new(-662.5, -1612.5, 0.0),
+                has_z: false,
+                tolerance,
+            },
             origin_click: Some([32.0, -1696.0]),
             origin_z: Some(-168.0),
             origin_reach: 600.0,
-            tolerance: 32.0,
             exact_origin: true,
             ..Default::default()
         };
@@ -172,17 +245,20 @@ fn de_mirage_three_target_queries() {
             solve.lineups.len(),
             start.elapsed().as_secs_f64()
         );
-        assert_exact(&solve, solve.target, q.tolerance, &k);
+        assert_exact(&solve, solve.target, tolerance, &k);
     }
 
     // query `c3`: exact origin, 3D target (no nav-derived Z).
     {
+        let tolerance = 32.0;
         let q = SolveQuery {
-            target: V3::new(-662.5, -1612.5, -120.0),
-            has_target_z: true,
+            target: Target::Point {
+                pos: V3::new(-662.5, -1612.5, -120.0),
+                has_z: true,
+                tolerance,
+            },
             origin_click: Some([32.0, -1696.0]),
             origin_reach: 600.0,
-            tolerance: 32.0,
             exact_origin: true,
             ..Default::default()
         };
@@ -201,6 +277,6 @@ fn de_mirage_three_target_queries() {
             solve.lineups.len(),
             start.elapsed().as_secs_f64()
         );
-        assert_exact(&solve, solve.target, q.tolerance, &k);
+        assert_exact(&solve, solve.target, tolerance, &k);
     }
 }

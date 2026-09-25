@@ -14,7 +14,9 @@ use geom::math::V3;
 use sim::ThrowType;
 use solver::rank;
 use solver::standspots::{self, Stance};
-use solver::target::{MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, solve_for_target};
+use solver::target::{
+    MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, Target, solve_for_target,
+};
 
 use crate::cmd_extract::load_or_extract_mesh;
 use crate::constants::resolve_constants;
@@ -370,13 +372,15 @@ pub fn solve(
         3100.0
     });
     let query = SolveQuery {
-        target,
-        has_target_z,
+        target: Target::Point {
+            pos: target,
+            has_z: has_target_z,
+            tolerance,
+        },
         origin_click,
         origin_z,
         origin_reach: reach,
         origin_area: None,
-        tolerance,
         min_stability: 0.4,
         fine_scan: fine,
         types,
@@ -482,7 +486,7 @@ pub fn solve(
     }
 
     if let Some(out) = json_out {
-        let json = server::solve::json_payload(&solve, &ranked_list);
+        let json = server::solve::json_payload(&solve, &ranked_list, None);
         let tmp = out.with_extension("json.tmp");
         fs::write(&tmp, serde_json::to_string(&json)?)
             .with_context(|| format!("failed to write {}", tmp.display()))?;

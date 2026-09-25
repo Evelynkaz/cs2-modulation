@@ -76,7 +76,12 @@ export function createPanel(container, handlers) {
   }
 
   function renderRow(l) {
-    const dist = target ? distance3(l.rest, [target.x, target.y, target.z]) : null;
+    // `insideTargetArea` only ever comes back for a `Target::Area` solve (review G2, decision
+    // 9a) - the distance to the area's own representative point is meaningless there (it can
+    // read 190+ for a landing that is on a roof directly above that point), so an "в области"
+    // badge replaces it instead of showing a number nobody asked to minimize.
+    const isArea = l.insideTargetArea === true;
+    const dist = !isArea && target ? distance3(l.rest, [target.x, target.y, target.z]) : null;
     const row = el("li", {
       className: "lineup-row" + (l.id === selectedId ? " selected" : ""),
     });
@@ -111,13 +116,18 @@ export function createPanel(container, handlers) {
     const stats = el(
       "div",
       { className: "lineup-stats" },
-      el("span", { textContent: `${strings.panel.distance}: ${dist != null ? dist.toFixed(0) : "?"}` }),
+      isArea
+        ? null
+        : el("span", { textContent: `${strings.panel.distance}: ${dist != null ? dist.toFixed(0) : "?"}` }),
       el("span", { textContent: `${strings.panel.stability}: ${(l.stability * 100).toFixed(0)}%` }),
       el("span", { textContent: `${strings.panel.humanError}: ${l.humanError.toFixed(1)}°` }),
       el("span", { textContent: `${strings.panel.bounces}: ${l.Bounces}` }),
       el("span", { textContent: `${strings.panel.flightTime}: ${l.flightTime.toFixed(2)} с` }),
     );
     const flags = el("div", { className: "lineup-flags" });
+    if (isArea) {
+      flags.append(el("span", { className: "pill", textContent: strings.panel.insideArea }));
+    }
     if (l.pin === "corner") {
       flags.append(el("span", { className: "pill", textContent: strings.panel.pinCorner }));
     } else if (l.pin === "wall") {

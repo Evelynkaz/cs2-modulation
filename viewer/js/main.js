@@ -122,14 +122,19 @@ function readHash() {
   const params = new URLSearchParams(raw);
   const map = params.get("map");
   const targetStr = params.get("target");
-  if (!map || !targetStr) {
+  // A link needs either a point `target` or a `targetArea` to be worth auto-running
+  // (`s6g2_target_area.md`) - the two are mutually exclusive, so either is enough on its own.
+  if (!map || (!targetStr && !params.get("targetArea"))) {
     return null;
   }
-  const target = targetStr.split(",").map(Number);
-  if (target.length < 3 || target.some((v) => !Number.isFinite(v))) {
-    return null;
+  const query = { map };
+  if (targetStr) {
+    const target = targetStr.split(",").map(Number);
+    if (target.length < 3 || target.some((v) => !Number.isFinite(v))) {
+      return null;
+    }
+    query.target = target;
   }
-  const query = { map, target };
   for (const [k, v] of params.entries()) {
     if (k === "map" || k === "target") {
       continue;
@@ -148,6 +153,30 @@ function finiteNumber(str) {
 
 function bodyFromHash(q) {
   const body = { map: q.map, target: q.target };
+  // `s6g2_target_area.md`: same flat-list idiom as `originArea` below, for `targetArea` - only
+  // meaningful when there is no `target` (the two are mutually exclusive).
+  if (!q.target && q.targetArea) {
+    const nums = q.targetArea.split(",").map(Number);
+    if (nums.length >= 6 && nums.length % 2 === 0 && nums.every(Number.isFinite)) {
+      const polygon = [];
+      for (let i = 0; i < nums.length; i += 2) {
+        polygon.push([nums[i], nums[i + 1]]);
+      }
+      body.targetArea = polygon;
+    }
+  }
+  if (q.targetZMin) {
+    const v = finiteNumber(q.targetZMin);
+    if (v !== undefined) {
+      body.targetZMin = v;
+    }
+  }
+  if (q.targetZMax) {
+    const v = finiteNumber(q.targetZMax);
+    if (v !== undefined) {
+      body.targetZMax = v;
+    }
+  }
   if (q.origin) {
     const o = q.origin.split(",").map(Number);
     if (o.length === 2 && o.every(Number.isFinite)) {
@@ -219,7 +248,13 @@ function bodyFromHash(q) {
 }
 
 function syncHash(body) {
-  const parts = [`map=${encodeURIComponent(body.map)}`, `target=${body.target.map((v) => v.toFixed(1)).join(",")}`];
+  const parts = [`map=${encodeURIComponent(body.map)}`];
+  // `target` gets its own fixed-precision formatting; `targetArea` (area mode, `body.target`
+  // absent - `s6g2_target_area.md`) falls through to the generic array formatting below, same as
+  // `originArea` already does.
+  if (body.target) {
+    parts.push(`target=${body.target.map((v) => v.toFixed(1)).join(",")}`);
+  }
   for (const [k, v] of Object.entries(body)) {
     if (k === "map" || k === "target") {
       continue;
@@ -834,10 +869,16 @@ async function showMapScreen(map, opts = {}) {
 
   // ---- per-screen solve state ----
   const solveState = {
+    targetMode: "point", // "point" | "area" (`s6g2_target_area.md`)
     target: null, // { x, y, z, label }
+    targetArea: null, // { polygon: [[x,y],...] } - mutually exclusive with `target`
     origin: null, // { x, y, reach }
     originArea: null, // { polygon: [[x,y],...] } (`s6g_origin_area.md`) - mutually exclusive with `origin`
-    params: { scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false, types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [], areaZMin: null, areaZMax: null },
+    params: {
+      scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false,
+      types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [],
+      areaZMin: null, areaZMax: null, targetAreaZMin: null, targetAreaZMax: null,
+    },
     running: false,
     controller: null,
   };
@@ -846,6 +887,7 @@ async function showMapScreen(map, opts = {}) {
   let sceneView = null; // lazily created on first switch to 3D, kept alive alongside mapView
   let viewMode = "2d"; // "2d" | "3d"
   let originStatusBox = null;
+  let targetStatusBox = null;
   let runRefs = null;
   let scopeSelectRef = null;
   // The origin-area tool (`s6g_origin_area.md`): `areaMode` mirrors `mapView`'s own draw-mode
@@ -855,6 +897,18 @@ async function showMapScreen(map, opts = {}) {
   let areaDraftCount = 0;
   let areaToggleBtnRef = null;
   let areaDeleteBtnRef = null;
+  // The target-area tool (`s6g2_target_area.md`), same pattern as the origin-area one above, key
+  // `"target"` in `mapView`'s own two-area API.
+  let targetAreaMode = false;
+  let targetAreaDraftCount = 0;
+  let targetAreaToggleBtnRef = null;
+  let targetAreaDeleteBtnRef = null;
+  // The stacked-floor level buttons (review G2 round 3, decision 4): the clusters
+  // `prefillAreaZRange` found under the most recently closed area, one per key, or `null` before
+  // any area has been closed or once one clears - `renderParamsBox`/`renderTargetAreaControls`
+  // only show the button row while there is more than one cluster.
+  let areaLevels = null;
+  let targetAreaLevels = null;
   // The last result/selection, replayed into a 3D view created after they already happened
   // (`ensureSceneView`) - `panel.js` owns the definitive copies, these just let a freshly built
   // view catch up without re-running the solve.
@@ -901,8 +955,15 @@ async function showMapScreen(map, opts = {}) {
   function applyTarget(t) {
     solveState.target = t;
     pendingLevels = null;
+    // A point target and a target area are mutually exclusive (`s6g2_target_area.md`) - picking
+    // a point clears any drawn area.
+    if (solveState.targetArea || targetAreaMode) {
+      clearTargetAreaState();
+      updateTargetAreaButtons();
+    }
     for (const v of views()) v.setTarget(t);
     renderTargetBox();
+    updateTargetStatus();
   }
 
   // RED-2: a click that only narrows down to a level choice must not leave the previous
@@ -916,6 +977,12 @@ async function showMapScreen(map, opts = {}) {
   // lookup entirely: there is no ambiguity to resolve, the hit point IS the target
   // (`s6f3b_viewer3d.md`: "точка попадания с высотой = цель").
   async function handleMapClick(wx, wy, wz) {
+    // In "область" mode a plain map click is only ever meant to place a target-area vertex
+    // (through the area tool's own handler, not this one) - ignore it here instead of quietly
+    // setting a point target the user never asked for (`s6g2_target_area.md`).
+    if (solveState.targetMode === "area") {
+      return;
+    }
     if (wz !== undefined) {
       caption.textContent = "";
       applyTarget({ x: wx, y: wy, z: wz, label: null });
@@ -987,10 +1054,11 @@ async function showMapScreen(map, opts = {}) {
   function clearArea() {
     solveState.originArea = null;
     areaDraftCount = 0;
-    mapView.setArea(null);
+    areaLevels = null;
+    mapView.setArea("origin", null);
     if (areaMode) {
       areaMode = false;
-      mapView.setAreaMode(false);
+      mapView.setAreaMode("origin", false);
     }
   }
 
@@ -1003,6 +1071,189 @@ async function showMapScreen(map, opts = {}) {
     updateAreaButtons();
     updateOriginStatus();
     syncScopeSelect();
+  }
+
+  // Vs. "точка", shows "область: N вершин" while the target-area tool has anything drawn
+  // (`s6g2_target_area.md`: same status-line convention as the origin area).
+  function updateTargetStatus() {
+    if (!targetStatusBox) {
+      return;
+    }
+    if (solveState.targetArea) {
+      targetStatusBox.textContent = strings.solveParams.areaStatus(solveState.targetArea.polygon.length);
+    } else if (targetAreaDraftCount > 0) {
+      targetStatusBox.textContent = strings.solveParams.areaStatus(targetAreaDraftCount);
+    } else {
+      targetStatusBox.textContent = "";
+    }
+  }
+
+  function updateTargetAreaButtons() {
+    if (!targetAreaToggleBtnRef) {
+      return;
+    }
+    targetAreaToggleBtnRef.textContent = targetAreaMode
+      ? strings.solveParams.areaStopButton
+      : solveState.targetArea
+        ? strings.solveParams.areaEditButton
+        : strings.solveParams.areaDrawButton;
+    targetAreaToggleBtnRef.className = targetAreaMode ? "primary" : "";
+    if (targetAreaDeleteBtnRef) {
+      targetAreaDeleteBtnRef.hidden = !solveState.targetArea;
+    }
+  }
+
+  // Discards the target area (drafted or committed) and leaves the tool off - shared by the
+  // "delete area" button and picking a point target.
+  function clearTargetAreaState() {
+    solveState.targetArea = null;
+    targetAreaDraftCount = 0;
+    targetAreaLevels = null;
+    mapView.setArea("target", null);
+    if (targetAreaMode) {
+      targetAreaMode = false;
+      mapView.setAreaMode("target", false);
+    }
+  }
+
+  // Groups sorted-ascending `zs` into clusters, starting a new one whenever the gap to the
+  // previous value exceeds 64 (review G2 round 3, item 3 - the exact split a sloped single floor
+  // needs to still read as one cluster, while two real stacked floors read as two). Each cluster
+  // reports its own `[zMin, zMax]` plus a representative `z` (its own mode, so an exact,
+  // unanimous floor height like a nav mesh's own literal z stays exactly that number).
+  function clusterLevels(zs) {
+    const sorted = [...zs].sort((a, b) => a - b);
+    const groups = [];
+    for (const z of sorted) {
+      const last = groups[groups.length - 1];
+      if (last && z - last[last.length - 1] <= 64) {
+        last.push(z);
+      } else {
+        groups.push([z]);
+      }
+    }
+    return groups.map((group) => {
+      const counts = new Map();
+      for (const z of group) {
+        counts.set(z, (counts.get(z) ?? 0) + 1);
+      }
+      let mode = group[0];
+      let modeCount = -1;
+      for (const [z, count] of counts) {
+        if (count > modeCount) {
+          modeCount = count;
+          mode = z;
+        }
+      }
+      return { zMin: Math.min(...group), zMax: Math.max(...group), z: mode };
+    });
+  }
+
+  // A freshly closed area has no height range yet, so as drawn it would cover every level under
+  // it (e.g. every floor stacked under the same roof) - prefilling from the floor under the area
+  // makes "this floor" the default instead, while the fields stay editable or clearable
+  // afterward (`s6g2_target_area.md` decision 9b). Levels come from `/api/levels` at the
+  // polygon's own vertices, its centroid, and its edge midpoints (review G2 round 4 - a stacked
+  // floor under the middle of a drawn area, away from every vertex, still needs a sample point
+  // nearby to be found at all).
+  //
+  // Whether to cluster at all depends on whether any single sampled *point* itself ever reports
+  // more than one level there (review G2 round 4, correcting round 3's own item 3): a sloped
+  // single floor has every point reporting exactly one level each, just at different heights as
+  // the slope rises - clustering those by a flat z gap still cuts the floor in half. Only when at
+  // least one point reports two-or-more levels *at that same point* is a real stack of floors
+  // actually there; only then are the stacked points' own levels clustered (sort, split on >64
+  // gaps), the top cluster becomes the default, and the level-picker buttons show. A single-level
+  // point then joins whichever cluster its own z falls inside, or the nearest one.
+  async function prefillAreaZRange(polygon) {
+    const cx = polygon.reduce((sum, p) => sum + p[0], 0) / polygon.length;
+    const cy = polygon.reduce((sum, p) => sum + p[1], 0) / polygon.length;
+    const edgeMidpoints = polygon.map((p, i) => {
+      const q = polygon[(i + 1) % polygon.length];
+      return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+    });
+    const points = [...polygon, [cx, cy], ...edgeMidpoints];
+    const results = await Promise.all(points.map(([x, y]) => fetchLevels(map, x, y)));
+    const perPointZ = results.map(({ data }) => {
+      const seen = new Set();
+      const zs = [];
+      for (const lvl of data?.levels ?? []) {
+        const z = Math.round(lvl.z);
+        if (seen.has(z)) {
+          continue;
+        }
+        seen.add(z);
+        zs.push(z);
+      }
+      return zs;
+    });
+    const allZ = perPointZ.flat();
+    if (allZ.length === 0) {
+      return null;
+    }
+    if (!perPointZ.some((zs) => zs.length >= 2)) {
+      // One level per point everywhere sampled - a single (possibly sloped) floor.
+      return { range: [Math.min(...allZ) - 32, Math.max(...allZ) + 96], clusters: null };
+    }
+    const stackedZ = perPointZ.filter((zs) => zs.length >= 2).flat();
+    const clusters = clusterLevels(stackedZ).sort((a, b) => b.z - a.z);
+    for (const zs of perPointZ) {
+      if (zs.length >= 2) {
+        continue; // already part of the clustering above
+      }
+      for (const z of zs) {
+        let best = null;
+        let bestDist = Infinity;
+        for (const c of clusters) {
+          const dist = z < c.zMin ? c.zMin - z : z > c.zMax ? z - c.zMax : 0;
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = c;
+          }
+        }
+        best.zMin = Math.min(best.zMin, z);
+        best.zMax = Math.max(best.zMax, z);
+      }
+    }
+    // Default to the floor under the most sampled points, not simply the top one: a second level
+    // under a single corner must not pull the default away from the floor under the rest of the
+    // area. Ties keep the top-first order, so a fully stacked spot still defaults to the upper
+    // floor the radar shows.
+    let chosen = clusters[0];
+    let chosenCount = -1;
+    for (const c of clusters) {
+      const count = perPointZ.filter((zs) => zs.some((z) => z >= c.zMin && z <= c.zMax)).length;
+      if (count > chosenCount) {
+        chosenCount = count;
+        chosen = c;
+      }
+    }
+    return {
+      range: [chosen.zMin - 32, chosen.zMax + 96],
+      clusters: clusters.length > 1 ? clusters : null,
+    };
+  }
+
+  // Review G2 round 3, decision 4: a row of small buttons next to the height fields, one per
+  // stacked floor `prefillAreaZRange` found under the area - `null` (nothing rendered) while
+  // there is only one (or none yet). `clusters` is already sorted top-first.
+  function renderAreaLevelButtons(clusters, apply) {
+    if (!clusters || clusters.length < 2) {
+      return null;
+    }
+    const row = el("div", { className: "field-row" }, el("span", { className: "hint", textContent: strings.solveParams.areaLevelsLabel }));
+    clusters.forEach((c, i) => {
+      let label;
+      if (clusters.length === 2) {
+        label = i === 0 ? strings.solveParams.areaLevelTop(c.z) : strings.solveParams.areaLevelBottom(c.z);
+      } else {
+        label = strings.solveParams.areaLevelNth(i + 1, c.z);
+      }
+      const btn = el("button", { type: "button", textContent: label });
+      btn.addEventListener("click", () => apply(c.zMin - 32, c.zMax + 96));
+      row.append(btn);
+    });
+    return row;
   }
 
   function toggleInArray(arr, value, checked) {
@@ -1089,12 +1340,20 @@ async function showMapScreen(map, opts = {}) {
     areaDeleteBtnRef = areaDeleteBtn;
     areaToggleBtn.addEventListener("click", () => {
       areaMode = !areaMode;
-      mapView.setAreaMode(areaMode);
+      mapView.setAreaMode("origin", areaMode);
       if (areaMode && solveState.origin) {
         // Starting to draw/edit an area is exclusive with a point origin (`s6g_origin_area.md`).
         solveState.origin = null;
         for (const v of views()) v.clearOrigin();
         syncScopeSelect();
+      }
+      // map2d.js only ever drafts one area tool at a time - activating this one silently
+      // deactivated the target-area tool there too, so its own local flag/button/status must
+      // follow (review G2, risk 6).
+      if (areaMode && targetAreaMode) {
+        targetAreaMode = false;
+        updateTargetAreaButtons();
+        updateTargetStatus();
       }
       updateAreaButtons();
       updateOriginStatus();
@@ -1114,6 +1373,12 @@ async function showMapScreen(map, opts = {}) {
       const v = parseFloat(areaZMaxInput.value);
       solveState.params.areaZMax = Number.isFinite(v) ? v : null;
     });
+    const areaLevelButtons = renderAreaLevelButtons(areaLevels, (zMin, zMax) => {
+      areaZMinInput.value = zMin;
+      areaZMaxInput.value = zMax;
+      solveState.params.areaZMin = zMin;
+      solveState.params.areaZMax = zMax;
+    });
     paramsContent.append(
       el("p", { textContent: strings.solveParams.areaLabel }),
       el("p", { className: "hint", textContent: strings.solveParams.areaHint }),
@@ -1126,8 +1391,11 @@ async function showMapScreen(map, opts = {}) {
         el("label", { htmlFor: "area-zmax", textContent: strings.solveParams.areaZMaxLabel }),
         areaZMaxInput,
       ),
-      el("p", { className: "hint", textContent: strings.solveParams.areaZHint }),
     );
+    if (areaLevelButtons) {
+      paramsContent.append(areaLevelButtons);
+    }
+    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.areaZHint }));
     updateAreaButtons();
 
     const tolInput = el("input", { id: "tolerance-input", type: "number", min: 1, max: 512, value: solveState.params.tolerance });
@@ -1200,9 +1468,41 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
+  // `s6g2_target_area.md`: switches between a point target (as before) and an area target - the
+  // two are mutually exclusive.
+  function setTargetMode(mode) {
+    if (solveState.targetMode === mode) {
+      return;
+    }
+    solveState.targetMode = mode;
+    if (mode === "area") {
+      clearTarget();
+      pendingLevels = null;
+    } else {
+      clearTargetAreaState();
+      updateTargetAreaButtons();
+    }
+    renderTargetBox();
+  }
+
   function renderTargetBox() {
     targetBox.replaceChildren();
     targetBox.append(el("h2", { textContent: strings.mapScreen.targetLabel }));
+
+    const modeRow = el("div", { className: "field-row", role: "radiogroup", "aria-label": strings.mapScreen.targetModeLabel });
+    for (const [value, label] of [["point", strings.mapScreen.targetModePoint], ["area", strings.mapScreen.targetModeArea]]) {
+      const id = `target-mode-${value}`;
+      const input = el("input", { type: "radio", name: "target-mode", id, value, checked: solveState.targetMode === value });
+      input.addEventListener("change", () => setTargetMode(value));
+      modeRow.append(el("span", { className: "radio-item" }, input, el("label", { htmlFor: id, textContent: label })));
+    }
+    targetBox.append(modeRow);
+
+    if (solveState.targetMode === "area") {
+      renderTargetAreaControls();
+      return;
+    }
+
     if (solveState.target) {
       const t = solveState.target;
       const label = t.label ? ` (${t.label})` : "";
@@ -1249,6 +1549,68 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
+  // The target-area tool's own controls (draw/edit/delete, z range, status) - same shape as the
+  // origin area's block in `renderParamsBox`, just targeting `mapView`'s `"target"` area key.
+  function renderTargetAreaControls() {
+    const toggleBtn = el("button", { type: "button" });
+    const deleteBtn = el("button", { type: "button", textContent: strings.solveParams.areaDeleteButton, hidden: true });
+    targetAreaToggleBtnRef = toggleBtn;
+    targetAreaDeleteBtnRef = deleteBtn;
+    toggleBtn.addEventListener("click", () => {
+      targetAreaMode = !targetAreaMode;
+      mapView.setAreaMode("target", targetAreaMode);
+      // Same reasoning as the origin area's own toggle above, mirrored (review G2, risk 6).
+      if (targetAreaMode && areaMode) {
+        areaMode = false;
+        updateAreaButtons();
+        updateOriginStatus();
+      }
+      updateTargetAreaButtons();
+      updateTargetStatus();
+    });
+    deleteBtn.addEventListener("click", () => {
+      clearTargetAreaState();
+      updateTargetAreaButtons();
+      updateTargetStatus();
+    });
+    const zMinInput = el("input", { id: "target-area-zmin", type: "number", placeholder: "-", value: solveState.params.targetAreaZMin ?? "" });
+    zMinInput.addEventListener("input", () => {
+      const v = parseFloat(zMinInput.value);
+      solveState.params.targetAreaZMin = Number.isFinite(v) ? v : null;
+    });
+    const zMaxInput = el("input", { id: "target-area-zmax", type: "number", placeholder: "-", value: solveState.params.targetAreaZMax ?? "" });
+    zMaxInput.addEventListener("input", () => {
+      const v = parseFloat(zMaxInput.value);
+      solveState.params.targetAreaZMax = Number.isFinite(v) ? v : null;
+    });
+    const targetAreaLevelButtons = renderAreaLevelButtons(targetAreaLevels, (zMin, zMax) => {
+      zMinInput.value = zMin;
+      zMaxInput.value = zMax;
+      solveState.params.targetAreaZMin = zMin;
+      solveState.params.targetAreaZMax = zMax;
+    });
+    targetBox.append(
+      el("p", { className: "hint", textContent: strings.solveParams.targetAreaHint }),
+      el("div", { className: "field-row" }, toggleBtn, deleteBtn),
+      el(
+        "div",
+        { className: "field-row" },
+        el("label", { htmlFor: "target-area-zmin", textContent: strings.solveParams.areaZMinLabel }),
+        zMinInput,
+        el("label", { htmlFor: "target-area-zmax", textContent: strings.solveParams.areaZMaxLabel }),
+        zMaxInput,
+      ),
+    );
+    if (targetAreaLevelButtons) {
+      targetBox.append(targetAreaLevelButtons);
+    }
+    targetBox.append(el("p", { className: "hint", textContent: strings.solveParams.areaZHint }));
+    targetStatusBox = el("p", { className: "hint" });
+    targetBox.append(targetStatusBox);
+    updateTargetAreaButtons();
+    updateTargetStatus();
+  }
+
   function paintProgress(refs, lastPhase, startedAt, checkedTotal, verifiedTotal) {
     const elapsed = (Date.now() - startedAt) / 1000;
     const label = strings.solve.phases[lastPhase] ?? lastPhase;
@@ -1292,7 +1654,7 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function startSolve(bodyOverride) {
-    if (!solveState.target) {
+    if (!solveState.target && !solveState.targetArea) {
       runRefs.status.className = "status status-error";
       runRefs.status.textContent = strings.solve.needTarget;
       return;
@@ -1325,7 +1687,12 @@ async function showMapScreen(map, opts = {}) {
     const originAreaForQuery = solveState.originArea
       ? { polygon: solveState.originArea.polygon, zMin: solveState.params.areaZMin, zMax: solveState.params.areaZMax }
       : null;
-    const body = bodyOverride ?? buildQuery(map, solveState.target, solveState.origin, originAreaForQuery, solveState.params);
+    const targetAreaForQuery = solveState.targetArea
+      ? { polygon: solveState.targetArea.polygon, zMin: solveState.params.targetAreaZMin, zMax: solveState.params.targetAreaZMax }
+      : null;
+    const body =
+      bodyOverride ??
+      buildQuery(map, solveState.target, targetAreaForQuery, solveState.origin, originAreaForQuery, solveState.params);
     syncHash(body);
     // Snapshot now, not read back from `solveState.params.broken` in `onResult` - the panel stays
     // interactive while the solve runs, so those checkboxes could have changed by the time it ends.
@@ -1396,13 +1763,25 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function applyAutoBody(body) {
-    applyTarget({ x: body.target[0], y: body.target[1], z: body.target[2], label: null });
+    if (body.target) {
+      applyTarget({ x: body.target[0], y: body.target[1], z: body.target[2], label: null });
+    } else if (body.targetArea) {
+      solveState.targetMode = "area";
+      solveState.targetArea = { polygon: body.targetArea };
+      mapView.setArea("target", body.targetArea);
+      if (body.targetZMin != null) {
+        solveState.params.targetAreaZMin = body.targetZMin;
+      }
+      if (body.targetZMax != null) {
+        solveState.params.targetAreaZMax = body.targetZMax;
+      }
+    }
     if (body.origin) {
       solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
       for (const v of views()) v.setOrigin(solveState.origin);
     } else if (body.originArea) {
       solveState.originArea = { polygon: body.originArea };
-      mapView.setArea(body.originArea);
+      mapView.setArea("origin", body.originArea);
       if (body.zMin != null) {
         solveState.params.areaZMin = body.zMin;
       }
@@ -1596,7 +1975,7 @@ async function showMapScreen(map, opts = {}) {
     }
     mapView.onClick((wx, wy) => handleMapClick(wx, wy));
     mapView.onRightClick((wx, wy) => handleOriginClick(wx, wy));
-    mapView.onAreaChange(({ points, closed }) => {
+    mapView.onAreaChange("origin", ({ points, closed }) => {
       areaDraftCount = points.length;
       // `closed` stays true on every later drag of an already-closed polygon's vertex too, not
       // just the one event where it first closes - only that first transition should auto-exit
@@ -1612,11 +1991,55 @@ async function showMapScreen(map, opts = {}) {
         }
         if (justClosed) {
           areaMode = false;
-          mapView.setAreaMode(false);
+          mapView.setAreaMode("origin", false);
+          prefillAreaZRange(solveState.originArea.polygon).then((prefill) => {
+            if (!prefill) {
+              // No nav under the new area (e.g. a roof): don't keep the previous area's range.
+              areaLevels = null;
+              solveState.params.areaZMin = null;
+              solveState.params.areaZMax = null;
+              renderParamsBox();
+              return;
+            }
+            areaLevels = prefill.clusters;
+            [solveState.params.areaZMin, solveState.params.areaZMax] = prefill.range;
+            renderParamsBox();
+          });
         }
       }
       updateAreaButtons();
       updateOriginStatus();
+    });
+    mapView.onAreaChange("target", ({ points, closed }) => {
+      targetAreaDraftCount = points.length;
+      // Same "only the first close transition exits the tool" reasoning as the origin area above.
+      const justClosed = closed && !solveState.targetArea;
+      if (closed) {
+        solveState.targetArea = { polygon: points.map((p) => [p.x, p.y]) };
+        if (solveState.target) {
+          solveState.target = null;
+          for (const v of views()) v.clearTarget();
+        }
+        if (justClosed) {
+          targetAreaMode = false;
+          mapView.setAreaMode("target", false);
+          prefillAreaZRange(solveState.targetArea.polygon).then((prefill) => {
+            if (!prefill) {
+              // No nav under the new area (e.g. a roof): don't keep the previous area's range.
+              targetAreaLevels = null;
+              solveState.params.targetAreaZMin = null;
+              solveState.params.targetAreaZMax = null;
+              renderTargetBox();
+              return;
+            }
+            targetAreaLevels = prefill.clusters;
+            [solveState.params.targetAreaZMin, solveState.params.targetAreaZMax] = prefill.range;
+            renderTargetBox();
+          });
+        }
+      }
+      updateTargetAreaButtons();
+      updateTargetStatus();
     });
     if (opts.autoBody) {
       applyAutoBody(opts.autoBody);

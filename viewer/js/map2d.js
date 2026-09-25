@@ -12,16 +12,21 @@ const PALETTES = {
   dark: { floorLo: [36, 40, 48], floorHi: [58, 64, 76], cover: [86, 94, 108], wall: [214, 219, 227] },
 };
 
+// `s6g2_target_area.md`: the two area tools get visibly different colors - cool (violet) for the
+// throw area (`origin`, where the player may stand), warm (amber) for the landing area (`target`,
+// where the grenade must rest), so both can be drawn and shown at once without confusion.
 const MARK = {
   light: {
     target: "#b3261e", origin: "#2563eb", checked: "rgba(91,98,112,0.35)", verified: "#1a7f37",
     verifiedFail: "rgba(179,38,30,0.35)", selected: "#b3261e", hover: "#2563eb",
-    area: "#7c3aed", areaFill: "rgba(124,58,237,0.15)",
+    areaOrigin: "#7c3aed", areaOriginFill: "rgba(124,58,237,0.15)",
+    areaTarget: "#c2410c", areaTargetFill: "rgba(194,65,12,0.15)",
   },
   dark: {
     target: "#ff6b64", origin: "#5b9dff", checked: "rgba(154,161,173,0.35)", verified: "#4fd17a",
     verifiedFail: "rgba(255,107,100,0.35)", selected: "#ff6b64", hover: "#5b9dff",
-    area: "#a78bfa", areaFill: "rgba(167,139,250,0.20)",
+    areaOrigin: "#a78bfa", areaOriginFill: "rgba(167,139,250,0.20)",
+    areaTarget: "#fb923c", areaTargetFill: "rgba(251,146,60,0.20)",
   },
 };
 
@@ -91,14 +96,17 @@ export function createMapView(canvas, viewerMap, img, theme) {
   let verifiedPoints = []; // [{x,y}] - `ok === true`
   let verifiedFailPoints = []; // [{x,y}] - `ok === false`
 
-  // `s6g_origin_area.md`'s origin-area tool: `areaPoints` is the polygon being drawn/edited (or
-  // already committed, when `areaClosed`); `areaMode` gates whether clicks/keys drive the tool
-  // instead of the normal target-click/pan behavior below.
-  let areaMode = false;
-  let areaPoints = []; // [{x,y}]
-  let areaClosed = false;
-  let draggingAreaIndex = -1;
-  let onAreaChangeHandler = null;
+  // `s6g_origin_area.md`/`s6g2_target_area.md`'s two area tools - the throw area ("origin") and
+  // the landing area ("target"), same drawing/editing mechanics, kept as two independent polygons
+  // so both can be shown (and, at different times, edited) at once. `activeAreaKey` ("origin" |
+  // "target" | null) gates whether clicks/keys drive a tool at all, and which one, instead of the
+  // normal target-click/pan behavior below - only one tool drafts at a time.
+  const areas = {
+    origin: { points: [], closed: false, onChange: null },
+    target: { points: [], closed: false, onChange: null },
+  };
+  let activeAreaKey = null;
+  let draggingArea = null; // { key, index } | null
 
   let onClickHandler = null;
   let onRightClickHandler = null;
@@ -168,20 +176,22 @@ export function createMapView(canvas, viewerMap, img, theme) {
     }
   }
 
-  // ---- origin-area tool (`s6g_origin_area.md`) -------------------------------------------------
+  // ---- area tools (`s6g_origin_area.md`, `s6g2_target_area.md`) --------------------------------
 
-  function emitAreaChange() {
-    onAreaChangeHandler?.({ points: areaPoints.map((p) => ({ x: p.x, y: p.y })), closed: areaClosed });
+  function emitAreaChange(key) {
+    const a = areas[key];
+    a.onChange?.({ points: a.points.map((p) => ({ x: p.x, y: p.y })), closed: a.closed });
   }
 
-  // The nearest `areaPoints` vertex within `AREA_HANDLE_PX` of a client (CSS px) point, or -1.
-  function nearestAreaVertex(clientX, clientY) {
+  // The nearest vertex of area `key` within `AREA_HANDLE_PX` of a client (CSS px) point, or -1.
+  function nearestAreaVertex(key, clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const geom = screenGeometry();
+    const points = areas[key].points;
     let best = -1;
     let bestDist = AREA_HANDLE_PX;
-    for (let i = 0; i < areaPoints.length; i++) {
-      const [sx, sy] = worldToCanvas(areaPoints[i].x, areaPoints[i].y, geom);
+    for (let i = 0; i < points.length; i++) {
+      const [sx, sy] = worldToCanvas(points[i].x, points[i].y, geom);
       const d = Math.hypot(clientX - rect.left - sx, clientY - rect.top - sy);
       if (d <= bestDist) {
         bestDist = d;
@@ -191,49 +201,58 @@ export function createMapView(canvas, viewerMap, img, theme) {
     return best;
   }
 
-  // A click while the tool is active and the polygon is not yet closed: closes it (near the
+  // A click while area `key` is active and its polygon is not yet closed: closes it (near the
   // first vertex, with >=3 already placed) or adds a new one.
-  function handleAreaClick(clientX, clientY) {
-    if (areaClosed) {
+  function handleAreaClick(key, clientX, clientY) {
+    const a = areas[key];
+    if (a.closed) {
       return;
     }
-    if (areaPoints.length >= 3 && nearestAreaVertex(clientX, clientY) === 0) {
-      areaClosed = true;
-      emitAreaChange();
+    if (a.points.length >= 3 && nearestAreaVertex(key, clientX, clientY) === 0) {
+      a.closed = true;
+      emitAreaChange(key);
       requestDraw();
       return;
     }
     const [wx, wy] = screenToWorld(clientX, clientY);
-    areaPoints.push({ x: wx, y: wy });
-    emitAreaChange();
+    a.points.push({ x: wx, y: wy });
+    emitAreaChange(key);
     requestDraw();
   }
 
-  function drawArea(geom) {
-    if (areaPoints.length === 0) {
+  function drawOneArea(key, geom) {
+    const a = areas[key];
+    if (a.points.length === 0) {
       return;
     }
     const m = marks();
-    const pts = areaPoints.map((p) => worldToCanvas(p.x, p.y, geom));
+    const color = key === "origin" ? m.areaOrigin : m.areaTarget;
+    const fill = key === "origin" ? m.areaOriginFill : m.areaTargetFill;
+    const pts = a.points.map((p) => worldToCanvas(p.x, p.y, geom));
     ctx.beginPath();
     pts.forEach(([sx, sy], i) => (i === 0 ? ctx.moveTo(sx, sy) : ctx.lineTo(sx, sy)));
-    if (areaClosed) {
+    if (a.closed) {
       ctx.closePath();
-      ctx.fillStyle = m.areaFill;
+      ctx.fillStyle = fill;
       ctx.fill();
     } else {
       ctx.setLineDash([5, 4]);
     }
-    ctx.strokeStyle = m.area;
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = m.area;
+    ctx.fillStyle = color;
     for (const [sx, sy] of pts) {
       ctx.beginPath();
       ctx.arc(sx, sy, AREA_VERTEX_PX, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  function drawAreas(geom) {
+    drawOneArea("origin", geom);
+    drawOneArea("target", geom);
   }
 
   function drawCross(sx, sy, color, size = 7) {
@@ -305,7 +324,7 @@ export function createMapView(canvas, viewerMap, img, theme) {
       }
     }
 
-    drawArea(geom);
+    drawAreas(geom);
 
     for (const l of lineups) {
       if (l.id !== selectedId && l.id !== hoverId) {
@@ -376,36 +395,41 @@ export function createMapView(canvas, viewerMap, img, theme) {
 
   canvas.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    // A right-click (point + radius) and the origin-area tool are mutually exclusive
-    // (`s6g_origin_area.md`) - while the tool is active, a right-click does nothing instead of
+    // A right-click (point + radius) and either area tool are mutually exclusive
+    // (`s6g_origin_area.md`) - while a tool is active, a right-click does nothing instead of
     // placing a conflicting point origin.
-    if (areaMode || !onRightClickHandler) {
+    if (activeAreaKey || !onRightClickHandler) {
       return;
     }
     const [wx, wy] = screenToWorld(e.clientX, e.clientY);
     onRightClickHandler(wx, wy);
   });
 
-  // A double-click closes the polygon (`s6g_origin_area.md`), same as clicking on its first
-  // vertex. The two clicks that make up the double-click each already ran `handleAreaClick`
-  // (added via `pointerup`/`releasePointer` below) - if the second one landed close enough to the
-  // first to look like the same spot, drop that redundant near-duplicate vertex before closing.
+  // A double-click closes the active area's polygon (`s6g_origin_area.md`), same as clicking on
+  // its first vertex. The two clicks that make up the double-click each already ran
+  // `handleAreaClick` (added via `pointerup`/`releasePointer` below) - if the second one landed
+  // close enough to the first to look like the same spot, drop that redundant near-duplicate
+  // vertex before closing.
   canvas.addEventListener("dblclick", (e) => {
-    if (!areaMode || areaClosed || areaPoints.length < 2) {
+    if (!activeAreaKey) {
+      return;
+    }
+    const a = areas[activeAreaKey];
+    if (a.closed || a.points.length < 2) {
       return;
     }
     const geom = screenGeometry();
-    const last1 = worldToCanvas(areaPoints[areaPoints.length - 1].x, areaPoints[areaPoints.length - 1].y, geom);
-    const last2 = worldToCanvas(areaPoints[areaPoints.length - 2].x, areaPoints[areaPoints.length - 2].y, geom);
+    const last1 = worldToCanvas(a.points[a.points.length - 1].x, a.points[a.points.length - 1].y, geom);
+    const last2 = worldToCanvas(a.points[a.points.length - 2].x, a.points[a.points.length - 2].y, geom);
     if (Math.hypot(last1[0] - last2[0], last1[1] - last2[1]) < AREA_HANDLE_PX) {
-      areaPoints.pop();
+      a.points.pop();
     }
-    if (areaPoints.length < 3) {
+    if (a.points.length < 3) {
       return;
     }
     e.preventDefault();
-    areaClosed = true;
-    emitAreaChange();
+    a.closed = true;
+    emitAreaChange(activeAreaKey);
     requestDraw();
   });
 
@@ -424,13 +448,13 @@ export function createMapView(canvas, viewerMap, img, theme) {
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (areaMode && e.button === 0 && pointers.size === 1) {
-      const idx = nearestAreaVertex(e.clientX, e.clientY);
+    if (activeAreaKey && e.button === 0 && pointers.size === 1) {
+      const idx = nearestAreaVertex(activeAreaKey, e.clientX, e.clientY);
       // Vertex 0 is reserved for the "click the first vertex to close" gesture while still
       // drafting (`handleAreaClick`) - only start dragging it once the polygon is already closed,
       // or picking it up here would silently eat every attempt to close that way.
-      if (idx >= 0 && (areaClosed || idx !== 0)) {
-        draggingAreaIndex = idx;
+      if (idx >= 0 && (areas[activeAreaKey].closed || idx !== 0)) {
+        draggingArea = { key: activeAreaKey, index: idx };
         return; // grabbing a vertex, not panning
       }
     }
@@ -454,10 +478,10 @@ export function createMapView(canvas, viewerMap, img, theme) {
       return;
     }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (draggingAreaIndex >= 0) {
+    if (draggingArea) {
       const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-      areaPoints[draggingAreaIndex] = { x: wx, y: wy };
-      emitAreaChange();
+      areas[draggingArea.key].points[draggingArea.index] = { x: wx, y: wy };
+      emitAreaChange(draggingArea.key);
       requestDraw();
       return;
     }
@@ -484,14 +508,14 @@ export function createMapView(canvas, viewerMap, img, theme) {
     draw();
   });
   const releasePointer = (e) => {
-    if (draggingAreaIndex >= 0) {
-      draggingAreaIndex = -1;
+    if (draggingArea) {
+      draggingArea = null;
       pointers.delete(e.pointerId);
       return;
     }
     if (downAt && moved < CLICK_SLOP && e.button === 0) {
-      if (areaMode) {
-        handleAreaClick(e.clientX, e.clientY);
+      if (activeAreaKey) {
+        handleAreaClick(activeAreaKey, e.clientX, e.clientY);
       } else if (onClickHandler) {
         const [wx, wy] = screenToWorld(e.clientX, e.clientY);
         onClickHandler(wx, wy);
@@ -513,32 +537,34 @@ export function createMapView(canvas, viewerMap, img, theme) {
   canvas.addEventListener("pointerup", releasePointer);
   canvas.addEventListener("pointercancel", (e) => {
     downAt = null;
-    draggingAreaIndex = -1;
+    draggingArea = null;
     releasePointer(e);
   });
 
   canvas.tabIndex = 0;
   canvas.addEventListener("keydown", (e) => {
-    // Origin-area editing keys (`s6g_origin_area.md`), only while drafting (not yet closed) -
-    // dragging a vertex after closing is the only edit the tool offers past that point.
-    if (areaMode && !areaClosed) {
-      if (e.key === "Enter" && areaPoints.length >= 3) {
-        areaClosed = true;
-        emitAreaChange();
+    // Area editing keys (`s6g_origin_area.md`, `s6g2_target_area.md`), only while the active
+    // area is drafting (not yet closed) - dragging a vertex after closing is the only edit the
+    // tool offers past that point.
+    if (activeAreaKey && !areas[activeAreaKey].closed) {
+      const a = areas[activeAreaKey];
+      if (e.key === "Enter" && a.points.length >= 3) {
+        a.closed = true;
+        emitAreaChange(activeAreaKey);
         requestDraw();
         e.preventDefault();
         return;
       }
-      if (e.key === "Backspace" && areaPoints.length > 0) {
-        areaPoints.pop();
-        emitAreaChange();
+      if (e.key === "Backspace" && a.points.length > 0) {
+        a.points.pop();
+        emitAreaChange(activeAreaKey);
         requestDraw();
         e.preventDefault();
         return;
       }
-      if (e.key === "Escape" && areaPoints.length > 0) {
-        areaPoints = [];
-        emitAreaChange();
+      if (e.key === "Escape" && a.points.length > 0) {
+        a.points = [];
+        emitAreaChange(activeAreaKey);
         requestDraw();
         e.preventDefault();
         return;
@@ -616,29 +642,45 @@ export function createMapView(canvas, viewerMap, img, theme) {
       origin = null;
       requestDraw();
     },
-    setAreaMode(active) {
-      areaMode = active;
-      if (!active && !areaClosed) {
-        // Leaving the tool mid-draft discards the unfinished polygon - nothing was committed yet.
-        areaPoints = [];
-        emitAreaChange();
+    // `key`: "origin" | "target" (`s6g_origin_area.md`, `s6g2_target_area.md`). Only one area
+    // tool drafts at a time - activating one deactivates (and, if unfinished, discards) the
+    // other.
+    setAreaMode(key, active) {
+      if (active) {
+        if (activeAreaKey && activeAreaKey !== key) {
+          const other = areas[activeAreaKey];
+          if (!other.closed) {
+            other.points = [];
+            emitAreaChange(activeAreaKey);
+          }
+        }
+        activeAreaKey = key;
+      } else if (activeAreaKey === key) {
+        activeAreaKey = null;
+        const a = areas[key];
+        if (!a.closed) {
+          // Leaving the tool mid-draft discards the unfinished polygon - nothing was committed.
+          a.points = [];
+          emitAreaChange(key);
+        }
       }
       requestDraw();
     },
     // `polygon`: `[[x,y],...]` or `null` to clear. Used both to restore an area from the address
     // bar and by the "delete area" button.
-    setArea(polygon) {
+    setArea(key, polygon) {
+      const a = areas[key];
       if (!polygon) {
-        areaPoints = [];
-        areaClosed = false;
+        a.points = [];
+        a.closed = false;
       } else {
-        areaPoints = polygon.map(([x, y]) => ({ x, y }));
-        areaClosed = true;
+        a.points = polygon.map(([x, y]) => ({ x, y }));
+        a.closed = true;
       }
       requestDraw();
     },
-    onAreaChange(cb) {
-      onAreaChangeHandler = cb;
+    onAreaChange(key, cb) {
+      areas[key].onChange = cb;
     },
     setLineups(list) {
       lineups = list;

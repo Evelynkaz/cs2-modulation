@@ -48,16 +48,22 @@ pub fn in_zone(grid: &VoxelGrid, zone_crossings: &HashMap<usize, i32>, rest_poin
     false
 }
 
+/// `area_accept`, when set (`Target::Area`), is the exact polygon+z-range predicate - `in_zone`
+/// alone only tests the *cell* a rest point falls in (a zone cell qualifies by its own center
+/// being inside the polygon, so a rest point near that cell's far edge can sit a few units past
+/// the drawn boundary); requiring both closes that gap so `accepts()` never lets a lineup through
+/// that a caller-visible "is this point inside the area" check would reject.
 fn accepts(
     grid: &VoxelGrid,
     zone_crossings: &HashMap<usize, i32>,
     aim_target: Option<V3>,
     tolerance: Option<f32>,
+    area_accept: Option<&(dyn Fn(V3) -> bool + Sync)>,
     rest: V3,
 ) -> bool {
     match (aim_target, tolerance) {
         (Some(g), Some(tol)) => within_tolerance(rest, g, tol, grid.voxel_size()),
-        _ => in_zone(grid, zone_crossings, rest),
+        _ => in_zone(grid, zone_crossings, rest) && area_accept.is_none_or(|f| f(rest)),
     }
 }
 
@@ -95,13 +101,23 @@ fn stability_around<C: Collider>(
     zone_crossings: &HashMap<usize, i32>,
     aim_target: Option<V3>,
     tolerance: Option<f32>,
+    area_accept: Option<&(dyn Fn(V3) -> bool + Sync)>,
     cy: i32,
     cp: i32,
 ) -> f32 {
     let mut hits = 0;
     for &(dy, dp) in &OFFSETS {
         let r = sim_at(cache, collider, k, eye, lineup, cy + dy, cp + dp);
-        if settled(&r) && accepts(grid, zone_crossings, aim_target, tolerance, r.rest) {
+        if settled(&r)
+            && accepts(
+                grid,
+                zone_crossings,
+                aim_target,
+                tolerance,
+                area_accept,
+                r.rest,
+            )
+        {
             hits += 1;
         }
     }
@@ -114,6 +130,8 @@ pub struct VerifyOptions<'a, C: Collider> {
     pub constants: Option<&'a ThrowConstants>,
     pub aim_target: Option<V3>,
     pub tolerance: Option<f32>,
+    /// `Target::Area`'s exact polygon+z predicate (`None` for `Target::Point`) - see `accepts()`.
+    pub area_accept: Option<&'a (dyn Fn(V3) -> bool + Sync)>,
     pub collider_glass_gone: Option<&'a C>,
     /// `LineupSolver.cs`'s `onCandidate` diagnostics callback: called once
     /// per candidate with whether it survived verification.
@@ -131,6 +149,7 @@ impl<C: Collider> Default for VerifyOptions<'_, C> {
             constants: None,
             aim_target: None,
             tolerance: None,
+            area_accept: None,
             collider_glass_gone: None,
             on_candidate: None,
             cancel: None,
@@ -190,6 +209,7 @@ pub fn verify_exact<C: Collider>(
                                 &zone_crossings,
                                 opts.aim_target,
                                 opts.tolerance,
+                                opts.area_accept,
                                 r.rest,
                             )
                         {
@@ -216,6 +236,7 @@ pub fn verify_exact<C: Collider>(
                         &zone_crossings,
                         opts.aim_target,
                         opts.tolerance,
+                        opts.area_accept,
                         dy,
                         dp,
                     );
@@ -236,6 +257,23 @@ pub fn verify_exact<C: Collider>(
                     }
                 }
             } else {
+                // Bug fix: `s0 >= min_stability` alone does not mean offset (0,0) itself is a
+                // valid landing - `stability_around` counts hits across all 5 probes, so 2 of the
+                // other 4 could pass while (0,0) itself misses (doesn't settle, or settles outside
+                // the area). Keeping (0,0) unconditionally then left `rest_point` on the coarse
+                // sweep rest (never re-simulated, never re-checked against the exact area) once
+                // `settled_ok` below went false - require (0,0) to settle and accept on its own
+                // before taking the fast path, else fall through to the best-offset search.
+                let r0 = sim_at(&mut cache, collider, k, eye, lineup, 0, 0);
+                let r0_ok = settled(&r0)
+                    && accepts(
+                        grid,
+                        &zone_crossings,
+                        opts.aim_target,
+                        opts.tolerance,
+                        opts.area_accept,
+                        r0.rest,
+                    );
                 let s0 = stability_around(
                     &mut cache,
                     collider,
@@ -246,16 +284,18 @@ pub fn verify_exact<C: Collider>(
                     &zone_crossings,
                     opts.aim_target,
                     opts.tolerance,
+                    opts.area_accept,
                     0,
                     0,
                 );
-                if s0 >= opts.min_stability {
+                if r0_ok && s0 >= opts.min_stability {
                     aim_yaw = 0;
                     aim_pitch = 0;
                     stability = s0;
                 } else {
                     let mut best_score = f32::MAX;
                     let mut best_offset = (0i32, 0i32);
+                    let mut found_any = false;
                     for d_yaw in -AIM_REACH..=AIM_REACH {
                         for d_pitch in -AIM_REACH..=AIM_REACH {
                             let r = sim_at(&mut cache, collider, k, eye, lineup, d_yaw, d_pitch);
@@ -265,6 +305,7 @@ pub fn verify_exact<C: Collider>(
                                     &zone_crossings,
                                     opts.aim_target,
                                     opts.tolerance,
+                                    opts.area_accept,
                                     r.rest,
                                 )
                             {
@@ -274,10 +315,11 @@ pub fn verify_exact<C: Collider>(
                             if score < best_score {
                                 best_score = score;
                                 best_offset = (d_yaw, d_pitch);
+                                found_any = true;
                             }
                         }
                     }
-                    if best_offset == (0, 0) {
+                    if !found_any {
                         report(false);
                         return None;
                     }
@@ -291,6 +333,7 @@ pub fn verify_exact<C: Collider>(
                         &zone_crossings,
                         opts.aim_target,
                         opts.tolerance,
+                        opts.area_accept,
                         best_offset.0,
                         best_offset.1,
                     );
@@ -311,8 +354,17 @@ pub fn verify_exact<C: Collider>(
                     &zone_crossings,
                     opts.aim_target,
                     opts.tolerance,
+                    opts.area_accept,
                     best.rest,
                 );
+            // Every `(aim_yaw, aim_pitch)` chosen above was only ever selected because its own
+            // `sim_at` result already settled and passed `accepts()` - this should always hold,
+            // but guard it explicitly rather than silently falling back to `lineup.rest_point`
+            // (the coarse, unverified sweep rest) below if that invariant is ever violated.
+            if !settled_ok {
+                report(false);
+                return None;
+            }
             let final_yaw = lineup.yaw_deg + aim_yaw as f32 * STEP_DEG;
             let final_pitch = lineup.pitch_deg + aim_pitch as f32 * STEP_DEG;
 
@@ -399,6 +451,10 @@ pub fn verify_exact<C: Collider>(
 
 /// `LineupSolver.cs:554-641` (`ExhaustiveExactSpot`): every throw kind over a
 /// full angle lattice, run through the exact simulator, from one origin.
+/// `hit_ok`, when set (`Target::Area`), is the exact polygon+z predicate - the "closest to
+/// target" pick per kind below prefers a hit that passes it, so a hit that only clears the loose
+/// `tolerance` circle (and would fail `verify_exact`'s own `area_accept` regardless) never beats
+/// out a genuinely-inside one for that kind's single slot.
 #[allow(clippy::too_many_arguments)]
 pub fn exhaustive_exact_spot<C: Collider>(
     collider: &C,
@@ -411,6 +467,7 @@ pub fn exhaustive_exact_spot<C: Collider>(
     step_deg: f32,
     distinct_bounces: bool,
     only_kinds: Option<&[(ThrowType, f32, f32)]>,
+    hit_ok: Option<&(dyn Fn(V3) -> bool + Sync)>,
     cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Vec<Lineup> {
     let default_k = ThrowConstants::default();
@@ -504,20 +561,34 @@ pub fn exhaustive_exact_spot<C: Collider>(
         }
         groups.entry(key).or_default().push(l);
     }
+    let closest = |candidates: &[Lineup]| -> Lineup {
+        let mut best = candidates[0];
+        let mut best_d = (best.rest_point - target).length_squared();
+        for &l in &candidates[1..] {
+            let d = (l.rest_point - target).length_squared();
+            if d < best_d {
+                best = l;
+                best_d = d;
+            }
+        }
+        best
+    };
     group_order
         .into_iter()
         .map(|key| {
             let g = &groups[&key];
-            let mut best = g[0];
-            let mut best_d = (best.rest_point - target).length_squared();
-            for &l in &g[1..] {
-                let d = (l.rest_point - target).length_squared();
-                if d < best_d {
-                    best = l;
-                    best_d = d;
+            match hit_ok {
+                Some(ok) => {
+                    let in_area: Vec<Lineup> =
+                        g.iter().copied().filter(|l| ok(l.rest_point)).collect();
+                    if in_area.is_empty() {
+                        closest(g)
+                    } else {
+                        closest(&in_area)
+                    }
                 }
+                None => closest(g),
             }
-            best
         })
         .collect()
 }
@@ -657,9 +728,14 @@ mod tests {
             "wide zone should accept every offset"
         );
 
-        // Knife-edge zone: only the exact aim's landing is inside a tiny
-        // tolerance, so at least one of the four perturbed offsets misses.
-        let narrow_zone = crate::zone::point_target_zone(&grid, exact.rest, 1.0);
+        // Knife-edge zone: only the exact aim's landing is inside a tight
+        // tolerance, so at least one of the four perturbed offsets misses. 16.0 (not the
+        // absolute minimum 1.0) so `point_target_zone`'s own `tolerance + voxel_size` margin
+        // reliably reaches the open cell above `exact.rest`'s (solid, floor) cell regardless of
+        // where in its cell `exact.rest` happens to land - `exact.rest` sitting near a cell
+        // corner can put that open cell's center up to about 19.6u away in the worst case (one
+        // full cell height plus up to a cell's own XY diagonal), so this needs real headroom.
+        let narrow_zone = crate::zone::point_target_zone(&grid, exact.rest, 16.0);
         let opts_narrow: VerifyOptions<UniformGrid> = VerifyOptions {
             min_stability: 0.0,
             constants: Some(&k),
@@ -709,6 +785,7 @@ mod tests {
             Some(&k),
             2.0,
             false,
+            None,
             None,
             None,
         );

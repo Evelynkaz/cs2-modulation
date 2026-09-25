@@ -179,6 +179,19 @@ pub struct SweepOptions<'a> {
     pub keep_every_kind_at: Option<&'a (dyn Fn(V3) -> bool + Sync)>,
     pub own_bucket_at: Option<&'a (dyn Fn(V3) -> bool + Sync)>,
     pub measured_weak_click_reach: bool,
+    /// How many ranked candidates `solve_buckets` keeps per `(origin bucket, throw kind)` -
+    /// `solve()` itself only ever uses the first (best) of each, so `1` (the default) reproduces
+    /// its exact old single-slot behavior. `Target::Area` solves ask for more (`target.rs`), so a
+    /// bucket whose single best candidate fails exact verification still has runners-up to fall
+    /// back to, instead of that `(origin, kind)` combination silently landing nothing.
+    pub keep_per_bucket: usize,
+    /// `false` (the default) keeps every per-origin range/window check measured to the zone's
+    /// own centroid, exactly as before. `Target::Area` sets this (`target.rs`) instead: a point
+    /// well inside a spread-out area can sit outside a window built from centroid-direction ±
+    /// `YAW_SPREAD_DEG`, or get pruned by a straight-line-to-centroid range check, even though a
+    /// different corner of the same area is genuinely reachable - see the per-origin
+    /// `widen_to_zone_extent` block below for what widens and how.
+    pub widen_to_zone_extent: bool,
     /// `LineupSolver.cs`'s `onPruned` diagnostics callback: called whenever
     /// a `(feet, type, run)` combination is skipped before any simulation
     /// runs, with the reason. Never affects the solved result.
@@ -213,6 +226,8 @@ impl Default for SweepOptions<'_> {
             keep_every_kind_at: None,
             own_bucket_at: None,
             measured_weak_click_reach: false,
+            keep_per_bucket: 1,
+            widen_to_zone_extent: false,
             on_pruned: None,
             coverage: None,
             on_origin: None,
@@ -221,7 +236,8 @@ impl Default for SweepOptions<'_> {
     }
 }
 
-/// `LineupSolver.cs:186-533` (`Solve`).
+/// `LineupSolver.cs:186-533` (`Solve`): the single best candidate per `(origin, throw kind)`
+/// bucket (`opts.keep_per_bucket` is ignored here - always exactly one), same as ever.
 pub fn solve(
     grid: &VoxelGrid,
     zone: &[(usize, i32)],
@@ -229,6 +245,53 @@ pub fn solve(
     origins: &[V3],
     opts: &SweepOptions,
 ) -> Vec<Lineup> {
+    let mut result: Vec<Lineup> = solve_buckets(grid, zone, types, origins, opts)
+        .into_iter()
+        .filter_map(|bucket| bucket.into_iter().next())
+        .collect();
+    result.sort_by(|a, b| {
+        a.bounces
+            .cmp(&b.bounces)
+            .then(b.rest_crossings.cmp(&a.rest_crossings))
+            .then(a.flight_time.partial_cmp(&b.flight_time).unwrap())
+            .then_with(|| ordinal_cmp(a, b))
+    });
+    result
+}
+
+/// Ranked insert of `lineup` into `list` (best-first, per `better`), capped at `cap` entries - an
+/// exact tie with an already-present entry is dropped (first-seen keeps its spot, same as
+/// `solve()`'s old single-slot fold), and a lineup worse than every entry already at `cap` is
+/// dropped too.
+fn insert_ranked(list: &mut Vec<Lineup>, lineup: Lineup, target: Option<V3>, cap: usize) {
+    if cap == 0 {
+        return;
+    }
+    // `list` is kept sorted best-first by `better`, so a full list only admits a candidate that
+    // beats its last entry, the insert position is a binary search, and an exact tie can only sit
+    // at that position - one comparison replaces the two full passes this used to make per hit.
+    if list.len() >= cap && !better(&lineup, list.last().unwrap(), target) {
+        return;
+    }
+    let pos = list.partition_point(|existing| better(existing, &lineup, target));
+    if pos < list.len() && !better(&lineup, &list[pos], target) {
+        return;
+    }
+    list.insert(pos, lineup);
+    list.truncate(cap);
+}
+
+/// Same sweep as `solve()`, but keeps up to `opts.keep_per_bucket` ranked candidates per
+/// `(origin, throw kind)` bucket instead of collapsing straight to one - `Target::Area`'s own
+/// round-based verify loop (`target.rs`) needs the runners-up a bucket's best candidate can fail
+/// exact verification while a later one in the same bucket would have passed.
+pub fn solve_buckets(
+    grid: &VoxelGrid,
+    zone: &[(usize, i32)],
+    types: &[ThrowType],
+    origins: &[V3],
+    opts: &SweepOptions,
+) -> Vec<Vec<Lineup>> {
     if zone.is_empty() {
         return Vec::new();
     }
@@ -242,6 +305,15 @@ pub fn solve(
     for &(cell, _) in zone {
         zone_radius = zone_radius.max((grid.cell_center(cell) - zone_centroid).length());
     }
+    // Only collected when `widen_to_zone_extent` actually needs them, so a `Target::Point` solve
+    // (or a referee/escalate pass, neither of which set the flag) pays nothing extra here.
+    let zone_cells: Vec<V3> = if opts.widen_to_zone_extent {
+        zone.iter()
+            .map(|&(cell, _)| grid.cell_center(cell))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let default_k = ThrowConstants::default();
     let k = opts.constants.unwrap_or(&default_k);
@@ -331,6 +403,35 @@ pub fn solve(
             let to_zone = zone_centroid - feet;
             let distance = (to_zone.x * to_zone.x + to_zone.y * to_zone.y).sqrt();
             let yaw_center = to_zone.y.atan2(to_zone.x) * 180.0 / PI;
+            // `widen_to_zone_extent`: the range/rise/window checks below use the zone's own
+            // extent from this origin (`range_test_distance`/`zone_z_for_rise`/`yaw_rel_lo`/
+            // `yaw_rel_hi`) instead of its centroid alone - `(distance, to_zone.z, 0.0, 0.0)`
+            // when unset reproduces the original centroid-only values exactly (0.0 added to a
+            // yaw bound is a no-op), so `Target::Point` (which never sets the flag) is untouched.
+            let (range_test_distance, zone_z_for_rise, yaw_rel_lo, yaw_rel_hi): (f32, f32, f32, f32) =
+                if opts.widen_to_zone_extent {
+                    let mut near = f32::MAX;
+                    let mut low_z = f32::MAX;
+                    let mut rel_lo = f32::MAX;
+                    let mut rel_hi = f32::MIN;
+                    for &cell in &zone_cells {
+                        let dx = cell.x - feet.x;
+                        let dy = cell.y - feet.y;
+                        near = near.min((dx * dx + dy * dy).sqrt());
+                        low_z = low_z.min(cell.z);
+                        let cell_yaw = dy.atan2(dx) * 180.0 / PI;
+                        let rel = normalize_yaw(cell_yaw - yaw_center);
+                        rel_lo = rel_lo.min(rel);
+                        rel_hi = rel_hi.max(rel);
+                    }
+                    if rel_hi - rel_lo > 300.0 {
+                        rel_lo = -150.0;
+                        rel_hi = 150.0;
+                    }
+                    (near, low_z - feet.z, rel_lo, rel_hi)
+                } else {
+                    (distance, to_zone.z, 0.0, 0.0)
+                };
             let path_distance_i = path_distance[oi];
             let mut hits: Vec<Hit> = Vec::new();
             let mut pruned: Vec<PrunedEvent> = Vec::new();
@@ -402,7 +503,7 @@ pub fn solve(
 
             for &ty in types {
                 let eye = feet + V3::new(0.0, 0.0, eye_height(ty));
-                let zone_rise = to_zone.z - eye_height(ty);
+                let zone_rise = zone_z_for_rise - eye_height(ty);
                 let runs: &[f32] = if ty == ThrowType::RunJumpThrow {
                     &RUN_YAW_OFFSETS
                 } else {
@@ -416,7 +517,7 @@ pub fn solve(
                         } else {
                             max_range(ty) * speed_factor * speed_factor
                         };
-                        if distance > max_range_val {
+                        if range_test_distance > max_range_val {
                             if opts.on_pruned.is_some() {
                                 pruned.push((
                                     ty,
@@ -444,7 +545,7 @@ pub fn solve(
                             continue;
                         }
                         let pitch_floor =
-                            if distance <= STEEP_LOB_MAX_RANGE * (max_range_val / max_range(ty)) {
+                            if range_test_distance <= STEEP_LOB_MAX_RANGE * (max_range_val / max_range(ty)) {
                                 STEEP_PITCH_FLOOR_DEG
                             } else {
                                 STANDARD_PITCH_FLOOR_DEG
@@ -469,7 +570,7 @@ pub fn solve(
                             let gravity = BASE_GRAVITY * k.gravity_scale;
                             let apex = launch_speed * launch_speed / (2.0 * gravity);
                             let reach_at_distance = apex
-                                - gravity * distance * distance
+                                - gravity * range_test_distance * range_test_distance
                                     / (2.0 * launch_speed * launch_speed);
                             if zone_rise > reach_at_distance + VERTICAL_REACH_MARGIN {
                                 if opts.on_pruned.is_some() {
@@ -491,8 +592,8 @@ pub fn solve(
                         let mut near_misses: Vec<(f32, f32, f32)> = Vec::new();
                         let shift_shallow = run_yaw_shift_deg(k, strength, 0.0, run_offset);
                         let shift_steep = run_yaw_shift_deg(k, strength, pitch_floor, run_offset);
-                        let yaw_lo = yaw_center + shift_shallow.min(shift_steep) - YAW_SPREAD_DEG;
-                        let yaw_hi = yaw_center + shift_shallow.max(shift_steep) + YAW_SPREAD_DEG;
+                        let yaw_lo = yaw_center + shift_shallow.min(shift_steep) - YAW_SPREAD_DEG + yaw_rel_lo;
+                        let yaw_hi = yaw_center + shift_shallow.max(shift_steep) + YAW_SPREAD_DEG + yaw_rel_hi;
 
                         let mut yaw = yaw_lo;
                         while yaw <= yaw_hi {
@@ -604,8 +705,9 @@ pub fn solve(
         }
     }
 
+    let cap = opts.keep_per_bucket.max(1);
     let mut best_order: Vec<(i32, i32, i32)> = Vec::new();
-    let mut best: HashMap<(i32, i32, i32), Lineup> = HashMap::new();
+    let mut best: HashMap<(i32, i32, i32), Vec<Lineup>> = HashMap::new();
     for (&oi, outcome) in reachable.iter().zip(per_origin.iter()) {
         let Some(outcome) = outcome else { continue };
         let feet = origins[oi];
@@ -621,26 +723,18 @@ pub fn solve(
             }
         }
         for &(key, lineup) in &outcome.hits {
-            match best.get(&key) {
-                Some(current) if !better(&lineup, current, opts.target) => {}
-                _ => {
-                    if best.insert(key, lineup).is_none() {
-                        best_order.push(key);
-                    }
-                }
-            }
+            let list = best.entry(key).or_insert_with(|| {
+                best_order.push(key);
+                Vec::new()
+            });
+            insert_ranked(list, lineup, opts.target, cap);
         }
     }
 
-    let mut result: Vec<Lineup> = best_order.into_iter().map(|key| best[&key]).collect();
-    result.sort_by(|a, b| {
-        a.bounces
-            .cmp(&b.bounces)
-            .then(b.rest_crossings.cmp(&a.rest_crossings))
-            .then(a.flight_time.partial_cmp(&b.flight_time).unwrap())
-            .then_with(|| ordinal_cmp(a, b))
-    });
-    result
+    best_order
+        .into_iter()
+        .map(|key| best.remove(&key).unwrap_or_default())
+        .collect()
 }
 
 #[cfg(test)]
@@ -751,5 +845,81 @@ mod tests {
             assert!(miss < 100.0, "lineup {l:?} missed target by {miss}u");
         }
         assert!(result.iter().any(|l| l.throw_type == ThrowType::Stand));
+    }
+
+    #[test]
+    fn insert_ranked_keeps_best_first_drops_exact_ties_and_truncates() {
+        let base = Lineup::new(V3::ZERO, 0.0, -10.0, ThrowType::Stand, V3::ZERO, 1, 2.0, 1);
+        let with_time = |t: f32| {
+            let mut l = base;
+            l.flight_time = t;
+            l
+        };
+        let times = |list: &[Lineup]| list.iter().map(|l| l.flight_time).collect::<Vec<_>>();
+        let mut list = Vec::new();
+        for t in [3.0, 1.0, 2.0, 4.0] {
+            insert_ranked(&mut list, with_time(t), None, 3);
+        }
+        assert_eq!(
+            times(&list),
+            vec![1.0, 2.0, 3.0],
+            "best-first, the worst truncated away"
+        );
+        insert_ranked(&mut list, with_time(2.0), None, 3);
+        assert_eq!(
+            times(&list),
+            vec![1.0, 2.0, 3.0],
+            "an exact tie is not inserted twice"
+        );
+        insert_ranked(&mut list, with_time(5.0), None, 3);
+        assert_eq!(
+            times(&list),
+            vec![1.0, 2.0, 3.0],
+            "a full list rejects a worse candidate"
+        );
+        insert_ranked(&mut list, with_time(0.5), None, 3);
+        assert_eq!(
+            times(&list),
+            vec![0.5, 1.0, 2.0],
+            "a new best evicts the worst"
+        );
+    }
+
+    /// A wide landing area seen from close by spans far more than the ±30° yaw window around its
+    /// centroid; with `widen_to_zone_extent` the sweep must reach its far flanks too.
+    #[test]
+    fn widen_to_zone_extent_reaches_the_flanks_of_a_wide_zone() {
+        let grid = flat_plane_grid(2000.0);
+        let mut zone = Vec::new();
+        // A strip about 950u out (full-strength stand throws land around there), 2000u long:
+        // seen from the origin it spans about ±46°.
+        for ix in 0..=4 {
+            for iy in 0..=125 {
+                let p = V3::new(900.0 + 16.0 * ix as f32, -1000.0 + 16.0 * iy as f32, 2.0);
+                // The floor cell and the open cell above it, as in the open-plane test above.
+                let (cx, cy, cz) = grid.cell_of(p);
+                zone.push((grid.index(cx, cy, cz), 1));
+                zone.push((grid.index(cx, cy, cz + 1), 1));
+            }
+        }
+        let origins = [V3::new(0.0, 0.0, 0.0)];
+        let types = [ThrowType::Stand];
+        let strengths = [1.0];
+        let max_off_axis = |widen: bool| {
+            let opts = SweepOptions {
+                strengths: Some(&strengths),
+                keep_per_bucket: 100_000,
+                widen_to_zone_extent: widen,
+                ..SweepOptions::default()
+            };
+            solve_buckets(&grid, &zone, &types, &origins, &opts)
+                .iter()
+                .flatten()
+                .map(|l| l.rest_point.y.atan2(l.rest_point.x).to_degrees().abs())
+                .fold(0.0f32, f32::max)
+        };
+        let (on, off) = (max_off_axis(true), max_off_axis(false));
+        assert!(on > 40.0, "widened window must reach the zone's flanks");
+        assert!(off <= 40.0, "the centroid window stays within about ±30°");
     }
 }

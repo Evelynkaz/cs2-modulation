@@ -23,7 +23,8 @@ use geom::math::V3;
 use sim::{ThrowConstants, ThrowType};
 use solver::rank::{self, RankedLineup};
 use solver::target::{
-    self, MapData, OriginArea, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve,
+    self, MapData, OriginArea, Phase, SolveHooks, SolveQuery, StandSpotOrigin, Target, TargetArea,
+    TargetSolve,
 };
 
 use crate::AppState;
@@ -54,23 +55,26 @@ const MAX_ORIGIN_REACH: f32 = 4000.0;
 const MIN_TOLERANCE: f32 = 1.0;
 const MAX_TOLERANCE: f32 = 512.0;
 
-// ---- `originArea` (`s6g_origin_area.md`) ------------------------------------------------------
+// ---- `originArea`/`targetArea` polygons (`s6g_origin_area.md`, `s6g2_target_area.md`) ---------
 
-const MIN_ORIGIN_AREA_VERTICES: usize = 3;
-const MAX_ORIGIN_AREA_VERTICES: usize = 64;
+const MIN_AREA_VERTICES: usize = 3;
+const MAX_AREA_VERTICES: usize = 64;
 /// The largest bounding box a maxed-out `originReach` circle could already produce (its diameter,
-/// `2 * MAX_ORIGIN_REACH`, per axis) - `originArea`'s own bounding box is capped to the same span
-/// so it cannot be used to ask for a bigger search region than the circle already allowed
-/// (`s6g_origin_area.md`: "не дать запросить всю карту в обход ограничений").
-const MAX_ORIGIN_AREA_SPAN: f32 = 2.0 * MAX_ORIGIN_REACH;
-/// Below this (world units²) an `originArea` polygon is treated as degenerate (collinear or
-/// coincident points) rather than a real region to search.
-const MIN_ORIGIN_AREA_AREA: f64 = 1.0;
+/// `2 * MAX_ORIGIN_REACH`, per axis) - both `originArea` and `targetArea`'s own bounding boxes
+/// are capped to the same span so neither can be used to ask for a bigger search region than the
+/// reach circle already allowed (`s6g_origin_area.md`: "не дать запросить всю карту в обход
+/// ограничений"; `s6g2_target_area.md` reuses the same reasoning and the same number for its own
+/// "size ограничен разумно для цели" - there is no separate "target reach" constant to anchor a
+/// different cap to, and a landing area is not inherently smaller than a throw area).
+const MAX_AREA_SPAN: f32 = 2.0 * MAX_ORIGIN_REACH;
+/// Below this (world units²) an `originArea`/`targetArea` polygon is treated as degenerate
+/// (collinear or coincident points) rather than a real region.
+const MIN_AREA_AREA: f64 = 1.0;
 
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 9;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -123,6 +127,11 @@ pub struct LineupJson {
     #[serde(rename = "aimRef")]
     pub aim_ref: AimRefJson,
     pub console: String,
+    /// `s6g2_target_area.md`: whether this lineup's rest point falls inside the query's
+    /// `targetArea` - only present for an area-target solve (omitted, not `null`, for a
+    /// point-target one, so `cs2mod solve --json`'s existing byte-for-byte output is untouched).
+    #[serde(rename = "insideTargetArea", skip_serializing_if = "Option::is_none")]
+    pub inside_target_area: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -147,8 +156,14 @@ pub fn type_name(t: ThrowType) -> &'static str {
 
 /// `LineupApi.cs:559-694`: the solve's JSON envelope, shared by `cs2mod solve --json` and
 /// `POST /api/lineup`'s cached `result` line - moved here from `cmd_solver.rs::json_payload` so
-/// the two can never drift apart.
-pub fn json_payload(solve: &TargetSolve, ranked_list: &[RankedLineup]) -> SolveJson {
+/// the two can never drift apart. `target_area`: the query's `targetArea`, when it had one
+/// (`s6g2_target_area.md`) - `None` for a point-target solve, so the CLI's own call site (which
+/// never has one) keeps its existing byte-for-byte `--json` output.
+pub fn json_payload(
+    solve: &TargetSolve,
+    ranked_list: &[RankedLineup],
+    target_area: Option<&target::TargetArea>,
+) -> SolveJson {
     let verified_at: std::collections::HashSet<(i32, i32)> = solve
         .lineups
         .iter()
@@ -219,6 +234,11 @@ pub fn json_payload(solve: &TargetSolve, ranked_list: &[RankedLineup]) -> SolveJ
                         margin_deg: rl.aim_ref.margin_deg(),
                     },
                     console: rl.console.clone(),
+                    inside_target_area: target_area.map(|a| {
+                        target::point_in_area_polygon(&a.polygon, l.rest_point.x, l.rest_point.y)
+                            && a.z_min.is_none_or(|lo| l.rest_point.z >= lo)
+                            && a.z_max.is_none_or(|hi| l.rest_point.z <= hi)
+                    }),
                 }
             })
             .collect(),
@@ -271,33 +291,51 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
     if !query.is_object() {
         return Some("body must be a JSON object".to_string());
     }
-    let target_arr = match query.get("target").and_then(Value::as_array) {
-        Some(a) if (2..=3).contains(&a.len()) => a,
-        _ => return Some("target must be [x,y] or [x,y,z]".to_string()),
-    };
     let (mesh_min, mesh_max) = mesh.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
-    for el in target_arr {
-        if as_f32_finite(el).is_none() {
-            return Some("target coordinates must be finite numbers".to_string());
+    // `s6g2_target_area.md`: `targetArea` replaces `target` outright (an area has no single point
+    // to validate here) - the two are mutually exclusive, checked before either's own validation
+    // runs so a request with both gets one clear error instead of whichever happened to run first.
+    if query.get("targetArea").is_some() {
+        if query.get("target").is_some() {
+            return Some("target and targetArea are mutually exclusive".to_string());
         }
-    }
-    let tx = as_f32_finite(&target_arr[0]).unwrap();
-    let ty = as_f32_finite(&target_arr[1]).unwrap();
-    if tx < mesh_min[0] - MAP_BOUNDS_MARGIN
-        || tx > mesh_max[0] + MAP_BOUNDS_MARGIN
-        || ty < mesh_min[1] - MAP_BOUNDS_MARGIN
-        || ty > mesh_max[1] + MAP_BOUNDS_MARGIN
-    {
-        return Some("target is outside the map bounds".to_string());
-    }
-    if target_arr.len() == 3 {
-        let tz = as_f32_finite(&target_arr[2]).unwrap();
-        if tz < mesh_min[2] - MAP_BOUNDS_MARGIN || tz > mesh_max[2] + MAP_BOUNDS_MARGIN {
-            return Some(format!(
-                "target z is outside the map bounds ({} to {} allowed)",
-                mesh_min[2] - MAP_BOUNDS_MARGIN,
-                mesh_max[2] + MAP_BOUNDS_MARGIN
-            ));
+        if let Some(err) = validate_target_area(query, mesh_min, mesh_max) {
+            return Some(err);
+        }
+    } else {
+        let target_arr = match query.get("target").and_then(Value::as_array) {
+            Some(a) if (2..=3).contains(&a.len()) => a,
+            _ => return Some("target must be [x,y] or [x,y,z]".to_string()),
+        };
+        for el in target_arr {
+            if as_f32_finite(el).is_none() {
+                return Some("target coordinates must be finite numbers".to_string());
+            }
+        }
+        let tx = as_f32_finite(&target_arr[0]).unwrap();
+        let ty = as_f32_finite(&target_arr[1]).unwrap();
+        if tx < mesh_min[0] - MAP_BOUNDS_MARGIN
+            || tx > mesh_max[0] + MAP_BOUNDS_MARGIN
+            || ty < mesh_min[1] - MAP_BOUNDS_MARGIN
+            || ty > mesh_max[1] + MAP_BOUNDS_MARGIN
+        {
+            return Some("target is outside the map bounds".to_string());
+        }
+        if target_arr.len() == 3 {
+            let tz = as_f32_finite(&target_arr[2]).unwrap();
+            if tz < mesh_min[2] - MAP_BOUNDS_MARGIN || tz > mesh_max[2] + MAP_BOUNDS_MARGIN {
+                return Some(format!(
+                    "target z is outside the map bounds ({} to {} allowed)",
+                    mesh_min[2] - MAP_BOUNDS_MARGIN,
+                    mesh_max[2] + MAP_BOUNDS_MARGIN
+                ));
+            }
+        }
+        // `targetZMin`/`targetZMax` only mean anything alongside `targetArea`, but
+        // `validate_target_area` still validates them on their own in this branch (its own
+        // `None` early-return path) so a typo'd request fails fast here too.
+        if let Some(err) = validate_target_area(query, mesh_min, mesh_max) {
+            return Some(err);
         }
     }
     if let Some(origin) = query.get("origin") {
@@ -378,10 +416,92 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
     None
 }
 
-/// `s6g_origin_area.md`: `originArea` is a closed XY polygon (3..64 vertices, finite, inside the
-/// map bounds, enclosing a non-zero area, its bounding box no bigger than a maxed-out
-/// `originReach` circle's own), plus optional finite `zMin`/`zMax` with `zMin <= zMax`; mutually
-/// exclusive with `origin`/`originReach`.
+/// Shared polygon-only validation for `originArea` and `targetArea` (`s6g_origin_area.md`,
+/// `s6g2_target_area.md`): 3..64 finite vertices inside the map bounds, a bounding box no larger
+/// than `MAX_AREA_SPAN` per axis, and a non-degenerate (non-zero-area) shape. `field_name` names
+/// the JSON field in error text. Returns the parsed polygon on success.
+fn validate_area_polygon(
+    field_name: &str,
+    arr: &[Value],
+    mesh_min: [f32; 3],
+    mesh_max: [f32; 3],
+) -> Result<Vec<[f32; 2]>, String> {
+    if !(MIN_AREA_VERTICES..=MAX_AREA_VERTICES).contains(&arr.len()) {
+        return Err(format!(
+            "{field_name} must have between {MIN_AREA_VERTICES} and {MAX_AREA_VERTICES} vertices"
+        ));
+    }
+    let mut pts: Vec<[f32; 2]> = Vec::with_capacity(arr.len());
+    for v in arr {
+        let ok = v
+            .as_array()
+            .is_some_and(|p| p.len() == 2 && p.iter().all(|e| as_f32_finite(e).is_some()));
+        if !ok {
+            return Err(format!(
+                "{field_name} vertices must be [x,y] with finite numbers"
+            ));
+        }
+        let p = v.as_array().unwrap();
+        let (x, y) = (as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap());
+        if x < mesh_min[0] - MAP_BOUNDS_MARGIN
+            || x > mesh_max[0] + MAP_BOUNDS_MARGIN
+            || y < mesh_min[1] - MAP_BOUNDS_MARGIN
+            || y > mesh_max[1] + MAP_BOUNDS_MARGIN
+        {
+            return Err(format!("{field_name} vertex is outside the map bounds"));
+        }
+        pts.push([x, y]);
+    }
+    let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
+    let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
+    for p in &pts {
+        min_x = min_x.min(p[0]);
+        max_x = max_x.max(p[0]);
+        min_y = min_y.min(p[1]);
+        max_y = max_y.max(p[1]);
+    }
+    if max_x - min_x > MAX_AREA_SPAN || max_y - min_y > MAX_AREA_SPAN {
+        return Err(format!(
+            "{field_name}'s bounding box cannot exceed {MAX_AREA_SPAN} units per axis"
+        ));
+    }
+    // A signed (shoelace) area cancels out on a self-intersecting polygon with equal-area lobes
+    // (a bowtie) even though it plainly encloses real space under the even-odd rule the solver
+    // itself uses - test non-degeneracy directly instead: find the vertex farthest from the
+    // first one, then the largest triangle (p0, far, p_i) over every vertex. That triangle can
+    // only be near-zero if every vertex is (near-)collinear with p0/far, which is the actual
+    // degenerate case (duplicate points, a segment, a sliver).
+    let p0 = (pts[0][0] as f64, pts[0][1] as f64);
+    let mut far = p0;
+    let mut far_dist2 = 0.0f64;
+    for p in &pts {
+        let (px, py) = (p[0] as f64, p[1] as f64);
+        let d2 = (px - p0.0).powi(2) + (py - p0.1).powi(2);
+        if d2 > far_dist2 {
+            far_dist2 = d2;
+            far = (px, py);
+        }
+    }
+    if far_dist2 < 1e-6 {
+        return Err(format!("{field_name} must enclose a non-zero area"));
+    }
+    let (fx, fy) = (far.0 - p0.0, far.1 - p0.1);
+    let mut max_cross = 0.0f64;
+    for p in &pts {
+        let (px, py) = (p[0] as f64 - p0.0, p[1] as f64 - p0.1);
+        let cross = (fx * py - fy * px).abs();
+        if cross > max_cross {
+            max_cross = cross;
+        }
+    }
+    if max_cross / 2.0 < MIN_AREA_AREA {
+        return Err(format!("{field_name} must enclose a non-zero area"));
+    }
+    Ok(pts)
+}
+
+/// `s6g_origin_area.md`: `originArea` is a closed XY polygon, plus optional finite `zMin`/`zMax`
+/// with `zMin <= zMax`; mutually exclusive with `origin`/`originReach`/`scope: "spawns"`.
 fn validate_origin_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -> Option<String> {
     let Some(area) = query.get("originArea") else {
         // `zMin`/`zMax` only mean anything alongside `originArea`, but are still validated on
@@ -415,74 +535,8 @@ fn validate_origin_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -
     let Some(arr) = area.as_array() else {
         return Some("originArea must be an array of [x,y] points".to_string());
     };
-    if !(MIN_ORIGIN_AREA_VERTICES..=MAX_ORIGIN_AREA_VERTICES).contains(&arr.len()) {
-        return Some(format!(
-            "originArea must have between {MIN_ORIGIN_AREA_VERTICES} and {MAX_ORIGIN_AREA_VERTICES} vertices"
-        ));
-    }
-    let mut pts: Vec<[f32; 2]> = Vec::with_capacity(arr.len());
-    for v in arr {
-        let ok = v
-            .as_array()
-            .is_some_and(|p| p.len() == 2 && p.iter().all(|e| as_f32_finite(e).is_some()));
-        if !ok {
-            return Some("originArea vertices must be [x,y] with finite numbers".to_string());
-        }
-        let p = v.as_array().unwrap();
-        let (x, y) = (as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap());
-        if x < mesh_min[0] - MAP_BOUNDS_MARGIN
-            || x > mesh_max[0] + MAP_BOUNDS_MARGIN
-            || y < mesh_min[1] - MAP_BOUNDS_MARGIN
-            || y > mesh_max[1] + MAP_BOUNDS_MARGIN
-        {
-            return Some("originArea vertex is outside the map bounds".to_string());
-        }
-        pts.push([x, y]);
-    }
-    let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
-    let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
-    for p in &pts {
-        min_x = min_x.min(p[0]);
-        max_x = max_x.max(p[0]);
-        min_y = min_y.min(p[1]);
-        max_y = max_y.max(p[1]);
-    }
-    if max_x - min_x > MAX_ORIGIN_AREA_SPAN || max_y - min_y > MAX_ORIGIN_AREA_SPAN {
-        return Some(format!(
-            "originArea's bounding box cannot exceed {MAX_ORIGIN_AREA_SPAN} units per axis"
-        ));
-    }
-    // A signed (shoelace) area cancels out on a self-intersecting polygon with equal-area lobes
-    // (a bowtie) even though it plainly encloses real space under the even-odd rule the solver
-    // itself uses - test non-degeneracy directly instead: find the vertex farthest from the
-    // first one, then the largest triangle (p0, far, p_i) over every vertex. That triangle can
-    // only be near-zero if every vertex is (near-)collinear with p0/far, which is the actual
-    // degenerate case (duplicate points, a segment, a sliver).
-    let p0 = (pts[0][0] as f64, pts[0][1] as f64);
-    let mut far = p0;
-    let mut far_dist2 = 0.0f64;
-    for p in &pts {
-        let (px, py) = (p[0] as f64, p[1] as f64);
-        let d2 = (px - p0.0).powi(2) + (py - p0.1).powi(2);
-        if d2 > far_dist2 {
-            far_dist2 = d2;
-            far = (px, py);
-        }
-    }
-    if far_dist2 < 1e-6 {
-        return Some("originArea must enclose a non-zero area".to_string());
-    }
-    let (fx, fy) = (far.0 - p0.0, far.1 - p0.1);
-    let mut max_cross = 0.0f64;
-    for p in &pts {
-        let (px, py) = (p[0] as f64 - p0.0, p[1] as f64 - p0.1);
-        let cross = (fx * py - fy * px).abs();
-        if cross > max_cross {
-            max_cross = cross;
-        }
-    }
-    if max_cross / 2.0 < MIN_ORIGIN_AREA_AREA {
-        return Some("originArea must enclose a non-zero area".to_string());
+    if let Err(e) = validate_area_polygon("originArea", arr, mesh_min, mesh_max) {
+        return Some(e);
     }
     for key in ["zMin", "zMax"] {
         if let Some(v) = query.get(key)
@@ -497,6 +551,51 @@ fn validate_origin_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -
     ) && lo > hi
     {
         return Some("zMin must not be greater than zMax".to_string());
+    }
+    None
+}
+
+/// `s6g2_target_area.md`: `targetArea` is a closed XY polygon, plus optional finite
+/// `targetZMin`/`targetZMax` with `targetZMin <= targetZMax`; mutually exclusive with `target`
+/// (the caller skips `target`'s own mandatory-presence check when this field is present, and
+/// rejects both being present at once).
+fn validate_target_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -> Option<String> {
+    let Some(area) = query.get("targetArea") else {
+        for key in ["targetZMin", "targetZMax"] {
+            if let Some(v) = query.get(key)
+                && as_f32_finite(v).is_none()
+            {
+                return Some(format!("{key} must be a finite number"));
+            }
+        }
+        if let (Some(lo), Some(hi)) = (
+            query.get("targetZMin").and_then(as_f32_finite),
+            query.get("targetZMax").and_then(as_f32_finite),
+        ) && lo > hi
+        {
+            return Some("targetZMin must not be greater than targetZMax".to_string());
+        }
+        return None;
+    };
+    let Some(arr) = area.as_array() else {
+        return Some("targetArea must be an array of [x,y] points".to_string());
+    };
+    if let Err(e) = validate_area_polygon("targetArea", arr, mesh_min, mesh_max) {
+        return Some(e);
+    }
+    for key in ["targetZMin", "targetZMax"] {
+        if let Some(v) = query.get(key)
+            && as_f32_finite(v).is_none()
+        {
+            return Some(format!("{key} must be a finite number"));
+        }
+    }
+    if let (Some(lo), Some(hi)) = (
+        query.get("targetZMin").and_then(as_f32_finite),
+        query.get("targetZMax").and_then(as_f32_finite),
+    ) && lo > hi
+    {
+        return Some("targetZMin must not be greater than targetZMax".to_string());
     }
     None
 }
@@ -654,6 +753,36 @@ pub fn query_cache_key(
         .and_then(Value::as_f64)
         .map(|v| format!("{v:.1}"))
         .unwrap_or_else(|| "none".to_string());
+    // `s6g2_target_area.md`: same idiom as `origin_area_key` above, for `targetArea` - keeps an
+    // area-target query from colliding with the point-target `(tx,ty,tz)` segment above, which
+    // otherwise stays `"0.0,0.0,none"` (the empty-array default) for every area-target request.
+    let target_area_key = query
+        .get("targetArea")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|v| {
+                    let p = v.as_array().cloned().unwrap_or_default();
+                    format!(
+                        "{:.1},{:.1}",
+                        p.first().and_then(Value::as_f64).unwrap_or(0.0),
+                        p.get(1).and_then(Value::as_f64).unwrap_or(0.0)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(";")
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let target_zmin_key = query
+        .get("targetZMin")
+        .and_then(Value::as_f64)
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "none".to_string());
+    let target_zmax_key = query
+        .get("targetZMax")
+        .and_then(Value::as_f64)
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "none".to_string());
     let constants_json = serde_json::to_string(constants).unwrap_or_default();
     // `LineupApi.cs:483` buckets `reach`/`tolerance` to whole units and `minStability` to two
     // decimals; we deliberately format `reach`/`tolerance` to one decimal and `minStability` to
@@ -661,7 +790,7 @@ pub fn query_cache_key(
     // live: `tolerance:80` and `tolerance:80.4`) collide on one cache file and answer from the
     // wrong query.
     let seed = format!(
-        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{attrs}|{stand_spots}",
+        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
         i32::from(fine)
     );
     let digest = Sha256::digest(seed.as_bytes());
@@ -709,19 +838,48 @@ fn build_solve_query(
     spawn_fronts: Vec<V3>,
     spawn_points: Vec<V3>,
 ) -> (SolveQuery, Option<[f32; 2]>) {
-    let target_arr = query
-        .get("target")
-        .and_then(Value::as_array)
-        .expect("validated");
-    let tx = as_f32_finite(&target_arr[0]).unwrap();
-    let ty = as_f32_finite(&target_arr[1]).unwrap();
-    let has_target_z = target_arr.len() > 2;
-    let tz = if has_target_z {
-        as_f32_finite(&target_arr[2]).unwrap()
-    } else {
-        0.0
+    // `s6g2_target_area.md`: `targetArea` replaces `target` outright, validated mutually
+    // exclusive with it already (`validate_target_area`/`validate_lineup_query`).
+    let target = match query.get("targetArea").and_then(Value::as_array) {
+        Some(arr) => {
+            let polygon: Vec<[f32; 2]> = arr
+                .iter()
+                .map(|v| {
+                    let p = v.as_array().expect("validated");
+                    [as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap()]
+                })
+                .collect();
+            Target::Area(TargetArea {
+                polygon,
+                z_min: query.get("targetZMin").and_then(as_f32_finite),
+                z_max: query.get("targetZMax").and_then(as_f32_finite),
+            })
+        }
+        None => {
+            let target_arr = query
+                .get("target")
+                .and_then(Value::as_array)
+                .expect("validated");
+            let tx = as_f32_finite(&target_arr[0]).unwrap();
+            let ty = as_f32_finite(&target_arr[1]).unwrap();
+            let has_z = target_arr.len() > 2;
+            let tz = if has_z {
+                as_f32_finite(&target_arr[2]).unwrap()
+            } else {
+                0.0
+            };
+            let tolerance = query
+                .get("tolerance")
+                .and_then(Value::as_f64)
+                .map(|v| v as f32)
+                .unwrap_or(80.0);
+            Target::Point {
+                pos: V3::new(tx, ty, tz),
+                has_z,
+                tolerance,
+            }
+        }
     };
-    let target = V3::new(tx, ty, tz);
 
     let scope = query
         .get("scope")
@@ -742,11 +900,6 @@ fn build_solve_query(
     } else {
         3100.0
     };
-    let tolerance = query
-        .get("tolerance")
-        .and_then(Value::as_f64)
-        .map(|v| v as f32)
-        .unwrap_or(80.0);
     let min_stability = query
         .get("minStability")
         .and_then(Value::as_f64)
@@ -801,12 +954,10 @@ fn build_solve_query(
 
     let q = SolveQuery {
         target,
-        has_target_z,
         origin_click,
         origin_z,
         origin_reach,
         origin_area,
-        tolerance,
         min_stability,
         fine_scan,
         types,
@@ -1064,6 +1215,12 @@ async fn run_solve_and_stream(
     max_stream_points: usize,
     max_points_per_line: usize,
 ) {
+    // `query` moves into `spawn_blocking`'s closure below, so this is captured up front for
+    // `json_payload`'s own use once the solve is done (`s6g2_target_area.md`'s `insideTargetArea`).
+    let target_area_for_json: Option<TargetArea> = match &query.target {
+        Target::Area(area) => Some(area.clone()),
+        Target::Point { .. } => None,
+    };
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SolveEvent>();
     let total_points = Arc::new(AtomicUsize::new(0));
     let truncated = Arc::new(AtomicBool::new(false));
@@ -1160,7 +1317,7 @@ async fn run_solve_and_stream(
                 return;
             }
             let ranked = rank::ranked(&solve, origin_click);
-            let payload = json_payload(&solve, &ranked);
+            let payload = json_payload(&solve, &ranked, target_area_for_json.as_ref());
             let Ok(json_text) = serde_json::to_string(&payload) else {
                 let _ = send_line(
                     &tx,

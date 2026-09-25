@@ -21,13 +21,26 @@ export function selectionError(params) {
   return null;
 }
 
-// `target`: `{x,y,z}`. `origin`: `{x,y,reach}` (from a right-click) or `null`. `originArea`:
+// `target`: `{x,y,z}` or `null` when `targetArea` is used instead (`s6g2_target_area.md`).
+// `targetArea`: `{polygon:[[x,y],...], zMin, zMax}` or `null` - mutually exclusive with `target`
+// (the UI never sets both). `origin`: `{x,y,reach}` (from a right-click) or `null`. `originArea`:
 // `{polygon:[[x,y],...], zMin, zMax}` (from the origin-area tool, `s6g_origin_area.md`) or
 // `null` - mutually exclusive with `origin` (the UI never sets both). `params`: the params
 // panel's current selections. Fields left at the server's own default are omitted, per
 // `s6f2_solve_ui.md` ("параметры, равные умолчанию, в запрос не класть").
-export function buildQuery(map, target, origin, originArea, params) {
-  const body = { map, target: [target.x, target.y, target.z] };
+export function buildQuery(map, target, targetArea, origin, originArea, params) {
+  const body = { map };
+  if (target) {
+    body.target = [target.x, target.y, target.z];
+  } else if (targetArea) {
+    body.targetArea = targetArea.polygon;
+    if (targetArea.zMin != null) {
+      body.targetZMin = targetArea.zMin;
+    }
+    if (targetArea.zMax != null) {
+      body.targetZMax = targetArea.zMax;
+    }
+  }
   if (origin) {
     body.origin = [origin.x, origin.y];
     if (origin.reach != null && origin.reach !== 300) {

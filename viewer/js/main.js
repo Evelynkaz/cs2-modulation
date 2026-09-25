@@ -160,6 +160,31 @@ function bodyFromHash(q) {
       body.originReach = v;
     }
   }
+  // `s6g_origin_area.md`: a flat "x0,y0,x1,y1,..." list (an even count, at least 3 points) -
+  // `syncHash` writes it that way since `Array.prototype.join` flattens the polygon's nested
+  // `[x,y]` pairs on its own.
+  if (q.originArea) {
+    const nums = q.originArea.split(",").map(Number);
+    if (nums.length >= 6 && nums.length % 2 === 0 && nums.every(Number.isFinite)) {
+      const polygon = [];
+      for (let i = 0; i < nums.length; i += 2) {
+        polygon.push([nums[i], nums[i + 1]]);
+      }
+      body.originArea = polygon;
+    }
+  }
+  if (q.zMin) {
+    const v = finiteNumber(q.zMin);
+    if (v !== undefined) {
+      body.zMin = v;
+    }
+  }
+  if (q.zMax) {
+    const v = finiteNumber(q.zMax);
+    if (v !== undefined) {
+      body.zMax = v;
+    }
+  }
   if (q.scope) {
     body.scope = q.scope;
   }
@@ -811,7 +836,8 @@ async function showMapScreen(map, opts = {}) {
   const solveState = {
     target: null, // { x, y, z, label }
     origin: null, // { x, y, reach }
-    params: { scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false, types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [] },
+    originArea: null, // { polygon: [[x,y],...] } (`s6g_origin_area.md`) - mutually exclusive with `origin`
+    params: { scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false, types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [], areaZMin: null, areaZMax: null },
     running: false,
     controller: null,
   };
@@ -822,6 +848,13 @@ async function showMapScreen(map, opts = {}) {
   let originStatusBox = null;
   let runRefs = null;
   let scopeSelectRef = null;
+  // The origin-area tool (`s6g_origin_area.md`): `areaMode` mirrors `mapView`'s own draw-mode
+  // flag, `areaDraftCount` is the in-progress vertex count before the polygon is closed (once
+  // closed, `solveState.originArea.polygon.length` is used instead).
+  let areaMode = false;
+  let areaDraftCount = 0;
+  let areaToggleBtnRef = null;
+  let areaDeleteBtnRef = null;
   // The last result/selection, replayed into a 3D view created after they already happened
   // (`ensureSceneView`) - `panel.js` owns the definitive copies, these just let a freshly built
   // view catch up without re-running the solve.
@@ -915,18 +948,59 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
+  // Vs. "точка ±R", shows "область: N вершин" while the origin-area tool has anything drawn
+  // (`s6g_origin_area.md`: "строка статуса вместо «точка ±R» показывает «область: N вершин»").
   function updateOriginStatus() {
     if (!originStatusBox) {
       return;
     }
-    originStatusBox.textContent = solveState.origin
-      ? `${strings.solveParams.scopePoint}: ${solveState.origin.x.toFixed(0)}, ${solveState.origin.y.toFixed(0)} (±${solveState.origin.reach})`
-      : "";
+    if (solveState.originArea) {
+      originStatusBox.textContent = strings.solveParams.areaStatus(solveState.originArea.polygon.length);
+    } else if (areaDraftCount > 0) {
+      originStatusBox.textContent = strings.solveParams.areaStatus(areaDraftCount);
+    } else if (solveState.origin) {
+      originStatusBox.textContent = `${strings.solveParams.scopePoint}: ${solveState.origin.x.toFixed(0)}, ${solveState.origin.y.toFixed(0)} (±${solveState.origin.reach})`;
+    } else {
+      originStatusBox.textContent = "";
+    }
+  }
+
+  // Updates the "draw/edit/delete area" buttons' text and visibility from the current state -
+  // called after anything that changes `areaMode` or `solveState.originArea`.
+  function updateAreaButtons() {
+    if (!areaToggleBtnRef) {
+      return;
+    }
+    areaToggleBtnRef.textContent = areaMode
+      ? strings.solveParams.areaStopButton
+      : solveState.originArea
+        ? strings.solveParams.areaEditButton
+        : strings.solveParams.areaDrawButton;
+    areaToggleBtnRef.className = areaMode ? "primary" : "";
+    if (areaDeleteBtnRef) {
+      areaDeleteBtnRef.hidden = !solveState.originArea;
+    }
+  }
+
+  // Discards the origin area (drafted or committed) and leaves the tool off - shared by the
+  // "delete area" button, picking a point origin, and changing scope away from an area.
+  function clearArea() {
+    solveState.originArea = null;
+    areaDraftCount = 0;
+    mapView.setArea(null);
+    if (areaMode) {
+      areaMode = false;
+      mapView.setAreaMode(false);
+    }
   }
 
   function handleOriginClick(wx, wy) {
     solveState.origin = { x: wx, y: wy, reach: solveState.params.originReach };
     for (const v of views()) v.setOrigin(solveState.origin);
+    // A right-click origin and the origin area are mutually exclusive - placing one resets the
+    // other (`s6g_origin_area.md`).
+    clearArea();
+    updateAreaButtons();
     updateOriginStatus();
     syncScopeSelect();
   }
@@ -973,9 +1047,13 @@ async function showMapScreen(map, opts = {}) {
       if (solveState.origin) {
         solveState.origin = null;
         for (const v of views()) v.clearOrigin();
-        updateOriginStatus();
         syncScopeSelect();
       }
+      if (solveState.originArea) {
+        clearArea();
+        updateAreaButtons();
+      }
+      updateOriginStatus();
     });
     paramsContent.append(
       el("label", { htmlFor: "scope-select", textContent: strings.solveParams.scopeLabel }),
@@ -1002,6 +1080,55 @@ async function showMapScreen(map, opts = {}) {
     originStatusBox = el("p", { className: "hint" });
     paramsContent.append(originStatusBox);
     updateOriginStatus();
+
+    // `s6g_origin_area.md`: draw/edit a polygon on the map restricting where a throw may
+    // originate from, instead of the point+radius above.
+    const areaToggleBtn = el("button", { type: "button" });
+    const areaDeleteBtn = el("button", { type: "button", textContent: strings.solveParams.areaDeleteButton, hidden: true });
+    areaToggleBtnRef = areaToggleBtn;
+    areaDeleteBtnRef = areaDeleteBtn;
+    areaToggleBtn.addEventListener("click", () => {
+      areaMode = !areaMode;
+      mapView.setAreaMode(areaMode);
+      if (areaMode && solveState.origin) {
+        // Starting to draw/edit an area is exclusive with a point origin (`s6g_origin_area.md`).
+        solveState.origin = null;
+        for (const v of views()) v.clearOrigin();
+        syncScopeSelect();
+      }
+      updateAreaButtons();
+      updateOriginStatus();
+    });
+    areaDeleteBtn.addEventListener("click", () => {
+      clearArea();
+      updateAreaButtons();
+      updateOriginStatus();
+    });
+    const areaZMinInput = el("input", { id: "area-zmin", type: "number", placeholder: "-", value: solveState.params.areaZMin ?? "" });
+    areaZMinInput.addEventListener("input", () => {
+      const v = parseFloat(areaZMinInput.value);
+      solveState.params.areaZMin = Number.isFinite(v) ? v : null;
+    });
+    const areaZMaxInput = el("input", { id: "area-zmax", type: "number", placeholder: "-", value: solveState.params.areaZMax ?? "" });
+    areaZMaxInput.addEventListener("input", () => {
+      const v = parseFloat(areaZMaxInput.value);
+      solveState.params.areaZMax = Number.isFinite(v) ? v : null;
+    });
+    paramsContent.append(
+      el("p", { textContent: strings.solveParams.areaLabel }),
+      el("p", { className: "hint", textContent: strings.solveParams.areaHint }),
+      el("div", { className: "field-row" }, areaToggleBtn, areaDeleteBtn),
+      el(
+        "div",
+        { className: "field-row" },
+        el("label", { htmlFor: "area-zmin", textContent: strings.solveParams.areaZMinLabel }),
+        areaZMinInput,
+        el("label", { htmlFor: "area-zmax", textContent: strings.solveParams.areaZMaxLabel }),
+        areaZMaxInput,
+      ),
+      el("p", { className: "hint", textContent: strings.solveParams.areaZHint }),
+    );
+    updateAreaButtons();
 
     const tolInput = el("input", { id: "tolerance-input", type: "number", min: 1, max: 512, value: solveState.params.tolerance });
     tolInput.addEventListener("input", () => {
@@ -1195,7 +1322,10 @@ async function showMapScreen(map, opts = {}) {
     runRefs.status.className = "status";
     runRefs.status.textContent = strings.solve.phases.queued;
 
-    const body = bodyOverride ?? buildQuery(map, solveState.target, solveState.origin, solveState.params);
+    const originAreaForQuery = solveState.originArea
+      ? { polygon: solveState.originArea.polygon, zMin: solveState.params.areaZMin, zMax: solveState.params.areaZMax }
+      : null;
+    const body = bodyOverride ?? buildQuery(map, solveState.target, solveState.origin, originAreaForQuery, solveState.params);
     syncHash(body);
     // Snapshot now, not read back from `solveState.params.broken` in `onResult` - the panel stays
     // interactive while the solve runs, so those checkboxes could have changed by the time it ends.
@@ -1270,6 +1400,15 @@ async function showMapScreen(map, opts = {}) {
     if (body.origin) {
       solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
       for (const v of views()) v.setOrigin(solveState.origin);
+    } else if (body.originArea) {
+      solveState.originArea = { polygon: body.originArea };
+      mapView.setArea(body.originArea);
+      if (body.zMin != null) {
+        solveState.params.areaZMin = body.zMin;
+      }
+      if (body.zMax != null) {
+        solveState.params.areaZMax = body.zMax;
+      }
     }
     if (body.scope) {
       solveState.params.scope = body.scope;
@@ -1457,6 +1596,28 @@ async function showMapScreen(map, opts = {}) {
     }
     mapView.onClick((wx, wy) => handleMapClick(wx, wy));
     mapView.onRightClick((wx, wy) => handleOriginClick(wx, wy));
+    mapView.onAreaChange(({ points, closed }) => {
+      areaDraftCount = points.length;
+      // `closed` stays true on every later drag of an already-closed polygon's vertex too, not
+      // just the one event where it first closes - only that first transition should auto-exit
+      // the tool, or a drag's very first `pointermove` would turn `areaMode` off mid-drag and the
+      // rest of the drag would pan the map instead of moving the vertex.
+      const justClosed = closed && !solveState.originArea;
+      if (closed) {
+        solveState.originArea = { polygon: points.map((p) => [p.x, p.y]) };
+        if (solveState.origin) {
+          solveState.origin = null;
+          for (const v of views()) v.clearOrigin();
+          syncScopeSelect();
+        }
+        if (justClosed) {
+          areaMode = false;
+          mapView.setAreaMode(false);
+        }
+      }
+      updateAreaButtons();
+      updateOriginStatus();
+    });
     if (opts.autoBody) {
       applyAutoBody(opts.autoBody);
     }

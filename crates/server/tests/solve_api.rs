@@ -252,6 +252,42 @@ async fn validation_errors_are_400_with_expected_text() {
             json!({ "map": "de_test", "target": [0.0, 0.0], "scope": "exact" }),
             "scope \"exact\" needs an origin",
         ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0], "origin": [0.0, 0.0],
+                "originArea": [[100.0,100.0],[300.0,100.0],[300.0,300.0],[100.0,300.0]] }),
+            "mutually exclusive",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0], "scope": "spawns",
+                "originArea": [[100.0,100.0],[300.0,100.0],[300.0,300.0],[100.0,300.0]] }),
+            "mutually exclusive",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "originArea": [[100.0,100.0],[300.0,300.0]] }),
+            "between 3 and 64 vertices",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "originArea": [[100.0,100.0],[300.0,100.0],"bad"] }),
+            "must be [x,y] with finite numbers",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "originArea": [[0.0,0.0],[9000.0,0.0],[9000.0,100.0],[0.0,100.0]] }),
+            "outside the map bounds",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "originArea": [[0.0,0.0],[100.0,0.0],[200.0,0.0]] }),
+            "non-zero area",
+        ),
+        (
+            json!({ "map": "de_test", "target": [0.0, 0.0],
+                "originArea": [[100.0,100.0],[300.0,100.0],[300.0,300.0],[100.0,300.0]],
+                "zMin": 100.0, "zMax": 0.0 }),
+            "zMin must not be greater than zMax",
+        ),
     ];
     for (body, expected) in cases {
         let (status, bytes) = post_lineup(&router, &body).await;
@@ -580,5 +616,40 @@ async fn client_disconnect_does_not_write_the_cache() {
         count_cache_files(&cache_root),
         1,
         "a cancelled solve must not write a cache file (only the warm-up's should exist)"
+    );
+}
+
+/// `s6g_origin_area.md`: `originArea` must actually cut down which stand spots the solve
+/// considers - a polygon covering a quarter of the nav area finds fewer `origins` than an
+/// unrestricted solve over the same map, and a distinct cache key from it (`de_test`'s nav area
+/// spans -600..600 on both axes).
+#[tokio::test]
+async fn origin_area_limits_candidate_origins() {
+    let cache_root = temp_dir("origin_area");
+    sample_cache_dir(&cache_root);
+    let router = router_over(&cache_root);
+
+    let unrestricted = json!({ "map": "de_test", "target": [0.0, 0.0, 0.0] });
+    let (status, bytes) = post_lineup(&router, &unrestricted).await;
+    assert_eq!(status, StatusCode::OK);
+    let last = assert_well_formed_ndjson(&bytes);
+    let unrestricted_origins = last["result"]["origins"].as_u64().unwrap();
+    assert!(unrestricted_origins > 0, "{last}");
+
+    let area = json!({ "map": "de_test", "target": [0.0, 0.0, 0.0],
+        "originArea": [[0.0,0.0],[300.0,0.0],[300.0,300.0],[0.0,300.0]] });
+    let (status2, bytes2) = post_lineup(&router, &area).await;
+    assert_eq!(status2, StatusCode::OK);
+    let last2 = assert_well_formed_ndjson(&bytes2);
+    let area_origins = last2["result"]["origins"].as_u64().unwrap();
+    assert!(
+        area_origins > 0 && area_origins < unrestricted_origins,
+        "expected 0 < area_origins ({area_origins}) < unrestricted_origins ({unrestricted_origins})"
+    );
+
+    assert_eq!(
+        count_cache_files(&cache_root),
+        2,
+        "the area query must not collide with the unrestricted one on cache key"
     );
 }

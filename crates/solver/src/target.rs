@@ -73,6 +73,86 @@ pub struct MapData {
     pub attribute_filter: Option<AttributeMask>,
 }
 
+/// A polygon in the XY plane (plus an optional Z range) restricting where a thrower may stand,
+/// instead of `origin_click`/`origin_reach`'s circle (`s6g_origin_area.md`). Mutually exclusive
+/// with `origin_click` - the caller (`crates/server/src/solve.rs`'s validation) rejects a query
+/// that sets both.
+#[derive(Debug, Clone)]
+pub struct OriginArea {
+    /// At least 3 vertices, in order; winding does not matter - `point_in_origin_area` uses the
+    /// even-odd rule, which is winding-independent.
+    pub polygon: Vec<[f32; 2]>,
+    pub z_min: Option<f32>,
+    pub z_max: Option<f32>,
+}
+
+impl OriginArea {
+    /// The polygon's own AABB, used in place of `origin_click`'s reach box for the region bounds
+    /// and the nav-origin scan box below (`s6g_origin_area.md`: "рамка многоугольника вместо
+    /// круга").
+    fn bounds_xy(&self) -> ([f32; 2], [f32; 2]) {
+        let mut min = [f32::INFINITY, f32::INFINITY];
+        let mut max = [f32::NEG_INFINITY, f32::NEG_INFINITY];
+        for p in &self.polygon {
+            min[0] = min[0].min(p[0]);
+            min[1] = min[1].min(p[1]);
+            max[0] = max[0].max(p[0]);
+            max[1] = max[1].max(p[1]);
+        }
+        (min, max)
+    }
+}
+
+/// Whether `(a, b)` - one polygon edge - passes within `eps` of `(x, y)`, used by
+/// `point_in_origin_area` to give boundary points a definite answer instead of leaving them to
+/// float-rounding luck in the ray-cast below.
+fn point_on_segment(a: [f32; 2], b: [f32; 2], x: f32, y: f32, eps: f32) -> bool {
+    let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+    let len = (ex * ex + ey * ey).sqrt();
+    if len < 1e-6 {
+        return (x - a[0]).abs() <= eps && (y - a[1]).abs() <= eps;
+    }
+    let (px, py) = (x - a[0], y - a[1]);
+    let cross = (ex * py - ey * px) / len; // signed perpendicular distance
+    if cross.abs() > eps {
+        return false;
+    }
+    let t = (px * ex + py * ey) / (len * len);
+    (-eps / len..=1.0 + eps / len).contains(&t)
+}
+
+/// Even-odd point-in-polygon test with `s6g_origin_area.md`'s explicit boundary rule ("точки на
+/// границе — внутри"): every edge is checked for an exact hit first, so a self-intersecting
+/// polygon still classifies its own edges as inside regardless of how the ray-cast below would
+/// otherwise count crossings there.
+fn point_in_origin_area(polygon: &[[f32; 2]], x: f32, y: f32) -> bool {
+    const EPS: f32 = 0.01;
+    let n = polygon.len();
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        if point_on_segment(a, b, x, y, EPS) {
+            return true;
+        }
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (polygon[i][0], polygon[i][1]);
+        let (xj, yj) = (polygon[j][0], polygon[j][1]);
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Whether `z` falls inside an `OriginArea`'s optional height range - both ends open by default.
+fn origin_area_z_ok(area: &OriginArea, z: f32) -> bool {
+    area.z_min.is_none_or(|lo| z >= lo) && area.z_max.is_none_or(|hi| z <= hi)
+}
+
 /// `TargetSolver.SolveForTarget`'s named parameters (`TargetSolver.cs:80-132`).
 pub struct SolveQuery {
     pub target: V3,
@@ -80,6 +160,9 @@ pub struct SolveQuery {
     pub origin_click: Option<[f32; 2]>,
     pub origin_z: Option<f32>,
     pub origin_reach: f32,
+    /// `s6g_origin_area.md`: an alternative to `origin_click`/`origin_reach`'s circle. The two
+    /// are mutually exclusive by contract (validated by the caller, not here).
+    pub origin_area: Option<OriginArea>,
     pub tolerance: f32,
     /// `0.4` in the reference.
     pub min_stability: f32,
@@ -103,6 +186,7 @@ impl Default for SolveQuery {
             origin_click: None,
             origin_z: None,
             origin_reach: 300.0,
+            origin_area: None,
             tolerance: 80.0,
             min_stability: 0.4,
             fine_scan: false,
@@ -622,19 +706,42 @@ pub fn solve_for_target(
             .unwrap_or(V3::new(target.x, target.y, 0.0));
     }
 
-    // Region min/max (`TargetSolver.cs:171-181`).
+    // Region min/max (`TargetSolver.cs:171-181`), widened to the origin area's own bounding box
+    // instead of the reach circle's when one is given (`s6g_origin_area.md`: "рамка
+    // многоугольника вместо круга (с теми же +500 и обрезкой по мешу)").
+    let (reach_min_xy, reach_max_xy) = match &q.origin_area {
+        Some(area) => area.bounds_xy(),
+        None => (
+            [
+                origin_click[0] - q.origin_reach,
+                origin_click[1] - q.origin_reach,
+            ],
+            [
+                origin_click[0] + q.origin_reach,
+                origin_click[1] + q.origin_reach,
+            ],
+        ),
+    };
     let min = V3::new(
-        (target.x.min(origin_click[0] - q.origin_reach) - 500.0).max(mesh_min.x),
-        (target.y.min(origin_click[1] - q.origin_reach) - 500.0).max(mesh_min.y),
+        (target.x.min(reach_min_xy[0]) - 500.0).max(mesh_min.x),
+        (target.y.min(reach_min_xy[1]) - 500.0).max(mesh_min.y),
         mesh_min.z,
     );
+    // The Z bound stays computed the same way as without an area, but a `z_max` above the
+    // default 900u-over-target window must still be reachable, or a rooftop-only area would have
+    // no grid left to find its own candidates in (`s6g_origin_area.md`: "по Z — как сейчас, но с
+    // учётом диапазона, если задан").
+    let mut z_cap = target.z + 900.0;
+    if let Some(zmax) = q.origin_area.as_ref().and_then(|a| a.z_max) {
+        z_cap = z_cap.max(zmax + VOXEL_SIZE);
+    }
     let max = V3::new(
-        (target.x.max(origin_click[0] + q.origin_reach) + 500.0).min(mesh_max.x),
-        (target.y.max(origin_click[1] + q.origin_reach) + 500.0).min(mesh_max.y),
+        (target.x.max(reach_max_xy[0]) + 500.0).min(mesh_max.x),
+        (target.y.max(reach_max_xy[1]) + 500.0).min(mesh_max.y),
         // A target far below the map used to invert this region (`max.z` below `min.z`),
         // which sent `VoxelGrid::build` a negative cell count and aborted the process - clamp
         // to at least one voxel above `min.z` so the grid always stays non-degenerate here too.
-        ((mesh_max.z + 64.0).min(target.z + 900.0)).max(min.z + VOXEL_SIZE),
+        ((mesh_max.z + 64.0).min(z_cap)).max(min.z + VOXEL_SIZE),
     );
     let region = Aabb { min, max };
     let grid =
@@ -700,13 +807,29 @@ pub fn solve_for_target(
         };
     }
 
+    // `origin_area` replaces the reach-circle test with polygon containment (plus an optional Z
+    // range) everywhere a candidate origin is accepted or rejected below
+    // (`s6g_origin_area.md`: "кандидаты ... только внутри многоугольника").
+    let in_reach = |p: [f32; 2]| -> bool {
+        match &q.origin_area {
+            Some(area) => point_in_origin_area(&area.polygon, p[0], p[1]),
+            None => distance2(p, origin_click) <= q.origin_reach,
+        }
+    };
+    let in_area_z = |z: f32| -> bool {
+        q.origin_area
+            .as_ref()
+            .is_none_or(|a| origin_area_z_ok(a, z))
+    };
+
     let mut origins_list: Vec<V3> = match &map.stand_spots {
         Some(spots) if !spots.is_empty() => spots
             .iter()
             .filter(|s| {
-                distance2(xy(s.feet), origin_click) <= q.origin_reach
+                in_reach(xy(s.feet))
                     && s.feet.z >= min.z
                     && s.feet.z <= max.z
+                    && in_area_z(s.feet.z)
             })
             .map(|s| s.feet)
             .collect(),
@@ -715,21 +838,13 @@ pub fn solve_for_target(
             origins::origins_from_nav_areas(
                 &grid,
                 &map.nav_areas,
-                V3::new(
-                    origin_click[0] - q.origin_reach,
-                    origin_click[1] - q.origin_reach,
-                    mesh_min.z,
-                ),
-                V3::new(
-                    origin_click[0] + q.origin_reach,
-                    origin_click[1] + q.origin_reach,
-                    max.z,
-                ),
+                V3::new(reach_min_xy[0], reach_min_xy[1], mesh_min.z),
+                V3::new(reach_max_xy[0], reach_max_xy[1], max.z),
                 24.0,
                 Some(cider),
             )
             .into_iter()
-            .filter(|o| distance2(xy(*o), origin_click) <= q.origin_reach)
+            .filter(|o| in_reach(xy(*o)) && in_area_z(o.z))
             .collect()
         }
     };
@@ -797,6 +912,16 @@ pub fn solve_for_target(
             &mut origins_list,
             Some(&mut crouch_only_extras),
         );
+        // Unlike the reach circle (unfiltered here too, matching the reference), an `origin_area`
+        // polygon is a hard promise to the caller - every resulting throw point must lie inside
+        // it (`s6g_origin_area.md`'s own check 2: "все раскидки (в) внутри многоугольника") - a
+        // wall/corner pin can walk an origin a few units past the polygon boundary, so the newly
+        // added ones get re-checked here.
+        if q.origin_area.is_some() {
+            let mut new_pins = origins_list.split_off(before);
+            new_pins.retain(|o| in_reach(xy(*o)) && in_area_z(o.z));
+            origins_list.extend(new_pins);
+        }
         progress(Phase::AfterPins, origins_list.len());
         for &o in &origins_list[before..] {
             pinned_origins.insert((
@@ -1558,5 +1683,158 @@ mod tests {
         let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
         assert!(solve.lineups.is_empty());
         assert!(solve.empty_reason.is_some());
+    }
+
+    // ---- `s6g_origin_area.md`: `origin_area` ---------------------------------------------------
+
+    #[test]
+    fn point_in_origin_area_inside_outside_and_on_the_boundary() {
+        let square = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        assert!(point_in_origin_area(&square, 5.0, 5.0), "center");
+        assert!(!point_in_origin_area(&square, 20.0, 5.0), "outside");
+        // On an edge, exactly and to within float slop - both must read "inside"
+        // (`s6g_origin_area.md`: "точки на границе — внутри").
+        assert!(point_in_origin_area(&square, 5.0, 0.0), "edge midpoint");
+        assert!(point_in_origin_area(&square, 5.0, 0.001), "edge, tiny slop");
+        assert!(point_in_origin_area(&square, 0.0, 0.0), "vertex");
+        // The plain ray-cast below (`yi > y`, strict `<`) reads the top/right edges and the far
+        // corner as outside on its own - only `point_on_segment`'s explicit check makes these
+        // "inside" too, so these three actually exercise it (unlike the bottom edge/near-corner
+        // cases above, which the ray-cast alone already gets right).
+        assert!(point_in_origin_area(&square, 5.0, 10.0), "top edge");
+        assert!(point_in_origin_area(&square, 10.0, 5.0), "right edge");
+        assert!(point_in_origin_area(&square, 10.0, 10.0), "far corner");
+    }
+
+    #[test]
+    fn point_in_origin_area_concave_notch_is_outside() {
+        // An "L": a wide bottom bar (y in 0..4, x in 0..10) plus a narrower upright on the right
+        // (y in 4..10, x in 6..10) - the notch at x in 0..6, y in 4..10 is not part of the shape.
+        let l_shape = [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [6.0, 10.0],
+            [6.0, 4.0],
+            [0.0, 4.0],
+        ];
+        assert!(point_in_origin_area(&l_shape, 2.0, 2.0), "bottom bar");
+        assert!(point_in_origin_area(&l_shape, 8.0, 8.0), "upright");
+        assert!(!point_in_origin_area(&l_shape, 2.0, 8.0), "in the notch");
+    }
+
+    #[test]
+    fn point_in_origin_area_self_intersecting_bowtie_uses_even_odd_rule() {
+        // A bowtie: edges (0,0)-(10,10) and (0,10)-(10,0) cross at (5,5), so the even-odd rule
+        // fills only the top and bottom triangles, leaving the left/right "wings" empty.
+        let bowtie = [[0.0, 0.0], [10.0, 10.0], [0.0, 10.0], [10.0, 0.0]];
+        assert!(point_in_origin_area(&bowtie, 5.0, 8.0), "top triangle");
+        assert!(
+            !point_in_origin_area(&bowtie, 1.0, 8.0),
+            "left wing, cancelled out"
+        );
+        assert!(point_in_origin_area(&bowtie, 5.0, 2.0), "bottom triangle");
+        assert!(
+            !point_in_origin_area(&bowtie, 1.0, 2.0),
+            "left wing, cancelled out"
+        );
+    }
+
+    #[test]
+    fn origin_area_z_ok_respects_an_open_or_closed_range() {
+        let open = OriginArea {
+            polygon: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],
+            z_min: None,
+            z_max: None,
+        };
+        assert!(origin_area_z_ok(&open, -1000.0));
+        assert!(origin_area_z_ok(&open, 1000.0));
+
+        let ranged = OriginArea {
+            polygon: open.polygon.clone(),
+            z_min: Some(0.0),
+            z_max: Some(100.0),
+        };
+        assert!(!origin_area_z_ok(&ranged, -1.0));
+        assert!(origin_area_z_ok(&ranged, 0.0));
+        assert!(origin_area_z_ok(&ranged, 50.0));
+        assert!(origin_area_z_ok(&ranged, 100.0));
+        assert!(!origin_area_z_ok(&ranged, 100.1));
+    }
+
+    /// Full `solve_for_target` wiring: an `origin_area` polygon far outside the default
+    /// `origin_reach` (300u) still reaches its own stand spots (`s6g_origin_area.md`: "регион
+    /// строится по рамке" - the region is built from the polygon's own bounding box, not the
+    /// reach circle), and only the spot actually inside the polygon is kept.
+    #[test]
+    fn solve_for_target_origin_area_limits_candidates_to_the_polygon() {
+        let mesh = flat_plane(2000.0);
+        let inside_spot = V3::new(1000.0, 1000.0, 0.0);
+        let outside_spot = V3::new(-1000.0, -1000.0, 0.0);
+        let map = MapData {
+            mesh,
+            nav_areas: vec![],
+            stand_spots: Some(vec![
+                StandSpotOrigin {
+                    feet: inside_spot,
+                    crouched: false,
+                },
+                StandSpotOrigin {
+                    feet: outside_spot,
+                    crouched: false,
+                },
+            ]),
+            spawns: vec![],
+            attribute_filter: None,
+        };
+        let q = SolveQuery {
+            target: V3::new(0.0, 0.0, 0.0),
+            has_target_z: true,
+            tolerance: 80.0,
+            origin_area: Some(OriginArea {
+                polygon: vec![
+                    [900.0, 900.0],
+                    [1100.0, 900.0],
+                    [1100.0, 1100.0],
+                    [900.0, 1100.0],
+                ],
+                z_min: None,
+                z_max: None,
+            }),
+            ..Default::default()
+        };
+        let k = ThrowConstants::default();
+        let cancel = AtomicBool::new(false);
+        // `solve.origins` alone only reflects `origins_list` membership, which the stand-spot
+        // branch fills straight from `in_reach`/`in_area_z` regardless of the region's own XY
+        // bounds - it would stay 1 even if the region were still built from the old reach circle.
+        // What actually depends on the region is `sweep::solve`'s free-space prefilter (built
+        // over the region's `VoxelGrid`): an origin outside that grid never reaches `on_origin`
+        // at all. Recording every swept origin here and requiring `inside_spot` among them is
+        // what actually exercises "регион строится по рамке" - confirmed by temporarily reverting
+        // `reach_min_xy`/`reach_max_xy` to the old circle formula, which makes this assert fail
+        // (region only reaches -500..500ish, well short of 900..1100), then restoring the fix.
+        let swept: Mutex<Vec<V3>> = Mutex::new(Vec::new());
+        let on_origin = |feet: V3, _hits: usize| {
+            swept.lock().unwrap().push(feet);
+        };
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: Some(&on_origin),
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
+        assert_eq!(
+            solve.origins, 1,
+            "expected only the stand spot inside the polygon"
+        );
+        let swept = swept.into_inner().unwrap();
+        assert!(
+            swept
+                .iter()
+                .any(|&f| (f - inside_spot).length_squared() < 1.0),
+            "expected the polygon's own stand spot to reach the sweep (region built from the \
+             polygon's bounding box), got {swept:?}"
+        );
     }
 }

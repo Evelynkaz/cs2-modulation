@@ -22,7 +22,9 @@ use sha2::{Digest, Sha256};
 use geom::math::V3;
 use sim::{ThrowConstants, ThrowType};
 use solver::rank::{self, RankedLineup};
-use solver::target::{self, MapData, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve};
+use solver::target::{
+    self, MapData, OriginArea, Phase, SolveHooks, SolveQuery, StandSpotOrigin, TargetSolve,
+};
 
 use crate::AppState;
 use crate::registry::MapEntry;
@@ -52,10 +54,23 @@ const MAX_ORIGIN_REACH: f32 = 4000.0;
 const MIN_TOLERANCE: f32 = 1.0;
 const MAX_TOLERANCE: f32 = 512.0;
 
+// ---- `originArea` (`s6g_origin_area.md`) ------------------------------------------------------
+
+const MIN_ORIGIN_AREA_VERTICES: usize = 3;
+const MAX_ORIGIN_AREA_VERTICES: usize = 64;
+/// The largest bounding box a maxed-out `originReach` circle could already produce (its diameter,
+/// `2 * MAX_ORIGIN_REACH`, per axis) - `originArea`'s own bounding box is capped to the same span
+/// so it cannot be used to ask for a bigger search region than the circle already allowed
+/// (`s6g_origin_area.md`: "не дать запросить всю карту в обход ограничений").
+const MAX_ORIGIN_AREA_SPAN: f32 = 2.0 * MAX_ORIGIN_REACH;
+/// Below this (world units²) an `originArea` polygon is treated as degenerate (collinear or
+/// coincident points) rather than a real region to search.
+const MIN_ORIGIN_AREA_AREA: f64 = 1.0;
+
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -293,6 +308,9 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
             return Some("origin must be [x,y] with finite numbers".to_string());
         }
     }
+    if let Some(err) = validate_origin_area(query, mesh_min, mesh_max) {
+        return Some(err);
+    }
     if let Some(scope) = query.get("scope") {
         let lower = scope.as_str().map(|s| s.to_ascii_lowercase());
         match lower.as_deref() {
@@ -356,6 +374,129 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
         if !ok {
             return Some("broken must be an array drawn from \"glass\", \"doors\"".to_string());
         }
+    }
+    None
+}
+
+/// `s6g_origin_area.md`: `originArea` is a closed XY polygon (3..64 vertices, finite, inside the
+/// map bounds, enclosing a non-zero area, its bounding box no bigger than a maxed-out
+/// `originReach` circle's own), plus optional finite `zMin`/`zMax` with `zMin <= zMax`; mutually
+/// exclusive with `origin`/`originReach`.
+fn validate_origin_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -> Option<String> {
+    let Some(area) = query.get("originArea") else {
+        // `zMin`/`zMax` only mean anything alongside `originArea`, but are still validated on
+        // their own here so a typo'd request fails fast instead of silently doing nothing.
+        for key in ["zMin", "zMax"] {
+            if let Some(v) = query.get(key)
+                && as_f32_finite(v).is_none()
+            {
+                return Some(format!("{key} must be a finite number"));
+            }
+        }
+        if let (Some(lo), Some(hi)) = (
+            query.get("zMin").and_then(as_f32_finite),
+            query.get("zMax").and_then(as_f32_finite),
+        ) && lo > hi
+        {
+            return Some("zMin must not be greater than zMax".to_string());
+        }
+        return None;
+    };
+    if query.get("origin").is_some() || query.get("originReach").is_some() {
+        return Some("origin/originReach and originArea are mutually exclusive".to_string());
+    }
+    if query
+        .get("scope")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.eq_ignore_ascii_case("spawns"))
+    {
+        return Some("scope \"spawns\" and originArea are mutually exclusive".to_string());
+    }
+    let Some(arr) = area.as_array() else {
+        return Some("originArea must be an array of [x,y] points".to_string());
+    };
+    if !(MIN_ORIGIN_AREA_VERTICES..=MAX_ORIGIN_AREA_VERTICES).contains(&arr.len()) {
+        return Some(format!(
+            "originArea must have between {MIN_ORIGIN_AREA_VERTICES} and {MAX_ORIGIN_AREA_VERTICES} vertices"
+        ));
+    }
+    let mut pts: Vec<[f32; 2]> = Vec::with_capacity(arr.len());
+    for v in arr {
+        let ok = v
+            .as_array()
+            .is_some_and(|p| p.len() == 2 && p.iter().all(|e| as_f32_finite(e).is_some()));
+        if !ok {
+            return Some("originArea vertices must be [x,y] with finite numbers".to_string());
+        }
+        let p = v.as_array().unwrap();
+        let (x, y) = (as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap());
+        if x < mesh_min[0] - MAP_BOUNDS_MARGIN
+            || x > mesh_max[0] + MAP_BOUNDS_MARGIN
+            || y < mesh_min[1] - MAP_BOUNDS_MARGIN
+            || y > mesh_max[1] + MAP_BOUNDS_MARGIN
+        {
+            return Some("originArea vertex is outside the map bounds".to_string());
+        }
+        pts.push([x, y]);
+    }
+    let (mut min_x, mut max_x) = (f32::INFINITY, f32::NEG_INFINITY);
+    let (mut min_y, mut max_y) = (f32::INFINITY, f32::NEG_INFINITY);
+    for p in &pts {
+        min_x = min_x.min(p[0]);
+        max_x = max_x.max(p[0]);
+        min_y = min_y.min(p[1]);
+        max_y = max_y.max(p[1]);
+    }
+    if max_x - min_x > MAX_ORIGIN_AREA_SPAN || max_y - min_y > MAX_ORIGIN_AREA_SPAN {
+        return Some(format!(
+            "originArea's bounding box cannot exceed {MAX_ORIGIN_AREA_SPAN} units per axis"
+        ));
+    }
+    // A signed (shoelace) area cancels out on a self-intersecting polygon with equal-area lobes
+    // (a bowtie) even though it plainly encloses real space under the even-odd rule the solver
+    // itself uses - test non-degeneracy directly instead: find the vertex farthest from the
+    // first one, then the largest triangle (p0, far, p_i) over every vertex. That triangle can
+    // only be near-zero if every vertex is (near-)collinear with p0/far, which is the actual
+    // degenerate case (duplicate points, a segment, a sliver).
+    let p0 = (pts[0][0] as f64, pts[0][1] as f64);
+    let mut far = p0;
+    let mut far_dist2 = 0.0f64;
+    for p in &pts {
+        let (px, py) = (p[0] as f64, p[1] as f64);
+        let d2 = (px - p0.0).powi(2) + (py - p0.1).powi(2);
+        if d2 > far_dist2 {
+            far_dist2 = d2;
+            far = (px, py);
+        }
+    }
+    if far_dist2 < 1e-6 {
+        return Some("originArea must enclose a non-zero area".to_string());
+    }
+    let (fx, fy) = (far.0 - p0.0, far.1 - p0.1);
+    let mut max_cross = 0.0f64;
+    for p in &pts {
+        let (px, py) = (p[0] as f64 - p0.0, p[1] as f64 - p0.1);
+        let cross = (fx * py - fy * px).abs();
+        if cross > max_cross {
+            max_cross = cross;
+        }
+    }
+    if max_cross / 2.0 < MIN_ORIGIN_AREA_AREA {
+        return Some("originArea must enclose a non-zero area".to_string());
+    }
+    for key in ["zMin", "zMax"] {
+        if let Some(v) = query.get(key)
+            && as_f32_finite(v).is_none()
+        {
+            return Some(format!("{key} must be a finite number"));
+        }
+    }
+    if let (Some(lo), Some(hi)) = (
+        query.get("zMin").and_then(as_f32_finite),
+        query.get("zMax").and_then(as_f32_finite),
+    ) && lo > hi
+    {
+        return Some("zMin must not be greater than zMax".to_string());
     }
     None
 }
@@ -483,6 +624,36 @@ pub fn query_cache_key(
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "all".to_string());
+    // `s6g_origin_area.md`: the polygon's own vertices (in order - a self-intersecting ring is a
+    // different region than its reordered self, per the even-odd rule) at fixed precision, plus
+    // its optional Z range; "none" when no `originArea` was given, same idiom as `origin` above.
+    let origin_area_key = query
+        .get("originArea")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|v| {
+                    let p = v.as_array().cloned().unwrap_or_default();
+                    format!(
+                        "{:.1},{:.1}",
+                        p.first().and_then(Value::as_f64).unwrap_or(0.0),
+                        p.get(1).and_then(Value::as_f64).unwrap_or(0.0)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(";")
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let zmin_key = query
+        .get("zMin")
+        .and_then(Value::as_f64)
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "none".to_string());
+    let zmax_key = query
+        .get("zMax")
+        .and_then(Value::as_f64)
+        .map(|v| format!("{v:.1}"))
+        .unwrap_or_else(|| "none".to_string());
     let constants_json = serde_json::to_string(constants).unwrap_or_default();
     // `LineupApi.cs:483` buckets `reach`/`tolerance` to whole units and `minStability` to two
     // decimals; we deliberately format `reach`/`tolerance` to one decimal and `minStability` to
@@ -490,7 +661,7 @@ pub fn query_cache_key(
     // live: `tolerance:80` and `tolerance:80.4`) collide on one cache file and answer from the
     // wrong query.
     let seed = format!(
-        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{attrs}|{stand_spots}",
+        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{attrs}|{stand_spots}",
         i32::from(fine)
     );
     let digest = Sha256::digest(seed.as_bytes());
@@ -608,6 +779,25 @@ fn build_solve_query(
             .collect::<Vec<_>>()
     });
     let broken_groups = broken_groups_from_query(query);
+    // `s6g_origin_area.md`: an alternative to `origin`/`originReach`, validated mutually
+    // exclusive with them already (`validate_origin_area`).
+    let origin_area = query
+        .get("originArea")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            let polygon: Vec<[f32; 2]> = arr
+                .iter()
+                .map(|v| {
+                    let p = v.as_array().expect("validated");
+                    [as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap()]
+                })
+                .collect();
+            OriginArea {
+                polygon,
+                z_min: query.get("zMin").and_then(as_f32_finite),
+                z_max: query.get("zMax").and_then(as_f32_finite),
+            }
+        });
 
     let q = SolveQuery {
         target,
@@ -615,6 +805,7 @@ fn build_solve_query(
         origin_click,
         origin_z,
         origin_reach,
+        origin_area,
         tolerance,
         min_stability,
         fine_scan,
@@ -1158,6 +1349,19 @@ mod tests {
                 .unwrap()
                 .contains("target z is outside the map bounds")
         );
+    }
+
+    /// A self-intersecting bowtie with equal-area lobes has zero *signed* (shoelace) area even
+    /// though it plainly encloses real space under the even-odd rule - the non-degeneracy check
+    /// must not reject it (a bare shoelace check used to).
+    #[test]
+    fn validate_origin_area_accepts_a_self_intersecting_bowtie_with_equal_lobes() {
+        let q = json!({
+            "originArea": [[-1300.0, -1100.0], [-1000.0, -800.0], [-1300.0, -800.0], [-1000.0, -1100.0]]
+        });
+        let mesh_min = [-2000.0, -2000.0, -2000.0];
+        let mesh_max = [2000.0, 2000.0, 2000.0];
+        assert_eq!(validate_origin_area(&q, mesh_min, mesh_max), None);
     }
 
     #[test]

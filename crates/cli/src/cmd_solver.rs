@@ -375,6 +375,7 @@ pub fn solve(
         origin_click,
         origin_z,
         origin_reach: reach,
+        origin_area: None,
         tolerance,
         min_stability: 0.4,
         fine_scan: fine,

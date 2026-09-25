@@ -21,15 +21,25 @@ export function selectionError(params) {
   return null;
 }
 
-// `target`: `{x,y,z}`. `origin`: `{x,y,reach}` (from a right-click) or `null`. `params`: the
-// params panel's current selections. Fields left at the server's own default are omitted, per
+// `target`: `{x,y,z}`. `origin`: `{x,y,reach}` (from a right-click) or `null`. `originArea`:
+// `{polygon:[[x,y],...], zMin, zMax}` (from the origin-area tool, `s6g_origin_area.md`) or
+// `null` - mutually exclusive with `origin` (the UI never sets both). `params`: the params
+// panel's current selections. Fields left at the server's own default are omitted, per
 // `s6f2_solve_ui.md` ("параметры, равные умолчанию, в запрос не класть").
-export function buildQuery(map, target, origin, params) {
+export function buildQuery(map, target, origin, originArea, params) {
   const body = { map, target: [target.x, target.y, target.z] };
   if (origin) {
     body.origin = [origin.x, origin.y];
     if (origin.reach != null && origin.reach !== 300) {
       body.originReach = origin.reach;
+    }
+  } else if (originArea) {
+    body.originArea = originArea.polygon;
+    if (originArea.zMin != null) {
+      body.zMin = originArea.zMin;
+    }
+    if (originArea.zMax != null) {
+      body.zMax = originArea.zMax;
     }
   } else if (params.scope === "spawns") {
     body.scope = "spawns";

@@ -13,6 +13,7 @@ import {
   fetchLevels,
   radarPngUrl,
   deleteJob,
+  hasUsableRender,
 } from "./api.js?v=1";
 import { renderSetup } from "./setup.js?v=1";
 import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
@@ -1338,9 +1339,9 @@ async function showMapScreen(map, opts = {}) {
     if (viewMode === mode) {
       return;
     }
-    if (mode === "3d" && !mapSummary.hasRender) {
+    if (mode === "3d" && !hasUsableRender(mapSummary)) {
       view3dStatus.className = "hint status-error";
-      view3dStatus.textContent = strings.view3d.noRender;
+      view3dStatus.textContent = mapSummary.hasRender ? strings.view3d.renderOutdated : strings.view3d.noRender;
       return;
     }
     viewMode = mode;

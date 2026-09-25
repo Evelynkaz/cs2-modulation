@@ -18,10 +18,10 @@ pub mod lightmaps;
 pub mod material;
 pub mod mesh;
 pub mod model;
+pub mod native_texture;
 pub mod probes;
 mod reader;
 pub mod source;
-pub mod texture;
 pub mod world;
 
 pub use attributes::{FloatAttribute, Normal};

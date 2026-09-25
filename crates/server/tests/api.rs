@@ -787,6 +787,102 @@ async fn render_asset_name_whitelist_rejects_everything_else() {
     }
 }
 
+// `s6f3a6_native_tex.md` change item 1: `render_tex/<sha12>.bin`, a strict `^[0-9a-f]{12}\.bin$`
+// whitelist in its own subdirectory (unlike every other `render*` asset, which lives flat in the
+// map cache dir).
+#[tokio::test]
+async fn render_tex_success_path_streams_bytes_with_etag_and_304() {
+    let cache_root = temp_dir("render_tex_ok");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    fs::create_dir_all(dir.join("render_tex")).unwrap();
+    fs::write(
+        dir.join("render_tex").join("0123456789ab.bin"),
+        b"fake bc7 blocks",
+    )
+    .unwrap();
+    let router = router_over(&cache_root);
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/data/maps/de_test/render_tex/0123456789ab.bin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+    let etag = resp
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"fake bc7 blocks");
+
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/data/maps/de_test/render_tex/0123456789ab.bin")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn render_tex_name_whitelist_rejects_everything_else() {
+    let cache_root = temp_dir("render_tex_whitelist");
+    let dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    fs::create_dir_all(dir.join("render_tex")).unwrap();
+    fs::write(
+        dir.join("render_tex").join("0123456789ab.bin"),
+        b"do not serve via a bad name",
+    )
+    .unwrap();
+    // A file directly in the map cache dir (not under render_tex/) that a hostile request might
+    // try to reach via `..`, plus the general shape of `is_render_tex_name`'s own rejections.
+    fs::write(dir.join("world.cgeo"), b"do not serve me either").unwrap();
+    let router = router_over(&cache_root);
+
+    for uri in [
+        // Wrong length (11 hex chars, not 12).
+        "/data/maps/de_test/render_tex/0123456789a.bin",
+        // Uppercase hex is not in `[0-9a-f]`.
+        "/data/maps/de_test/render_tex/0123456789AB.bin",
+        // Wrong extension.
+        "/data/maps/de_test/render_tex/0123456789ab.png",
+        // No extension at all.
+        "/data/maps/de_test/render_tex/0123456789ab",
+        // Path traversal out of the map cache dir.
+        "/data/maps/de_test/render_tex/..%2f..%2fworld.cgeo",
+        "/data/maps/de_test/render_tex/..%2fworld.cgeo",
+    ] {
+        let resp = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), StatusCode::OK, "{uri}");
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!bytes.starts_with(b"do not serve"), "{uri}");
+    }
+}
+
 #[tokio::test]
 async fn render_json_reports_missing_render_with_404() {
     let cache_root = temp_dir("render_missing");

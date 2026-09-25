@@ -69,6 +69,21 @@ export function renderGlbUrl(map) {
   return `/data/maps/${encodeURIComponent(map)}/render.glb`;
 }
 
+// `s6f3a6_native_tex.md` review fix item 11: `render.json`'s own `formatVersion` this viewer
+// requires - materials before it reference glTF's own (now-unpopulated) `baseColorTexture`/
+// `normalTexture` fields instead of `render.json`'s `textures[]`, so an older export would render
+// completely untextured rather than erroring. `/api/maps`' own `renderVersion` (`null` when there's
+// no render.glb at all, or render.json doesn't parse) is checked against this before ever treating
+// a map as "has a usable 3D export".
+export const MIN_RENDER_FORMAT_VERSION = 3;
+
+/** True only when `mapSummary` (an `/api/maps` entry) has a `render.glb` *and* its `render.json`
+ * is at least `MIN_RENDER_FORMAT_VERSION` - the single gate both `main.js` (the 2D/3D toggle) and
+ * `scene3d.js` (whether to even fetch render.json/render.glb) use. */
+export function hasUsableRender(mapSummary) {
+  return !!mapSummary?.hasRender && (mapSummary.renderVersion ?? 0) >= MIN_RENDER_FORMAT_VERSION;
+}
+
 export async function fetchRenderJson(map) {
   return getJson(`/data/maps/${encodeURIComponent(map)}/render.json`);
 }

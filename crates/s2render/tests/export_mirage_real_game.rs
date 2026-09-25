@@ -120,10 +120,11 @@ fn de_mirage_export_matches_reference_numbers() {
         .values()
         .filter(|v| v.get("layers").is_some())
         .count();
-    let tint_mask_count = extras
-        .values()
-        .filter(|v| v.get("tintMask").is_some())
-        .count();
+    // `extras.tint` (not `extras.tintMaskTexture`, `s6f3a6_native_tex.md`'s schema change) is set
+    // exactly when `F_TINT_MASK == 1` (`material::base_color_factor`'s `resolved.tint_mask`
+    // branch) -- the flag count, independent of whether that material also has a `g_tTintMask`
+    // texture.
+    let tint_mask_count = extras.values().filter(|v| v.get("tint").is_some()).count();
     let mod2x_count = extras
         .values()
         .filter(|v| v.get("blendMode").and_then(|b| b.as_str()) == Some("mod2x"))

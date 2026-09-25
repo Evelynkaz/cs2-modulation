@@ -155,6 +155,7 @@ export const strings = {
     loading: (percent) => (percent != null ? `Загрузка модели: ${percent}%` : "Загрузка модели..."),
     loadError: "Не удалось загрузить 3D-модель карты.",
     noRender: "Для этой карты ещё не готова текстурованная 3D-модель (render.glb).",
+    renderOutdated: "3D-модель этой карты устарела и требует пересборки (cs2mod export-glb --force).",
     modeFly: "Полёт",
     modeOrbit: "Облёт",
     collisionsOn: "Показать коллизии",

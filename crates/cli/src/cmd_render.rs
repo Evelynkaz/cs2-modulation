@@ -20,7 +20,6 @@ use crate::cmd_extract::{install_for, resolve_cache_root};
 pub fn export_glb(
     map: &str,
     max_texture: u32,
-    jpeg_quality: u8,
     lightmap_quality_high: bool,
     force: bool,
     game: Option<&Path>,
@@ -57,7 +56,6 @@ pub fn export_glb(
     let start = Instant::now();
     let options = ExportOptions {
         max_texture,
-        jpeg_quality,
         lightmap_quality_high,
     };
     let result =
@@ -105,8 +103,14 @@ pub fn export_glb(
 }
 
 /// Writes `bytes` to `path` via a temp file + rename, matching this codebase's other cache
-/// writers (`extract::cache::save_extraction`, `extract::mapdata::save_stand_spots`).
+/// writers (`extract::cache::save_extraction`, `extract::mapdata::save_stand_spots`). Creates
+/// `path`'s parent directory first (`s6f3a6_native_tex.md`'s `render_tex/<sha12>.bin` is the first
+/// extra file to live in a subdirectory of the map cache dir rather than directly in it).
 fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     let mut tmp_name = path.as_os_str().to_os_string();
     tmp_name.push(format!(".tmp-{}", std::process::id()));
     let tmp_path = Path::new(&tmp_name);

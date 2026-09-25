@@ -117,6 +117,9 @@ export function createPostPass(toneMapParams, exposure, lut, lutDim) {
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
+  // Review fix item 10: see the identical fix/reasoning in `lightingSky.js`'s own full-screen
+  // triangle.
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 5);
 
   const fixedExposure = (exposure.min + exposure.max) / 2;
   const material = new THREE.RawShaderMaterial({

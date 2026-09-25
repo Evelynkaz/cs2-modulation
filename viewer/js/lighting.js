@@ -24,6 +24,7 @@ import { buildWorldMaterial } from "./lightingShader.js?v=1";
 import { createSkyPass, inverseRotation } from "./lightingSky.js?v=1";
 import { createHdrTarget, createPostPass } from "./lightingPost.js?v=1";
 import { renderAssetUrl } from "./api.js?v=1";
+import { decodeHemiOctConstant, srgbToLinear } from "./materialTextures.js?v=1";
 
 function findLightmap(lighting, needle) {
   return lighting.lightmaps.find((f) => f.file.includes(needle));
@@ -166,26 +167,140 @@ function alphaModeOf(material) {
   return "OPAQUE";
 }
 
-async function buildRecipe(gltf, mesh, lightingType, renderJson, shared) {
+// One material texture slot's resolved source (`s6f3a6_native_tex.md` change item 7's schema):
+// either `extras.<key>Texture` (an index into render.json's own `textures[]`, loaded through
+// `texLoader`) or `extras.<key>Constant` (a 4x4 source folded to one RGBA8 value at export time,
+// `native_texture::Loaded::Constant`) plus its codec/colorSpace siblings. `neither` when the
+// material has no data for this slot at all.
+function resolveSlot(extras, key) {
+  const textureIndex = extras[`${key}Texture`];
+  if (textureIndex != null) return { textureIndex, constant: null };
+  const raw = extras[`${key}Constant`];
+  if (raw) {
+    return {
+      textureIndex: null,
+      constant: { raw, codec: extras[`${key}ConstantCodec`], colorSpace: extras[`${key}ConstantColorSpace`] },
+    };
+  }
+  return { textureIndex: null, constant: null };
+}
+
+async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
   const material = mesh.material;
   const extras = material.userData ?? {};
-  const getTex = (idx) => (idx != null ? gltf.parser.getDependency("texture", idx) : null);
+  // A single texture's fetch/decode failure (bad network, unsupported format) degrades just that
+  // slot to "missing" instead of failing the whole material - and everything downstream of it in
+  // the same map - the way an unhandled rejection through `buildGameMaterials`'s `await` would.
+  const getTex = (index) =>
+    index != null && texLoader
+      ? texLoader.get(index).catch((e) => {
+          console.error(`[cs2mod] texture load failed (render.json textures[${index}]):`, e);
+          return null;
+        })
+      : null;
 
   const tintIsSrgb = /^srgb/i.test(renderJson?.materialExtras?.tintColorSpace ?? "");
-  const [aoMap, roughnessMap, metalnessMap, tintMaskMap, layer2Map, blendModMap] = await Promise.all([
-    getTex(extras.aoTexture),
-    getTex(extras.roughnessTexture),
-    getTex(extras.metalnessTexture),
-    getTex(extras.tintMask),
-    getTex(extras.layers?.layer2ColorTexture),
-    getTex(extras.layers?.blendModulationTexture),
+
+  // Base color: a real texture, or (rare) a 4x4-constant folded straight into the factor - the
+  // constant's raw bytes are in the same pre-decode representation a real sample would be
+  // (`native_texture::Loaded`'s own doc comment), so an sRGB-role constant needs the same
+  // srgb->linear step the GPU would otherwise do for a real sRGB texture.
+  let baseColorFactor = [material.color.r, material.color.g, material.color.b, material.opacity];
+  const baseColor = resolveSlot(extras, "baseColor");
+  if (baseColor.constant) {
+    const [r, g, b, a] = baseColor.constant.raw;
+    const isSrgb = baseColor.constant.colorSpace === "srgb";
+    const lin = isSrgb
+      ? [srgbToLinear(r / 255), srgbToLinear(g / 255), srgbToLinear(b / 255)]
+      : [r / 255, g / 255, b / 255];
+    baseColorFactor = [baseColorFactor[0] * lin[0], baseColorFactor[1] * lin[1], baseColorFactor[2] * lin[2], baseColorFactor[3] * (a / 255)];
+  }
+
+  // Tint mask: a real texture keeps its own per-pixel HAS_TINT path; a constant mask amount is
+  // instead folded analytically into baseColorFactor (mix(albedo, albedo*tint, k) == albedo *
+  // mix(1, tint, k), and k doesn't vary per-fragment when it's a constant) - no shader work needed.
+  const tintMask = resolveSlot(extras, "tintMask");
+  let tintMaskMap = null;
+  if (tintMask.textureIndex != null && extras.tint) {
+    tintMaskMap = await getTex(tintMask.textureIndex);
+  } else if (tintMask.constant && extras.tint) {
+    const k = tintMask.constant.raw[0] / 255;
+    const tint = extras.tint; // already linear (materialExtras.tintColorSpace / material.rs).
+    baseColorFactor[0] *= 1 + k * (tint[0] - 1);
+    baseColorFactor[1] *= 1 + k * (tint[1] - 1);
+    baseColorFactor[2] *= 1 + k * (tint[2] - 1);
+  }
+
+  const albedoMapPromise = getTex(baseColor.textureIndex);
+  const normal = resolveSlot(extras, "normal");
+  const normalMapPromise = getTex(normal.textureIndex);
+  const ao = resolveSlot(extras, "ao");
+  const aoMapPromise = getTex(ao.textureIndex);
+  const metalness = resolveSlot(extras, "metalness");
+  const metalnessMapPromise = getTex(metalness.textureIndex);
+  const selfIllum = resolveSlot(extras, "selfIllum");
+  const selfIllumMapPromise = getTex(selfIllum.textureIndex);
+
+  const layers = extras.layers ?? null;
+  const layer2Color = layers ? resolveSlot(layers, "layer2Color") : { textureIndex: null, constant: null };
+  const blendMod = layers ? resolveSlot(layers, "blendModulation") : { textureIndex: null, constant: null };
+  const layer2MapPromise = getTex(layer2Color.textureIndex);
+  const blendModMapPromise = getTex(blendMod.textureIndex);
+
+  const [albedoMap, normalMap, aoMap, metalnessMap, selfIllumMap, layer2Map, blendModMap] = await Promise.all([
+    albedoMapPromise,
+    normalMapPromise,
+    aoMapPromise,
+    metalnessMapPromise,
+    selfIllumMapPromise,
+    layer2MapPromise,
+    blendModMapPromise,
   ]);
-  if (aoMap) aoMap.colorSpace = THREE.NoColorSpace;
-  if (roughnessMap) roughnessMap.colorSpace = THREE.NoColorSpace;
-  if (metalnessMap) metalnessMap.colorSpace = THREE.NoColorSpace;
-  if (tintMaskMap) tintMaskMap.colorSpace = THREE.NoColorSpace;
-  if (layer2Map) layer2Map.colorSpace = THREE.SRGBColorSpace;
-  if (blendModMap) blendModMap.colorSpace = THREE.NoColorSpace;
+
+  // A flat (materials/default/) normal's constant: only its baked-in roughness matters (change
+  // item 3) - no perturbation, so no texture/uniform for the direction at all. review fix item 8:
+  // the packed-roughness-in-blue trick is a HemiOct-only convention (`s2tex::transform::
+  // decode_hemi_oct`) - a dxt5nm/reconstructZ constant (dev/reflectivity_* on Train/Nuke/Ancient,
+  // effects/black on Anubis) has no such channel, so it must fall back to the default 1.0 instead
+  // of running the HemiOct math on bytes it doesn't apply to (previously landed near roughness 0,
+  // i.e. a mirror).
+  let roughnessFactor = 1;
+  if (normalMap) {
+    // real per-texel decode happens in the shader; the factor is only the fallback below.
+  } else if (normal.constant && normal.constant.codec === "hemiOct") {
+    roughnessFactor = decodeHemiOctConstant(normal.constant.raw).roughness;
+  }
+
+  let aoFactor = 1;
+  if (!aoMap && ao.constant) aoFactor = ao.constant.raw[0] / 255;
+
+  let metalnessFactor = extras.metalnessValue ?? 0;
+  if (!metalnessMap && metalness.constant) metalnessFactor = metalness.constant.raw[1] / 255;
+
+  let layer2ConstantColor = null;
+  if (layers && !layer2Map && layer2Color.constant) {
+    const [r, g, b] = layer2Color.constant.raw;
+    const isSrgb = layer2Color.constant.colorSpace === "srgb";
+    layer2ConstantColor = new THREE.Vector3(
+      ...(isSrgb ? [srgbToLinear(r / 255), srgbToLinear(g / 255), srgbToLinear(b / 255)] : [r / 255, g / 255, b / 255]),
+    );
+  }
+  let blendModConstant = null;
+  if (layers && !blendModMap && blendMod.constant) {
+    const [r, g, b] = blendMod.constant.raw;
+    blendModConstant = new THREE.Vector3(r / 255, g / 255, b / 255);
+  }
+  const hasLayers = !!layers && (!!layer2Map || !!layer2ConstantColor);
+
+  // review fix item 1: `mask.r` only (`complex.frag.slang:546`'s own `.r`), sRGB-linearised the
+  // same way a real texture sample would be (GPU-native decode, or the manual fallback the shader
+  // runs when `selfIllumManualSrgb`).
+  let selfIllumConstantMask = null;
+  if (selfIllum.constant && !selfIllumMap) {
+    const r = selfIllum.constant.raw[0] / 255;
+    selfIllumConstantMask = selfIllum.constant.colorSpace === "srgb" ? srgbToLinear(r) : r;
+  }
+  const hasSelfIllum = !!selfIllumMap || selfIllumConstantMask != null;
 
   return {
     lightingType,
@@ -193,26 +308,43 @@ async function buildRecipe(gltf, mesh, lightingType, renderJson, shared) {
     alphaCutoff: material.alphaTest || 0.5,
     doubleSided: material.side === THREE.DoubleSide,
     mod2x: extras.blendMode === "mod2x",
-    map: material.map,
-    baseColorFactor: [material.color.r, material.color.g, material.color.b, material.opacity],
-    normalMap: material.normalMap ?? null,
-    normalScale: material.normalScale ?? null,
+    albedoMap,
+    albedoManualSrgb: albedoMap?.userData?.manualSrgb === true,
+    baseColorFactor,
+    normalMap,
+    // review fix item 8: which per-texel decode the shader must run on a *real* normal map -
+    // HemiOct is the common case, but a handful of dev/reflectivity_*/effects textures use
+    // dxt5nm or a plain Z-reconstruction instead (`native_texture.rs`'s `codec`, read back off
+    // the loaded texture's own `userData`, set by `materialTextures.js`).
+    normalCodec: normalMap?.userData?.codec ?? "hemiOct",
     aoMap,
     aoChannel: extras.aoChannel ?? "r",
-    roughnessMap,
-    roughnessChannel: extras.roughnessChannel ?? "r",
-    roughnessFactor: extras.roughnessTexture != null ? 1 : (material.roughness ?? 1),
+    aoFactor,
+    roughnessFactor,
     metalnessMap,
     metalnessChannel: extras.metalnessChannel ?? "g",
-    metalnessFactor: extras.metalnessValue ?? material.metalness ?? 0,
+    metalnessFactor,
     tintColor: tintMaskMap
       ? tintIsSrgb
         ? new THREE.Color().setRGB(extras.tint[0], extras.tint[1], extras.tint[2], THREE.SRGBColorSpace)
         : new THREE.Color(extras.tint[0], extras.tint[1], extras.tint[2])
       : null,
+    baseColorAlphaMeaning: extras.baseColorAlphaMeaning,
     tintMaskMap,
+    hasLayers,
     layer2Map,
+    layer2ManualSrgb: layer2Map?.userData?.manualSrgb === true,
+    layer2ConstantColor,
     blendModMap,
+    blendModConstant,
+    hasSelfIllum,
+    selfIllumMap,
+    selfIllumManualSrgb: selfIllumMap?.userData?.manualSrgb === true,
+    selfIllumConstantMask,
+    selfIllumScale: extras.selfIllumScale ?? 1,
+    selfIllumBrightness: extras.selfIllumBrightness ?? 0,
+    selfIllumTint: extras.selfIllumTint ? new THREE.Vector3(...extras.selfIllumTint) : new THREE.Vector3(1, 1, 1),
+    selfIllumAlbedoFactor: extras.selfIllumAlbedoFactor ?? 0,
     fogEnabled: extras.fogEnabled === true && renderJson.fog != null,
     skyIsRgbm: shared._skyIsRgbm,
     irradianceIsRgbm: shared._irradianceIsRgbm,
@@ -242,7 +374,7 @@ function applyOverlayOrder(root) {
  * `mesh.userData.gameMaterial` (`mesh.userData.simpleMaterial` is filled in by `scene3d.js` before
  * calling this, from whatever `MeshStandardMaterial` F3b-1's own pass already built).
  */
-async function buildGameMaterials(gltf, renderJson, shared, materialPool) {
+async function buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader) {
   const cache = new Map(); // `${materialIndex}:${lightingType}` -> THREE.ShaderMaterial
   const meshes = [];
   gltf.scene.traverse((o) => {
@@ -255,7 +387,7 @@ async function buildGameMaterials(gltf, renderJson, shared, materialPool) {
     const key = `${materialIndex}:${lightingType}`;
     let material = cache.get(key);
     if (!material) {
-      const recipe = await buildRecipe(gltf, mesh, lightingType, renderJson, shared);
+      const recipe = await buildRecipe(mesh, lightingType, renderJson, shared, texLoader);
       const built = buildWorldMaterial(recipe);
       material = built.material;
       materialPool.set(built.cacheKey, true);
@@ -271,7 +403,7 @@ export function hasGameLightingData(renderJson) {
   return !!(renderJson?.lighting?.lightmaps && renderJson?.sky?.file != null && renderJson?.postProcessing?.vpost?.hasTonemapParams);
 }
 
-export async function createLightingPipeline(renderer, map, renderJson) {
+export async function createLightingPipeline(renderer, map, renderJson, texLoader) {
   const res = await loadLightingResources(renderer, map, renderJson);
   const shared = buildSharedUniforms(renderJson, res);
   shared._irradianceIsRgbm = res.irradianceIsRgbm;
@@ -296,13 +428,24 @@ export async function createLightingPipeline(renderer, map, renderJson) {
   const materialPool = new Map(); // distinct customProgramCacheKey values actually handed out.
   const gameMaterials = new Map(); // all THREE.ShaderMaterial instances, for dispose().
 
+  // Native material textures (`s6f3a6_native_tex.md` change item 3): `texLoader` is shared with
+  // "simple" mode's own material patches (`scene3d.js`'s `applyMaterialExtras`, built once per
+  // view and passed in here) - a texture referenced by several materials, or by both lighting
+  // modes, is fetched/decoded/uploaded once, not once per mode. Owned by the caller (`scene3d.js`),
+  // not disposed by this module's own `dispose()` below.
+  if (texLoader?.missingExtensionsMessage) {
+    console.warn(`[cs2mod] ${texLoader.missingExtensionsMessage}`);
+  }
+
   return {
     support: res.support,
     gpuBytes: res.gpuBytes,
+    materialTextureSupport: texLoader?.support,
+    missingExtensionsMessage: texLoader?.missingExtensionsMessage,
 
     async applyToGltf(gltf) {
       const before = materialPool.size;
-      await buildGameMaterials(gltf, renderJson, shared, materialPool);
+      await buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader);
       gltf.scene.traverse((o) => {
         if (o.isMesh && o.userData.gameMaterial) gameMaterials.set(o.userData.gameMaterial.uuid, o.userData.gameMaterial);
       });
@@ -311,6 +454,14 @@ export async function createLightingPipeline(renderer, map, renderJson) {
 
     programCount() {
       return materialPool.size;
+    },
+
+    materialTextureBytes() {
+      return texLoader?.bytesLoaded() ?? 0;
+    },
+
+    materialTextureCount() {
+      return texLoader?.textureCount() ?? 0;
     },
 
     resize(width, height) {
@@ -359,6 +510,8 @@ export async function createLightingPipeline(renderer, map, renderJson) {
       hdrTarget.dispose();
       for (const m of gameMaterials.values()) m.dispose();
       gameMaterials.clear();
+      // `texLoader` is owned by the caller (`scene3d.js`'s `materialTexLoaderReady`, shared with
+      // "simple" mode) - not disposed here.
     },
   };
 }

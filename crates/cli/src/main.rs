@@ -301,9 +301,6 @@ enum Command {
         /// Texture mip budget: no side longer than this many pixels.
         #[arg(long, default_value_t = 1024)]
         max_texture: u32,
-        /// JPEG quality (1-100) for base color and normal textures.
-        #[arg(long, default_value_t = 90)]
-        jpeg_quality: u8,
         /// `high` writes irradiance at full resolution (mip 0, 8192²) instead of the mip-1
         /// (4096²) default.
         #[arg(long, default_value = "default")]
@@ -626,7 +623,6 @@ fn run() -> anyhow::Result<u8> {
         Command::ExportGlb {
             map,
             max_texture,
-            jpeg_quality,
             lightmap_quality,
             force,
             game,
@@ -634,7 +630,6 @@ fn run() -> anyhow::Result<u8> {
         } => cmd_render::export_glb(
             &map,
             max_texture,
-            jpeg_quality,
             lightmap_quality.eq_ignore_ascii_case("high"),
             force,
             game.as_deref(),

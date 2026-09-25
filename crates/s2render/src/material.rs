@@ -248,6 +248,41 @@ pub struct ResolvedMaterial {
     pub no_specular_at_full_roughness: bool,
     /// `g_bFogEnabled` (`common/fog.slang:12,95`), default true.
     pub fog_enabled: bool,
+    /// `g_tSelfIllumMask` + its formula parameters, only when the shader actually evaluates
+    /// self-illum at all (`complex.frag.slang:191`'s `selfillum` define; review fix item 1 --
+    /// previously exported unconditionally, adding the raw mask colour to every
+    /// `g_tSelfIllumMask` material regardless of `F_SELF_ILLUM`/scale/tint).
+    pub self_illum: Option<SelfIllum>,
+    /// `csgo_environment_blend`'s second layer (`g_tColor2`/`g_tNormal2`) -- `s6f3a6_native_tex.md`
+    /// change item 5's fix: these were never resolved before, so every blend material rendered
+    /// with only its first layer and no normal map.
+    pub env_layer2: Option<EnvLayer2>,
+    /// What the base color texture's alpha channel means for this shader
+    /// (`REPORT.md`'s "Colour alpha meaning per shader"): alpha-test/translucent always read it as
+    /// opacity; otherwise `csgo_environment`/`csgo_environment_blend` read it as AO
+    /// (`csgo_environment.frag.slang:41,83`); otherwise `F_METALNESS_TEXTURE` reads it as
+    /// metalness (`complex.frag.slang:618`); everything else ignores it.
+    pub base_color_alpha_meaning: &'static str,
+}
+
+/// `csgo_environment_blend`'s second layer: `g_tColor2` (sRGB, same "color" role as the primary
+/// base color) and `g_tNormal2` (linear, HemiOct, same as any other normal map).
+#[derive(Debug, Clone)]
+pub struct EnvLayer2 {
+    pub color2: Option<String>,
+    pub normal2: Option<String>,
+}
+
+/// `complex.frag.slang:227-230 GetStandardSelfIllumination`: `exp2(brightness) * scale * tint *
+/// mask.r * mix(1, albedo, albedoFactor)`. `tint` is sRGB->linear converted here (like
+/// `g_vColorTint`) since the game reads it `SrgbRead(true)`.
+#[derive(Debug, Clone)]
+pub struct SelfIllum {
+    pub texture: String,
+    pub scale: f32,
+    pub brightness: f32,
+    pub tint: [f32; 3],
+    pub albedo_factor: f32,
 }
 
 /// Where a material's metalness value comes from (§7: "g_tMetalness или скаляр").
@@ -263,7 +298,10 @@ fn pick_base_color_texture(mat: &RawMaterial) -> (Option<String>, bool) {
     if mat.shader == "csgo_black_unlit" {
         return (None, true);
     }
-    let key = if mat.shader == "csgo_environment" {
+    let key = if matches!(
+        mat.shader.as_str(),
+        "csgo_environment" | "csgo_environment_blend"
+    ) {
         "g_tColor1"
     } else {
         "g_tColor"
@@ -277,23 +315,19 @@ fn pick_base_color_texture(mat: &RawMaterial) -> (Option<String>, bool) {
     (None, false)
 }
 
-/// Textures under `materials/default/` are the compiler's "flat normal" placeholder -- dropping
-/// them is visually identical and avoids exporting hundreds of copies of the same image (§4).
-fn is_default_normal(path: &str) -> bool {
-    path.to_ascii_lowercase().starts_with("materials/default/")
-}
-
+/// A texture under `materials/default/` (the compiler's "flat normal" placeholder) is no longer
+/// dropped here (`s6f3a6_native_tex.md` change item 3): it's a genuine 4x4 single-mip texture with
+/// a meaningful roughness value baked into it (0.96 or 0.50, `REPORT.md`'s "Normals and roughness"),
+/// which `native_texture::TextureCatalog::load`'s constant-texture path now resolves on its own --
+/// the caller just gets `Loaded::Constant` back instead of a texture index, no special-casing by
+/// path needed here.
 fn pick_normal_texture(mat: &RawMaterial) -> Option<String> {
     let key = match mat.shader.as_str() {
         "csgo_lightmappedgeneric" => "g_tLayer1NormalRoughness",
-        "csgo_environment" => "g_tNormal1",
+        "csgo_environment" | "csgo_environment_blend" => "g_tNormal1",
         _ => "g_tNormal",
     };
-    let t = mat.texture(key)?;
-    if is_default_normal(t) {
-        return None;
-    }
-    Some(t.to_string())
+    mat.texture(key).map(str::to_string)
 }
 
 /// `csgo_glass`/`csgo_effects` are always translucent regardless of `F_TRANSLUCENT`
@@ -395,6 +429,66 @@ fn metalness(mat: &RawMaterial) -> MetalnessSource {
     }
 }
 
+/// `csgo_environment_blend`'s second layer (`s6f3a6_native_tex.md` change item 5): `None` when
+/// neither texture is set, so a plain (non-blend) `csgo_environment` material never gets an empty
+/// `extras.envLayer2`.
+fn env_layer2(mat: &RawMaterial) -> Option<EnvLayer2> {
+    if mat.shader != "csgo_environment_blend" {
+        return None;
+    }
+    let color2 = mat.texture("g_tColor2").map(str::to_string);
+    let normal2 = mat.texture("g_tNormal2").map(str::to_string);
+    if color2.is_none() && normal2.is_none() {
+        return None;
+    }
+    Some(EnvLayer2 { color2, normal2 })
+}
+
+/// `REPORT.md`'s "Colour alpha meaning per shader": alpha-test/translucent always win (the alpha
+/// channel is opacity whenever the material actually reads it that way), otherwise
+/// `csgo_environment`/`csgo_environment_blend` read it as AO (`csgo_environment.frag.slang:41,83`),
+/// otherwise `F_METALNESS_TEXTURE` reads it as metalness (`complex.frag.slang:618`), otherwise it's
+/// unused.
+fn base_color_alpha_meaning(mat: &RawMaterial, alpha_mode: AlphaMode) -> &'static str {
+    if alpha_mode != AlphaMode::Opaque {
+        return "opacity";
+    }
+    if matches!(
+        mat.shader.as_str(),
+        "csgo_environment" | "csgo_environment_blend"
+    ) {
+        return "ao";
+    }
+    if mat.int("F_METALNESS_TEXTURE") == 1 {
+        return "metalness";
+    }
+    "none"
+}
+
+/// `complex.frag.slang:191`'s `selfillum` define, restricted to the shaders this crate ever sees:
+/// `F_SELF_ILLUM == 1` on the vertexlit/complex family, or unconditionally on `csgo_unlitgeneric`.
+/// `None` when the shader wouldn't evaluate self-illum at all, even if `g_tSelfIllumMask` happens
+/// to be set (review fix item 1 -- previously this crate added the raw mask colour to every
+/// material carrying that texture, regardless of the flag).
+fn self_illum(mat: &RawMaterial) -> Option<SelfIllum> {
+    let applies = mat.shader == "csgo_unlitgeneric" || mat.int("F_SELF_ILLUM") == 1;
+    if !applies {
+        return None;
+    }
+    let texture = mat.texture("g_tSelfIllumMask")?.to_string();
+    let tint = mat
+        .vector("g_vSelfIllumTint")
+        .map(|v| srgb_to_linear([v[0], v[1], v[2]]))
+        .unwrap_or([1.0, 1.0, 1.0]);
+    Some(SelfIllum {
+        texture,
+        scale: mat.float("g_flSelfIllumScale").unwrap_or(1.0),
+        brightness: mat.float("g_flSelfIllumBrightness").unwrap_or(0.0),
+        tint,
+        albedo_factor: mat.float("g_flSelfIllumAlbedoFactor").unwrap_or(0.0),
+    })
+}
+
 /// Resolves a decoded material's fixed (tint-independent) rendering rules.
 pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
     let (base_color_texture, constant_black) = pick_base_color_texture(mat);
@@ -430,6 +524,9 @@ pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
         metalness: metalness(mat),
         no_specular_at_full_roughness: mat.int("F_NO_SPECULAR_AT_FULL_ROUGHNESS") == 1,
         fog_enabled: mat.int_params.get("g_bFogEnabled").copied().unwrap_or(1) != 0,
+        self_illum: self_illum(mat),
+        env_layer2: env_layer2(mat),
+        base_color_alpha_meaning: base_color_alpha_meaning(mat, alpha_mode),
     }
 }
 
@@ -650,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn normal_texture_by_shader_and_default_is_skipped() {
+    fn normal_texture_by_shader_and_environment_blend_uses_g_t_normal1() {
         let mut lm = base_material("csgo_lightmappedgeneric");
         lm.texture_params
             .insert("g_tLayer1NormalRoughness".into(), "materials/n.vtex".into());
@@ -667,12 +764,27 @@ mod tests {
             Some("materials/n1.vtex")
         );
 
+        let mut env_blend = base_material("csgo_environment_blend");
+        env_blend
+            .texture_params
+            .insert("g_tNormal1".into(), "materials/n1blend.vtex".into());
+        assert_eq!(
+            resolve(&env_blend).normal_texture.as_deref(),
+            Some("materials/n1blend.vtex")
+        );
+
+        // `s6f3a6_native_tex.md` change item 3's fix: a `materials/default/` normal is no longer
+        // dropped by path -- it's a real (4x4-constant) texture with meaningful roughness baked
+        // in, resolved by `native_texture::TextureCatalog::load` instead.
         let mut default_n = base_material("csgo_vertexlitgeneric");
         default_n.texture_params.insert(
             "g_tNormal".into(),
             "materials/default/default_normal.vtex".into(),
         );
-        assert!(resolve(&default_n).normal_texture.is_none());
+        assert_eq!(
+            resolve(&default_n).normal_texture.as_deref(),
+            Some("materials/default/default_normal.vtex")
+        );
     }
 
     #[test]
@@ -697,6 +809,111 @@ mod tests {
         let mut wrong_shader = base_material("csgo_vertexlitgeneric");
         wrong_shader.int_params.insert("F_LAYERS".into(), 1);
         assert!(resolve(&wrong_shader).layers.is_none());
+    }
+
+    /// `s6f3a6_native_tex.md` change item 5's fix: `csgo_environment_blend`'s second layer is now
+    /// resolved (previously dropped entirely).
+    #[test]
+    fn env_layer2_requires_the_blend_shader_and_at_least_one_texture() {
+        let mut blend = base_material("csgo_environment_blend");
+        blend
+            .texture_params
+            .insert("g_tColor2".into(), "materials/c2.vtex".into());
+        blend
+            .texture_params
+            .insert("g_tNormal2".into(), "materials/n2.vtex".into());
+        let r = resolve(&blend).env_layer2.expect("env layer2");
+        assert_eq!(r.color2.as_deref(), Some("materials/c2.vtex"));
+        assert_eq!(r.normal2.as_deref(), Some("materials/n2.vtex"));
+
+        // Plain (non-blend) csgo_environment: never gets env_layer2, even with the same params.
+        let mut plain = base_material("csgo_environment");
+        plain
+            .texture_params
+            .insert("g_tColor2".into(), "materials/c2.vtex".into());
+        assert!(resolve(&plain).env_layer2.is_none());
+
+        // csgo_environment_blend with neither texture set: None, not Some(empty).
+        let empty = base_material("csgo_environment_blend");
+        assert!(resolve(&empty).env_layer2.is_none());
+    }
+
+    #[test]
+    fn base_color_alpha_meaning_by_shader_and_alpha_mode() {
+        let mut translucent = base_material("csgo_vertexlitgeneric");
+        translucent.int_params.insert("F_TRANSLUCENT".into(), 1);
+        assert_eq!(resolve(&translucent).base_color_alpha_meaning, "opacity");
+
+        let mut alpha_test = base_material("csgo_vertexlitgeneric");
+        alpha_test.int_params.insert("F_ALPHA_TEST".into(), 1);
+        assert_eq!(resolve(&alpha_test).base_color_alpha_meaning, "opacity");
+
+        assert_eq!(
+            resolve(&base_material("csgo_environment")).base_color_alpha_meaning,
+            "ao"
+        );
+        assert_eq!(
+            resolve(&base_material("csgo_environment_blend")).base_color_alpha_meaning,
+            "ao"
+        );
+
+        let mut metalness = base_material("csgo_vertexlitgeneric");
+        metalness.int_params.insert("F_METALNESS_TEXTURE".into(), 1);
+        assert_eq!(resolve(&metalness).base_color_alpha_meaning, "metalness");
+
+        assert_eq!(
+            resolve(&base_material("csgo_vertexlitgeneric")).base_color_alpha_meaning,
+            "none"
+        );
+    }
+
+    /// Review fix item 1: `g_tSelfIllumMask` alone isn't enough -- the shader only evaluates
+    /// self-illum under `complex.frag.slang:191`'s `selfillum` define (`F_SELF_ILLUM == 1`, or
+    /// unconditionally on `csgo_unlitgeneric`); a material with the texture but neither condition
+    /// must resolve to `None`, not add the raw mask colour on top of every lit result.
+    #[test]
+    fn self_illum_requires_the_flag_and_reads_its_formula_params() {
+        let mut off = base_material("csgo_vertexlitgeneric");
+        off.texture_params
+            .insert("g_tSelfIllumMask".into(), "materials/glow.vtex".into());
+        assert!(resolve(&off).self_illum.is_none(), "F_SELF_ILLUM unset");
+
+        let mut on = base_material("csgo_vertexlitgeneric");
+        on.int_params.insert("F_SELF_ILLUM".into(), 1);
+        on.texture_params
+            .insert("g_tSelfIllumMask".into(), "materials/glow.vtex".into());
+        on.float_params.insert("g_flSelfIllumScale".into(), 2.0);
+        on.float_params
+            .insert("g_flSelfIllumBrightness".into(), 1.0);
+        on.float_params
+            .insert("g_flSelfIllumAlbedoFactor".into(), 0.5);
+        on.vector_params
+            .insert("g_vSelfIllumTint".into(), [0.5, 0.5, 0.5, 1.0]);
+        let si = resolve(&on).self_illum.expect("F_SELF_ILLUM == 1");
+        assert_eq!(si.texture, "materials/glow.vtex");
+        assert_eq!(si.scale, 2.0);
+        assert_eq!(si.brightness, 1.0);
+        assert_eq!(si.albedo_factor, 0.5);
+        let expected_tint = srgb_to_linear([0.5, 0.5, 0.5]);
+        for (got, want) in si.tint.iter().zip(expected_tint) {
+            assert!((got - want).abs() < 1e-6, "{:?}", si.tint);
+        }
+
+        // csgo_unlitgeneric: self-illum applies even without F_SELF_ILLUM.
+        let mut unlit_glow = base_material("csgo_unlitgeneric");
+        unlit_glow
+            .texture_params
+            .insert("g_tSelfIllumMask".into(), "materials/glow.vtex".into());
+        let si2 = resolve(&unlit_glow).self_illum.expect("csgo_unlitgeneric");
+        assert_eq!(si2.scale, 1.0, "default scale");
+        assert_eq!(si2.brightness, 0.0, "default brightness");
+        assert_eq!(si2.albedo_factor, 0.0, "default albedo factor");
+        assert_eq!(si2.tint, [1.0, 1.0, 1.0], "default tint");
+
+        // Flag set but no texture at all: still None (nothing to sample).
+        let mut no_tex = base_material("csgo_vertexlitgeneric");
+        no_tex.int_params.insert("F_SELF_ILLUM".into(), 1);
+        assert!(resolve(&no_tex).self_illum.is_none());
     }
 
     #[test]

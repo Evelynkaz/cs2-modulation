@@ -62,6 +62,13 @@ export function createSkyPass(skyData) {
   // One big triangle covering the whole clip-space square - cheaper than two triangles/a quad and
   // avoids a seam along the diagonal.
   geometry.setAttribute("position", new THREE.Float32BufferAttribute([-1, -1, 3, -1, -1, 3], 2));
+  // Review fix item 10: a 2-component position attribute makes `computeBoundingSphere()`'s own
+  // `Box3.setFromBufferAttribute` (assumes 3 components) read past each vertex's actual stride,
+  // producing the "Computed radius is NaN" warning whenever three's renderer/raycaster triggers it
+  // (`boundingSphere === null` check) - this clip-space triangle's bounds are known and fixed, so
+  // it's set directly instead (radius 5 comfortably covers (-1,-1)/(3,-1)/(-1,3), the farthest at
+  // sqrt(10) =~ 3.16 from the origin).
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), 5);
 
   const defines = {};
   if (skyData.isRgbm) defines.SKY_RGBM = "";

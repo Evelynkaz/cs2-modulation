@@ -11,10 +11,11 @@ import { OrbitControls } from "../lib/three/examples/jsm/controls/OrbitControls.
 import { MeshoptDecoder } from "../lib/three/examples/jsm/libs/meshopt_decoder.module.js";
 import { parseSm3d, flattenGroups } from "./mesh3d.js?v=1";
 import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RADIUS } from "./camera.js?v=1";
-import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke } from "./api.js?v=1";
+import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, hasUsableRender } from "./api.js?v=1";
 import { strings } from "./strings.js?v=1";
 import { createLightingPipeline, hasGameLightingData } from "./lighting.js?v=1";
 import { loadStoredLightingMode, storeLightingMode } from "./state.js?v=1";
+import { createMaterialTextureLoader, srgbToLinear } from "./materialTextures.js?v=1";
 
 const FLY_SPEED_DEFAULT = 400; // inches/second - about walking-to-running pace.
 const FLY_SPEED_MIN = 32;
@@ -51,15 +52,19 @@ function disposeMaterial(material) {
 // `MeshStandardMaterial`) - and a mesh with game lighting keeps BOTH its "simple" and "game"
 // materials alive at once (`lighting.js`: instant toggle), while `.material` only ever points at
 // whichever is currently active, so disposal must reach both explicitly, not just `obj.material`.
+// Roughness has no uniform of its own since `s6f3a6_native_tex.md` (it's packed in `uNormalMap`'s
+// blue channel, same texture as the normal direction) - disposing this list is a redundant safety
+// net anyway (`lighting.js`'s own `texLoader.dispose()`, called from the pipeline's `dispose()`,
+// is what actually owns these - see this list's own doc comment above).
 const GAME_MATERIAL_TEXTURE_UNIFORMS = [
   "uAlbedoMap",
   "uNormalMap",
   "uAoMap",
-  "uRoughnessMap",
   "uMetalnessMap",
   "uTintMaskMap",
   "uLayer2Map",
   "uBlendModMap",
+  "uSelfIllumMap",
 ];
 
 function disposeGameMaterial(material) {
@@ -113,14 +118,12 @@ function mod2xPatch(shader) {
   );
 }
 
-// `extras.tint` + `extras.tintMask` (§4): the model's tint is diverted out of `baseColorFactor`
-// into here so it only recolors the masked area (e.g. a car's paint, not its glass/tires).
-// `tintIsSrgb` comes from render.json's `materialExtras.tintColorSpace` - the exporter now writes
-// `extras.tint` already linear (matching `baseColorFactor`), so only convert when that field says
-// otherwise; converting unconditionally would double-darken an already-linear tint.
+// `extras.tint` + `extras.tintMaskTexture` (§4): the model's tint is diverted out of
+// `baseColorFactor` into here so it only recolors the masked area (e.g. a car's paint, not its
+// glass/tires). `tintIsSrgb` comes from render.json's `materialExtras.tintColorSpace` - the
+// exporter writes `extras.tint` already linear (matching `baseColorFactor`), so only convert when
+// that field says otherwise; converting unconditionally would double-darken an already-linear tint.
 function makeTintPatch(tint, maskTex, tintIsSrgb) {
-  maskTex.colorSpace = THREE.NoColorSpace; // a control mask, not a color image.
-  maskTex.needsUpdate = true;
   const color = tintIsSrgb
     ? new THREE.Color().setRGB(tint[0], tint[1], tint[2], THREE.SRGBColorSpace)
     : new THREE.Color(tint[0], tint[1], tint[2]);
@@ -136,18 +139,24 @@ function makeTintPatch(tint, maskTex, tintIsSrgb) {
   };
 }
 
+// review fix item 7: DXT1 (BC1) sRGB without `WEBGL_compressed_texture_s3tc_srgb` uploads linear
+// (`materialTextures.js`'s `wantsManualSrgb`) and needs the shader to decode sRGB->linear itself -
+// `colorspace_pars_fragment` (already part of every stock fragment shader chunk list) defines
+// `sRGBTransferEOTF`, the exact conversion, so this reuses it instead of duplicating the formula.
+function manualSrgbMapPatch(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <map_fragment>",
+    "#include <map_fragment>\n#ifdef USE_MAP\n\tdiffuseColor.rgb = diffuse * sRGBTransferEOTF( sampledDiffuseColor ).rgb;\n#endif",
+  );
+}
+
 // Layer blending (`materialExtras.layers`, cited formula from `crates/s2render/src/material.rs`):
 // `m = texture(blendModulationTexture, uv)`, `b = smoothstep(max(0,m.g-m.r), min(1,m.g+m.r), w)`,
 // `color = mix(layer1, layer2, b)`, `w` = the `_BLEND` vertex attribute. Without a modulation
 // texture (`F_FANCY_BLENDING` wasn't mode 1) `m` falls back to `(0,1,0)` - `smoothstep(0,1,w)`,
 // i.e. `b = w` - so the weight alone still blends, just without the softened edge.
 function makeLayerPatch(layer2Tex, modTex) {
-  layer2Tex.colorSpace = THREE.SRGBColorSpace;
-  layer2Tex.needsUpdate = true;
-  if (modTex) {
-    modTex.colorSpace = THREE.NoColorSpace;
-    modTex.needsUpdate = true;
-  }
+  const layer2ManualSrgb = layer2Tex.userData?.manualSrgb === true; // review fix item 7
   return (shader) => {
     shader.uniforms.layer2Map = { value: layer2Tex };
     shader.uniforms.blendModMap = { value: modTex ?? layer2Tex };
@@ -155,6 +164,7 @@ function makeLayerPatch(layer2Tex, modTex) {
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nattribute float _blend;\nvarying float vBlendW;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvBlendW = _blend;");
+    const layer2SrgbFix = layer2ManualSrgb ? "\n\t\tlayer2Sample = sRGBTransferEOTF( layer2Sample );" : "";
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
@@ -162,14 +172,61 @@ function makeLayerPatch(layer2Tex, modTex) {
       )
       .replace(
         "#include <map_fragment>",
-        "#include <map_fragment>\n#ifdef USE_MAP\n\t{\n\t\tvec4 layer2Sample = texture2D( layer2Map, vMapUv );\n\t\tvec3 m = hasBlendMod > 0.5 ? texture2D( blendModMap, vMapUv ).rgb : vec3( 0.0, 1.0, 0.0 );\n\t\tfloat b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );\n\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, layer2Sample.rgb, b );\n\t}\n#endif",
+        `#include <map_fragment>\n#ifdef USE_MAP\n\t{\n\t\tvec4 layer2Sample = texture2D( layer2Map, vMapUv );${layer2SrgbFix}\n\t\tvec3 m = hasBlendMod > 0.5 ? texture2D( blendModMap, vMapUv ).rgb : vec3( 0.0, 1.0, 0.0 );\n\t\tfloat b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );\n\t\tdiffuseColor.rgb = mix( diffuseColor.rgb, layer2Sample.rgb, b );\n\t}\n#endif`,
       );
   };
 }
 
-async function applyMaterialExtras(gltf, renderer, tintIsSrgb) {
+// HemiOct normal map for `MeshStandardMaterial` (`s6f3a6_native_tex.md` change item 4): the
+// stock `USE_NORMALMAP_TANGENTSPACE` chunk (`normal_fragment_maps`) interprets the sampled texture
+// as a direct tangent-space XYZ triple, which our RG-hemi-oct + B-roughness texture is not -
+// replaced wholesale so the game-lighting shader's own decode (`lightingShader.js`) and this
+// "simple" path agree; `tbn`/`vNormalMapUv` still come from three's own `USE_NORMALMAP` chunks
+// (its derivative-based cotangent frame applies exactly like `lightingShader.js`'s `cotangentFrame`
+// when there's no vertex TANGENT attribute, which render.glb never carries).
+function normalMapPatch(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <normal_fragment_maps>",
+    "#ifdef USE_NORMALMAP_TANGENTSPACE\n\t{\n\t\tvec4 t = texture2D( normalMap, vNormalMapUv );\n\t\tvec2 e = vec2( t.r + t.g - 1.003922, t.r - t.g );\n\t\tvec3 mapN = normalize( vec3( e, 1.0 - abs( e.x ) - abs( e.y ) ) );\n\t\tmapN.y = -mapN.y;\n\t\tnormal = normalize( tbn * mapN );\n\t}\n#endif",
+  );
+}
+
+// review fix item 6, "simple" mode side: `extras.baseColorAlphaMeaning` ("ao"/"metalness",
+// REPORT.md's channel table) - three's stock `aomap_fragment`/`metalnessmap_fragment` chunks only
+// read `aoMap`/`metalnessMap` (never wired in simple mode), so the alpha-derived term is injected
+// unconditionally right after each chunk instead.
+function albedoAlphaAoPatch(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <aomap_fragment>",
+    "#include <aomap_fragment>\n\treflectedLight.indirectDiffuse *= pow( max( diffuseColor.a, 0.0 ), 0.5 );",
+  );
+}
+function albedoAlphaMetalnessPatch(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <metalnessmap_fragment>",
+    "#include <metalnessmap_fragment>\n\tmetalnessFactor = diffuseColor.a;",
+  );
+}
+
+async function applyMaterialExtras(gltf, renderer, texLoader, renderJson, tintIsSrgb) {
   const materialDefs = gltf.parser.json.materials || [];
-  const maxAniso = Math.min(MAX_ANISOTROPY_CAP, renderer.capabilities.getMaxAnisotropy());
+  // Anisotropy is set once, at upload time, by the shared loader itself (review fix item 2:
+  // `tex.anisotropy` must be assigned before `renderer.initTexture` - see
+  // `materialTextures.js`'s `createMaterialTextureLoader`'s own `anisotropy` option) - not
+  // reassigned here.
+  // `texLoader` is shared with the game-lighting pipeline (`scene3d.js`'s own
+  // `materialTexLoaderReady`, `s6f3a6_native_tex.md` change item 5's "simple mode must also
+  // work") - one fetch/upload per texture regardless of how many lighting modes use it; owned and
+  // disposed by the caller, not by this function or `disposeObject3D`.
+  // A single texture's fetch/decode failure degrades just that slot to "missing" instead of
+  // failing this whole material (mirrors `lighting.js`'s own `buildRecipe`).
+  const getTex = (index) =>
+    index != null
+      ? texLoader.get(index).catch((e) => {
+          console.error(`[cs2mod] texture load failed (render.json textures[${index}]):`, e);
+          return null;
+        })
+      : null;
   const onMeshes = new Map(); // material instance actually rendered -> glTF material index
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return;
@@ -180,36 +237,78 @@ async function applyMaterialExtras(gltf, renderer, tintIsSrgb) {
   });
   for (const [material, i] of onMeshes) {
     const def = materialDefs[i];
-    if (material.map) {
-      material.map.anisotropy = maxAniso;
-    }
-    if (material.normalMap) {
-      material.normalMap.anisotropy = maxAniso;
-    }
     const extras = def.extras;
     if (!extras) {
       continue;
     }
+
+    // Base color: a real texture (`extras.baseColorTexture`), or (rare) a 4x4-constant folded
+    // into `material.color`/`.opacity` directly - same fold `lighting.js`'s buildRecipe does.
+    if (extras.baseColorTexture != null) {
+      material.map = await getTex(extras.baseColorTexture);
+    } else if (extras.baseColorConstant) {
+      const [r, g, b, a] = extras.baseColorConstant;
+      const isSrgb = extras.baseColorConstantColorSpace === "srgb";
+      const lin = isSrgb ? [srgbToLinear(r / 255), srgbToLinear(g / 255), srgbToLinear(b / 255)] : [r / 255, g / 255, b / 255];
+      material.color.multiply(new THREE.Color(lin[0], lin[1], lin[2]));
+      material.opacity *= a / 255;
+    }
+
     const patches = [];
     const kinds = [];
+
+    // review fix item 6.
+    if (extras.baseColorAlphaMeaning === "ao") {
+      patches.push(albedoAlphaAoPatch);
+      kinds.push("albedoAlphaAo");
+    } else if (extras.baseColorAlphaMeaning === "metalness") {
+      patches.push(albedoAlphaMetalnessPatch);
+      kinds.push("albedoAlphaMetalness");
+    }
+
+    // Normal: a real HemiOct texture needs `normalMapPatch`'s decode; a 4x4-constant is a flat
+    // normal (only its roughness matters, and `MeshStandardMaterial.roughness` is already the
+    // exporter's fixed 1.0 placeholder either way - no richer "simple" mode roughness existed
+    // before this change either, see this function's own history).
+    if (extras.normalTexture != null) {
+      material.normalMap = await getTex(extras.normalTexture);
+      if (material.normalMap) {
+        patches.push(normalMapPatch);
+        kinds.push("normal");
+      }
+    }
+
     if (extras.blendMode === "mod2x") {
       applyMod2x(material);
       patches.push(mod2xPatch);
       kinds.push("mod2x");
     }
-    if (extras.tintMask != null && extras.tint && material.map) {
-      const maskTex = await gltf.parser.getDependency("texture", extras.tintMask);
-      patches.push(makeTintPatch(extras.tint, maskTex, tintIsSrgb));
-      kinds.push("tint");
+    if (extras.tintMaskTexture != null && extras.tint && material.map) {
+      const maskTex = await getTex(extras.tintMaskTexture);
+      if (maskTex) {
+        patches.push(makeTintPatch(extras.tint, maskTex, tintIsSrgb));
+        kinds.push("tint");
+      }
+    } else if (extras.tintMaskConstant && extras.tint) {
+      // Constant mask amount: mix(albedo, albedo*tint, k) == albedo * mix(1, tint, k), foldable
+      // straight into material.color without any shader patch (same fold `lighting.js` uses).
+      const k = extras.tintMaskConstant[0] / 255;
+      const tint = extras.tint;
+      material.color.multiply(new THREE.Color(1 + k * (tint[0] - 1), 1 + k * (tint[1] - 1), 1 + k * (tint[2] - 1)));
     }
     if (extras.layers?.layer2ColorTexture != null && material.map) {
-      const layer2Tex = await gltf.parser.getDependency("texture", extras.layers.layer2ColorTexture);
-      const modTex =
-        extras.layers.blendModulationTexture != null
-          ? await gltf.parser.getDependency("texture", extras.layers.blendModulationTexture)
-          : null;
-      patches.push(makeLayerPatch(layer2Tex, modTex));
-      kinds.push("layers");
+      const layer2Tex = await getTex(extras.layers.layer2ColorTexture);
+      const modTex = extras.layers.blendModulationTexture != null ? await getTex(extras.layers.blendModulationTexture) : null;
+      if (layer2Tex) {
+        patches.push(makeLayerPatch(layer2Tex, modTex));
+        kinds.push("layers");
+      }
+    }
+    // review fix item 7: applied last so its patch text lands directly after `#include <map_fragment>`,
+    // ahead of tint/layers above, which pushed earlier and therefore ended up further down.
+    if (material.map?.userData?.manualSrgb) {
+      patches.push(manualSrgbMapPatch);
+      kinds.push("manualSrgbMap");
     }
     if (patches.length > 0) {
       material.onBeforeCompile = (shader) => {
@@ -219,8 +318,8 @@ async function applyMaterialExtras(gltf, renderer, tintIsSrgb) {
       };
       const key = "cs2mod-extras:" + kinds.join("+");
       material.customProgramCacheKey = () => key;
-      material.needsUpdate = true;
     }
+    material.needsUpdate = true;
   }
 }
 
@@ -278,6 +377,11 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   // every renderer ever created - so nothing reachable from renderer.domElement may keep this view alive.
   const domListeners = new AbortController();
   const canvasOn = (type, fn, opts = {}) => renderer.domElement.addEventListener(type, fn, { ...opts, signal: domListeners.signal });
+  // Texture CPU copies are freed after upload (`materialTextures.js`), so a restored context can't
+  // re-upload them - reload the page to rebuild the view.
+  canvasOn("webglcontextrestored", () => {
+    if (!destroyed) location.reload();
+  });
   renderer.domElement.tabIndex = 0;
   renderer.domElement.style.outline = "none";
   renderer.domElement.setAttribute("aria-label", `3D-сцена карты ${map}`);
@@ -577,15 +681,55 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     });
 
   // render.json, fetched once and shared by the sun update below and `tintColorSpace` (§4) - only
-  // when `hasRender` says it exists, same gate the previous single sun-only fetch used.
-  const renderJsonReady = mapSummary?.hasRender ? fetchRenderJson(map) : Promise.resolve({ data: null });
+  // when render.json is at least `MIN_RENDER_FORMAT_VERSION` (review fix item 11: an older format
+  // version referenced textures through glTF's own `baseColorTexture`/`normalTexture`, which this
+  // exporter no longer populates - loading one here would render every material untextured instead
+  // of `main.js`'s "3D data must be rebuilt" message; `main.js`'s own `hasUsableRender` gate
+  // already keeps `createSceneView` from being called at all for such a map, this is this module's
+  // own defence in depth for any other caller).
+  const usableRender = hasUsableRender(mapSummary);
+  const renderJsonReady = usableRender ? fetchRenderJson(map) : Promise.resolve({ data: null });
 
-  // ---- render.glb load (progress + Cache Storage by ETag + cancel via AbortController) -----------
-  const glbController = new AbortController();
   let loadProgressHandler = null;
   let loadDoneHandler = null;
   let loadErrorHandler = null;
   let lightingReadyHandler = null;
+
+  // Review fix item 9: one combined progress report (`loaded`/`total` in bytes) across
+  // render.glb's own fetch AND every `render_tex/*.bin` the native texture loader pulls in -
+  // `total` grows from 0 as each side's own total becomes known (render.glb's `Content-Length`
+  // header; the texture loader's total is the sum of render.json's own `textures[].byteLength`,
+  // known as soon as render.json itself is parsed), `loaded` is the running sum of both.
+  const progress = { glbLoaded: 0, glbTotal: 0, texLoaded: 0, texTotal: 0 };
+  function reportProgress() {
+    loadProgressHandler?.(progress.glbLoaded + progress.texLoaded, progress.glbTotal + progress.texTotal);
+  }
+
+  // One native-texture loader (`s6f3a6_native_tex.md`) per view, shared by BOTH the "simple"
+  // material patches below (`applyMaterialExtras`) and the game-lighting pipeline
+  // (`createLightingPipeline`, in `lightingReady`) - each map texture is otherwise fetched AND
+  // uploaded to the GPU twice, once per lighting mode, doubling material-texture GPU memory and
+  // network traffic for no reason (both modes read the identical render.json `textures[]`).
+  // Review fix item 2: anisotropy must reach the GPU sampler at upload time (three.js's
+  // `WebGLTextures.js` only sets `TEXTURE_MAX_ANISOTROPY` while first uploading a texture), so it's
+  // passed into the loader itself rather than assigned on the resulting `THREE.Texture` afterward.
+  const materialAnisotropy = Math.min(MAX_ANISOTROPY_CAP, renderer.capabilities.getMaxAnisotropy());
+  const materialTexLoaderReady = renderJsonReady.then(({ data }) => {
+    if (!data?.textures) {
+      return null;
+    }
+    progress.texTotal = data.textures.reduce((a, t) => a + (t.byteLength || 0), 0);
+    return createMaterialTextureLoader(map, data, renderer, {
+      anisotropy: materialAnisotropy,
+      onProgress: (bytesLoaded) => {
+        progress.texLoaded = bytesLoaded;
+        reportProgress();
+      },
+    });
+  });
+
+  // ---- render.glb load (progress + Cache Storage by ETag + cancel via AbortController) -----------
+  const glbController = new AbortController();
 
   // `s6f3b_viewer3d.md` F3b-1a "кэш браузера по ETag": `render.glb` is too large for Chrome's own
   // HTTP cache entry cap, so the revalidation is done by hand against Cache Storage instead of
@@ -609,7 +753,9 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     if (res.status === 304 && cached) {
       try {
         const buf = await cached.arrayBuffer();
-        loadProgressHandler?.(buf.byteLength, buf.byteLength);
+        progress.glbLoaded = buf.byteLength;
+        progress.glbTotal = buf.byteLength;
+        reportProgress();
         return buf;
       } catch {
         // The cached entry matched by ETag but can't actually be read back (a corrupt Cache
@@ -623,6 +769,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       throw new Error(`HTTP ${res.status}`);
     }
     const total = Number(res.headers.get("Content-Length")) || 0;
+    progress.glbTotal = total;
     let buffer;
     if (!res.body) {
       buffer = await res.arrayBuffer();
@@ -637,7 +784,8 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
         }
         chunks.push(value);
         loaded += value.byteLength;
-        loadProgressHandler?.(loaded, total);
+        progress.glbLoaded = loaded;
+        reportProgress();
       }
       const buf = new Uint8Array(loaded);
       let at = 0;
@@ -659,6 +807,17 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   // crates/s2render is gaining that geometry compression concurrently with this file.
   gltfLoader.setMeshoptDecoder(MeshoptDecoder);
   const glbReady = (async () => {
+    // Yields once before any handler-invoking branch runs (including the very next line) so a
+    // caller that registers `onLoadError`/`onLoadProgress`/etc. right after `createSceneView`
+    // returns (as `main.js` does) never misses a callback this function fires with zero `await`s
+    // of its own before it - the stale-`formatVersion` bail-out right below used to call
+    // `loadErrorHandler` fully synchronously, before `createSceneView` had even returned to its
+    // caller, so nothing was listening yet.
+    await Promise.resolve();
+    if (!usableRender) {
+      loadErrorHandler?.(strings.view3d.renderOutdated);
+      return null;
+    }
     let buffer;
     try {
       buffer = await fetchArrayBufferWithProgress(renderGlbUrl(map), glbController.signal);
@@ -685,7 +844,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     }
     const { data: renderJson } = await renderJsonReady;
     const tintIsSrgb = /^srgb/i.test(renderJson?.materialExtras?.tintColorSpace ?? "");
-    await applyMaterialExtras(gltf, renderer, tintIsSrgb);
+    const texLoader = await materialTexLoaderReady;
+    if (texLoader) {
+      await applyMaterialExtras(gltf, renderer, texLoader, renderJson, tintIsSrgb);
+    }
     if (destroyed) {
       disposeObject3D(gltf.scene);
       return null;
@@ -724,7 +886,8 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     lightingReadyHandler?.(true);
     let pipeline;
     try {
-      pipeline = await createLightingPipeline(renderer, map, data);
+      const texLoader = await materialTexLoaderReady;
+      pipeline = await createLightingPipeline(renderer, map, data, texLoader);
     } catch (e) {
       console.error("lighting pipeline load failed", e);
       lightingSupported = false;
@@ -976,6 +1139,18 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     isLightingSupported() {
       return lightingSupported;
     },
+    // Debug/measurement hook (`s6f3a6_native_tex.md`'s GPU-memory receipt table): `null` before the
+    // game-lighting pipeline exists (e.g. "simple" mode only, or still loading).
+    getLightingStats() {
+      if (!lightingPipeline) return null;
+      return {
+        lightingGpuBytes: lightingPipeline.gpuBytes,
+        materialTextureBytes: lightingPipeline.materialTextureBytes(),
+        materialTextureCount: lightingPipeline.materialTextureCount(),
+        programCount: lightingPipeline.programCount(),
+        missingExtensionsMessage: lightingPipeline.missingExtensionsMessage,
+      };
+    },
     onLoadProgress(cb) {
       loadProgressHandler = cb;
     },
@@ -1032,6 +1207,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       lightingReady.then((pipeline) => {
         pipeline?.dispose();
       });
+      materialTexLoaderReady.then((l) => l?.dispose());
       domListeners.abort();
       if (collision) {
         disposeObject3D(collision.overlay);

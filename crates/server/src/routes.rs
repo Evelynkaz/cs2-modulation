@@ -77,6 +77,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/standspots", post(jobs::post_standspots))
         .route("/api/jobs/viewerdata", post(jobs::post_viewerdata))
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
+        .route(
+            "/data/maps/{map}/render_tex/{file}",
+            get(get_render_tex_asset),
+        )
         .route("/data/maps/{map}/{file}", get(get_render_asset))
         .route("/", get(get_index))
         .route("/viewer/{*rest}", get(get_viewer_asset))
@@ -708,31 +712,26 @@ impl futures_core::Stream for FileStream {
     }
 }
 
-async fn get_render_asset(
-    State(state): State<Arc<AppState>>,
-    AxPath((map, file)): AxPath<(String, String)>,
-    headers: HeaderMap,
+/// Streams `path` as `content_type`, with the same ETag/304/chunked-read behaviour every
+/// `render*` asset uses (`get_render_asset`, `get_render_tex_asset`) - factored out so
+/// `s6f3a6_native_tex.md`'s `render_tex/<sha12>.bin` subdirectory doesn't duplicate it.
+async fn stream_cache_file(
+    path: &std::path::Path,
+    content_type: &'static str,
+    headers: &HeaderMap,
 ) -> Response {
-    if !is_render_asset_name(&file) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let entry = match get_entry(&state, &map) {
-        Ok(e) => e,
-        Err(r) => return *r,
-    };
-    let path = entry.dir.join(&file);
-    let Some(etag) = file_identity_etag(&path) else {
+    let Some(etag) = file_identity_etag(path) else {
         return api_error(
             StatusCode::NOT_FOUND,
             "render assets not built yet for this map (run `cs2mod export-glb`)",
         );
     };
-    if if_none_match_hits(&headers, &etag) {
+    if if_none_match_hits(headers, &etag) {
         let mut resp = StatusCode::NOT_MODIFIED.into_response();
         set_etag_headers(resp.headers_mut(), &etag);
         return resp;
     }
-    let file_handle = match tokio::fs::File::open(&path).await {
+    let file_handle = match tokio::fs::File::open(path).await {
         Ok(f) => f,
         Err(_) => {
             return api_error(
@@ -747,10 +746,8 @@ async fn get_render_asset(
         buf: Box::new([0u8; FILE_STREAM_CHUNK]),
     });
     let mut resp = Response::new(body);
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static(render_asset_content_type(&file)),
-    );
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
     if let Some(len) = content_length {
         resp.headers_mut().insert(
             header::CONTENT_LENGTH,
@@ -759,6 +756,51 @@ async fn get_render_asset(
     }
     set_etag_headers(resp.headers_mut(), &etag);
     resp
+}
+
+async fn get_render_asset(
+    State(state): State<Arc<AppState>>,
+    AxPath((map, file)): AxPath<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_render_asset_name(&file) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let entry = match get_entry(&state, &map) {
+        Ok(e) => e,
+        Err(r) => return *r,
+    };
+    let path = entry.dir.join(&file);
+    stream_cache_file(&path, render_asset_content_type(&file), &headers).await
+}
+
+/// Strict whitelist for `render_tex/<sha12>.bin` (`s6f3a6_native_tex.md` change item 1): exactly
+/// 12 lowercase hex characters, `.bin` - the file name `native_texture::TextureCatalog::load`
+/// itself always writes (first 6 bytes of a SHA-256 digest), never a path.
+fn is_render_tex_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".bin") else {
+        return false;
+    };
+    stem.len() == 12
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+async fn get_render_tex_asset(
+    State(state): State<Arc<AppState>>,
+    AxPath((map, file)): AxPath<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if !is_render_tex_name(&file) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let entry = match get_entry(&state, &map) {
+        Ok(e) => e,
+        Err(r) => return *r,
+    };
+    let path = entry.dir.join("render_tex").join(&file);
+    stream_cache_file(&path, "application/octet-stream", &headers).await
 }
 
 // ---- static: viewer/ ----------------------------------------------------------------------------

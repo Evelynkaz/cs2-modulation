@@ -31,6 +31,8 @@ pub mod rgbe;
 pub mod tonemap;
 mod transform;
 
+pub use budget::pick_mip_for_budget;
+pub use decode::decode_mip;
 pub use encode::{
     Encoded, EncodedFormat, alpha_is_significant, encode as encode_image,
     encode_gray as encode_image_gray,
@@ -38,6 +40,8 @@ pub use encode::{
 pub use error::TexError;
 pub use format::VTexFormat;
 pub use header::Header;
+pub use redi::resolve_codec;
+pub use transform::{TextureCodec, apply as apply_texture_codec};
 
 use s2fmt::resource::{FourCC, Resource};
 

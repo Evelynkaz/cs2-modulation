@@ -1,14 +1,15 @@
-// The F3b-2 world "uber-shader" (`s6f3b2_lighting_shader.md` §2): one `THREE.ShaderMaterial` per
-// glTF material x lighting-path combination, replacing the `MeshStandardMaterial` + `onBeforeCompile`
-// patches F3b-1 used. Compiled program variants are deduped by `customProgramCacheKey` built from
-// the exact define set (`s6f3b2_lighting_shader.md` §2 "кэш программ по набору define'ов") - two
-// materials with the same capability recipe (e.g. two lightmapped, AO-only, no-metal-map materials)
-// share one WebGLProgram even though each keeps its own textures/uniform values.
+// The F3b-2 world "uber-shader" (`s6f3b2_lighting_shader.md` §2), updated for native BC textures
+// (`s6f3a6_native_tex.md` change item 4): one `THREE.ShaderMaterial` per glTF material x
+// lighting-path combination. Compiled program variants are deduped by `customProgramCacheKey`
+// built from the exact define set (`s6f3b2_lighting_shader.md` §2 "кэш программ по набору define'ов")
+// - two materials with the same capability recipe share one WebGLProgram even though each keeps
+// its own textures/uniform values.
 //
 // Formulas cited below are REPORT.md §1 (lightmap/probe diffuse, GGX sun specular) and §6 (cube
-// fog), themselves citing `ValveResourceFormat/Renderer/Shaders/{complex.frag,pbr,lighting,fog}.slang`.
-// No 1/π anywhere (REPORT.md key finding #3) - matches the baked lightmaps, which were baked without
-// it.
+// fog) from `s6f3b2_lighting_shader.md`'s survey, and the F3a-6 survey's REPORT.md (HemiOct normal
+// decode, sRGB-vs-linear table, alpha meaning) - `ValveResourceFormat/Renderer/Shaders/
+// {complex.frag,pbr,lighting,fog,utils}.slang`. No 1/π anywhere (REPORT.md key finding #3) -
+// matches the baked lightmaps, which were baked without it.
 
 import * as THREE from "three";
 
@@ -98,32 +99,56 @@ uniform vec4 uBaseColorFactor;
 uniform float uAlphaCutoff;
 #endif
 
+// F3a-6 native textures (REPORT.md "Normals and roughness"): the normal map is the game's own
+// HemiOct-encoded BC7 texture, decoded per-texel below - RG is the hemi-octahedron direction, B is
+// packed isotropic roughness (moves into the decoded normal's place as "roughness", not alpha).
+// A material with no normal map at all (flat geometry normal) still has a roughness value -
+// uRoughnessFactor alone, either the shader's own default (1.0) or a 4x4-constant normal's baked-in
+// roughness folded in at material-build time (materialTextures.js's decodeHemiOctConstant).
 #ifdef HAS_NORMAL_MAP
 uniform sampler2D uNormalMap;
-uniform vec2 uNormalScale;
 #endif
+uniform float uRoughnessFactor;
 
+uniform float uAoFactor;
 #ifdef HAS_AO
 uniform sampler2D uAoMap;
 #endif
-#ifdef HAS_ROUGHNESS_MAP
-uniform sampler2D uRoughnessMap;
-#endif
-uniform float uRoughnessFactor;
+uniform float uMetalnessFactor;
 #ifdef HAS_METALNESS_MAP
 uniform sampler2D uMetalnessMap;
 #endif
-uniform float uMetalnessFactor;
 
 #ifdef HAS_TINT
 uniform vec3 uTintColor;
 uniform sampler2D uTintMaskMap;
 #endif
 #ifdef HAS_LAYERS
+#ifdef HAS_LAYER2_MAP
 uniform sampler2D uLayer2Map;
-#ifdef HAS_BLEND_MOD
-uniform sampler2D uBlendModMap;
+#else
+uniform vec3 uLayer2ConstantColor;
 #endif
+#ifdef HAS_BLEND_MOD_MAP
+uniform sampler2D uBlendModMap;
+#elif defined( HAS_BLEND_MOD_CONST )
+uniform vec3 uBlendModConstant;
+#endif
+#endif
+
+// review fix item 1: complex.frag.slang:191,227-231 GetStandardSelfIllumination -
+// exp2(brightness)*scale*tint*mask.r*mix(1,albedo,albedoFactor); previously added the raw mask
+// colour unconditionally, ignoring F_SELF_ILLUM and every one of these parameters.
+#ifdef HAS_SELF_ILLUM
+#ifdef HAS_SELF_ILLUM_MAP
+uniform sampler2D uSelfIllumMap;
+#else
+uniform float uSelfIllumConstantMask;
+#endif
+uniform float uSelfIllumScale;
+uniform float uSelfIllumBrightness;
+uniform vec3 uSelfIllumTint;
+uniform float uSelfIllumAlbedoFactor;
 #endif
 
 #ifdef LIGHTING_LIGHTMAP
@@ -164,6 +189,13 @@ uniform float uSkyRgbmRange;
 #endif
 #endif
 
+// sRGB (gamma) -> linear, per channel - only used when a texture's own compressed format can't
+// carry an sRGB GPU-native internal format on this browser/GPU (change item 1's DXT1 fallback:
+// WEBGL_compressed_texture_s3tc_srgb missing, WEBGL_compressed_texture_s3tc present).
+vec3 srgbToLinear( vec3 c ) {
+  return mix( c / 12.92, pow( ( c + 0.055 ) / 1.055, vec3( 2.4 ) ), step( 0.04045, c ) );
+}
+
 // Tangent-space normal mapping without a precomputed TANGENT (REPORT.md: render.glb carries none -
 // s6f3b2_lighting_shader.md #2 asks for a screen-space-derivative cotangent frame).
 // Standard technique (Schuler): the UV/position screen-space derivatives pin down a tangent frame
@@ -188,7 +220,13 @@ void main() {
   // was making BLEND water materials (factor 1,1,1,1, no texture) invisible.
   vec4 albedoColor = uBaseColorFactor;
 #ifdef HAS_ALBEDO_MAP
-  albedoColor *= texture2D( uAlbedoMap, vUv );
+  {
+    vec4 s = texture2D( uAlbedoMap, vUv );
+#ifdef ALBEDO_MANUAL_SRGB
+    s.rgb = srgbToLinear( s.rgb );
+#endif
+    albedoColor *= s;
+  }
 #endif
 
 #ifdef HAS_TINT
@@ -199,14 +237,23 @@ void main() {
 #endif
 #ifdef HAS_LAYERS
   {
-    vec4 layer2Sample = texture2D( uLayer2Map, vUv );
-#ifdef HAS_BLEND_MOD
+#ifdef HAS_LAYER2_MAP
+    vec3 layer2Color = texture2D( uLayer2Map, vUv ).rgb;
+#ifdef LAYER2_MANUAL_SRGB
+    layer2Color = srgbToLinear( layer2Color );
+#endif
+#else
+    vec3 layer2Color = uLayer2ConstantColor;
+#endif
+#ifdef HAS_BLEND_MOD_MAP
     vec3 m = texture2D( uBlendModMap, vUv ).rgb;
+#elif defined( HAS_BLEND_MOD_CONST )
+    vec3 m = uBlendModConstant;
 #else
     vec3 m = vec3( 0.0, 1.0, 0.0 );
 #endif
     float b = smoothstep( max( 0.0, m.g - m.r ), min( 1.0, m.g + m.r ), vBlendW );
-    albedoColor.rgb = mix( albedoColor.rgb, layer2Sample.rgb, b );
+    albedoColor.rgb = mix( albedoColor.rgb, layer2Color, b );
   }
 #endif
 
@@ -220,18 +267,24 @@ void main() {
 #ifdef LIGHTING_UNLIT
   finalColor = albedo;
 #else
-  float ao = 1.0;
+  float ao = uAoFactor;
 #ifdef HAS_AO
-  ao = texture2D( uAoMap, vUv )[ AO_CHANNEL ];
+  ao *= texture2D( uAoMap, vUv )[ AO_CHANNEL ];
 #endif
-  float roughness = uRoughnessFactor;
-#ifdef HAS_ROUGHNESS_MAP
-  roughness = texture2D( uRoughnessMap, vUv )[ ROUGHNESS_CHANNEL ];
+#ifdef ALBEDO_ALPHA_AO
+  // review fix item 6: extras.baseColorAlphaMeaning == "ao" (csgo_environment/_blend, opaque) -
+  // REPORT.md's channel table; the sqrt-ish remap matches the reference's own AO curve.
+  ao *= pow( max( albedoColor.a, 0.0 ), 0.5 );
 #endif
   float metalness = uMetalnessFactor;
 #ifdef HAS_METALNESS_MAP
   metalness = texture2D( uMetalnessMap, vUv )[ METALNESS_CHANNEL ];
+#elif defined( ALBEDO_ALPHA_METALNESS )
+  // review fix item 6: extras.baseColorAlphaMeaning == "metalness" (F_METALNESS_TEXTURE, opaque,
+  // no separate g_tMetalness texture -- complex.frag.slang:618).
+  metalness = albedoColor.a;
 #endif
+  float roughness = uRoughnessFactor;
 
   vec3 Ngeom = normalize( vNormal );
 #ifdef DOUBLE_SIDED
@@ -241,8 +294,33 @@ void main() {
   vec3 N = Ngeom;
 #ifdef HAS_NORMAL_MAP
   {
-    vec3 nSample = texture2D( uNormalMap, vUv ).xyz * 2.0 - 1.0;
-    nSample.xy *= uNormalScale;
+    vec4 t = texture2D( uNormalMap, vUv );
+    vec3 nSample;
+#if defined( NORMAL_CODEC_DXT5NM )
+    // review fix item 8: s2tex::transform's dxt5nm codec swaps R<->A before reconstructing Z
+    // (Texture.cs:1333-1335's DXT5 normal-map convention -- X lives in alpha, Y in green); no
+    // packed roughness channel, so roughness is left at its uRoughnessFactor default.
+    {
+      vec2 xy = vec2( t.a, t.g ) * 2.0 - 1.0;
+      float z = sqrt( max( 0.0, 1.0 - dot( xy, xy ) ) );
+      nSample = vec3( xy, z );
+    }
+#elif defined( NORMAL_CODEC_RECONSTRUCTZ )
+    // review fix item 8: plain Z-reconstruction (s2tex::transform::reconstruct_normal_z) -- X/Y
+    // straight from R/G, no swap, no packed roughness.
+    {
+      vec2 xy = vec2( t.r, t.g ) * 2.0 - 1.0;
+      float z = sqrt( max( 0.0, 1.0 - dot( xy, xy ) ) );
+      nSample = vec3( xy, z );
+    }
+#else
+    {
+      vec2 e = vec2( t.r + t.g - 1.003922, t.r - t.g );
+      nSample = normalize( vec3( e, 1.0 - abs( e.x ) - abs( e.y ) ) );
+      roughness = t.b; // packed roughness -- HemiOct only.
+    }
+#endif
+    nSample.y = -nSample.y; // VRF utils.slang:261 - GLTFLoader's normalScale.y=-1 used to do this; done explicitly now.
     mat3 TBN = cotangentFrame( Ngeom, vWorldPos, vUv );
     N = normalize( TBN * normalize( nSample ) );
   }
@@ -314,6 +392,24 @@ void main() {
 #endif
 
   finalColor = diffuse + specular;
+
+  // Self-illumination (review fix item 1, complex.frag.slang:191,227-231
+  // GetStandardSelfIllumination): only ever compiled in when the exporter found F_SELF_ILLUM==1
+  // (or csgo_unlitgeneric) - see material.rs's self_illum.
+#ifdef HAS_SELF_ILLUM
+  {
+#ifdef HAS_SELF_ILLUM_MAP
+    float mask = texture2D( uSelfIllumMap, vUv ).r;
+#ifdef SELFILLUM_MANUAL_SRGB
+    mask = srgbToLinear( vec3( mask ) ).r;
+#endif
+#else
+    float mask = uSelfIllumConstantMask;
+#endif
+    vec3 selfIllumScale = exp2( uSelfIllumBrightness ) * uSelfIllumScale * uSelfIllumTint;
+    finalColor += selfIllumScale * mask * mix( vec3( 1.0 ), albedo, uSelfIllumAlbedoFactor );
+  }
+#endif
 #endif
 
 #ifdef FOG_ENABLED
@@ -365,24 +461,45 @@ function buildDefines(recipe) {
   if (recipe.alphaMode === "MASK") d.ALPHA_MASK = "";
   if (recipe.doubleSided) d.DOUBLE_SIDED = "";
   if (recipe.mod2x) d.MOD2X = "";
-  if (recipe.normalMap) d.HAS_NORMAL_MAP = "";
+  if (recipe.normalMap) {
+    d.HAS_NORMAL_MAP = "";
+    // review fix item 8: dispatch the per-texel decode by the texture's own codec (real data has
+    // hemiOct/dxt5nm/reconstructZ; ycocg never appears on a normal map - REPORT.md's survey - so
+    // it has no shader branch here, only the constant-folding path below defends against it).
+    if (recipe.normalCodec === "dxt5nm") d.NORMAL_CODEC_DXT5NM = "";
+    else if (recipe.normalCodec === "reconstructZ") d.NORMAL_CODEC_RECONSTRUCTZ = "";
+  }
   if (recipe.aoMap) {
     d.HAS_AO = "";
     d.AO_CHANNEL = String(channelIndex(recipe.aoChannel ?? "r"));
-  }
-  if (recipe.roughnessMap) {
-    d.HAS_ROUGHNESS_MAP = "";
-    d.ROUGHNESS_CHANNEL = String(channelIndex(recipe.roughnessChannel ?? "r"));
   }
   if (recipe.metalnessMap) {
     d.HAS_METALNESS_MAP = "";
     d.METALNESS_CHANNEL = String(channelIndex(recipe.metalnessChannel ?? "g"));
   }
-  if (recipe.map) d.HAS_ALBEDO_MAP = "";
+  if (recipe.albedoMap) {
+    d.HAS_ALBEDO_MAP = "";
+    if (recipe.albedoManualSrgb) d.ALBEDO_MANUAL_SRGB = "";
+  }
+  // review fix item 6: extras.baseColorAlphaMeaning, exported but previously unused.
+  if (recipe.baseColorAlphaMeaning === "ao") d.ALBEDO_ALPHA_AO = "";
+  else if (recipe.baseColorAlphaMeaning === "metalness") d.ALBEDO_ALPHA_METALNESS = "";
   if (recipe.tintMaskMap) d.HAS_TINT = "";
-  if (recipe.layer2Map) {
+  if (recipe.hasLayers) {
     d.HAS_LAYERS = "";
-    if (recipe.blendModMap) d.HAS_BLEND_MOD = "";
+    if (recipe.layer2Map) {
+      d.HAS_LAYER2_MAP = "";
+      if (recipe.layer2ManualSrgb) d.LAYER2_MANUAL_SRGB = ""; // review fix item 7
+    }
+    if (recipe.blendModMap) d.HAS_BLEND_MOD_MAP = "";
+    else if (recipe.blendModConstant) d.HAS_BLEND_MOD_CONST = "";
+  }
+  if (recipe.hasSelfIllum) {
+    d.HAS_SELF_ILLUM = "";
+    if (recipe.selfIllumMap) {
+      d.HAS_SELF_ILLUM_MAP = "";
+      if (recipe.selfIllumManualSrgb) d.SELFILLUM_MANUAL_SRGB = "";
+    }
   }
   if (recipe.lightingType === "lightmap") {
     if (recipe.irradianceIsRgbm) d.IRRADIANCE_RGBM = "";
@@ -420,28 +537,35 @@ export function buildWorldMaterial(recipe) {
   const uniforms = {
     uBaseColorFactor: { value: new THREE.Vector4(...recipe.baseColorFactor) },
     uRoughnessFactor: { value: recipe.roughnessFactor ?? 1 },
+    uAoFactor: { value: recipe.aoFactor ?? 1 },
     uMetalnessFactor: { value: recipe.metalnessFactor ?? 0 },
     uSunToSun: shared.uSunToSun,
     uSunColorLinear: shared.uSunColorLinear,
   };
-  if (recipe.map) uniforms.uAlbedoMap = { value: recipe.map };
+  if (recipe.albedoMap) uniforms.uAlbedoMap = { value: recipe.albedoMap };
   if (recipe.alphaMode === "MASK") {
     uniforms.uAlphaCutoff = { value: recipe.alphaCutoff ?? 0.5 };
   }
-  if (recipe.normalMap) {
-    uniforms.uNormalMap = { value: recipe.normalMap };
-    uniforms.uNormalScale = { value: recipe.normalScale ?? new THREE.Vector2(1, 1) };
-  }
+  if (recipe.normalMap) uniforms.uNormalMap = { value: recipe.normalMap };
   if (recipe.aoMap) uniforms.uAoMap = { value: recipe.aoMap };
-  if (recipe.roughnessMap) uniforms.uRoughnessMap = { value: recipe.roughnessMap };
   if (recipe.metalnessMap) uniforms.uMetalnessMap = { value: recipe.metalnessMap };
   if (recipe.tintMaskMap) {
     uniforms.uTintMaskMap = { value: recipe.tintMaskMap };
     uniforms.uTintColor = { value: recipe.tintColor };
   }
-  if (recipe.layer2Map) {
-    uniforms.uLayer2Map = { value: recipe.layer2Map };
+  if (recipe.hasLayers) {
+    if (recipe.layer2Map) uniforms.uLayer2Map = { value: recipe.layer2Map };
+    else uniforms.uLayer2ConstantColor = { value: recipe.layer2ConstantColor ?? new THREE.Vector3(1, 1, 1) };
     if (recipe.blendModMap) uniforms.uBlendModMap = { value: recipe.blendModMap };
+    else if (recipe.blendModConstant) uniforms.uBlendModConstant = { value: recipe.blendModConstant };
+  }
+  if (recipe.hasSelfIllum) {
+    if (recipe.selfIllumMap) uniforms.uSelfIllumMap = { value: recipe.selfIllumMap };
+    else uniforms.uSelfIllumConstantMask = { value: recipe.selfIllumConstantMask ?? 0 };
+    uniforms.uSelfIllumScale = { value: recipe.selfIllumScale ?? 1 };
+    uniforms.uSelfIllumBrightness = { value: recipe.selfIllumBrightness ?? 0 };
+    uniforms.uSelfIllumTint = { value: recipe.selfIllumTint ?? new THREE.Vector3(1, 1, 1) };
+    uniforms.uSelfIllumAlbedoFactor = { value: recipe.selfIllumAlbedoFactor ?? 0 };
   }
   if (recipe.lightingType === "lightmap") {
     uniforms.uIrradianceMap = shared.uIrradianceMap;

@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use s2fmt::entities::{self, Entity, EntityLump, entity_transform};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::buffer::Buffer;
 use crate::entity as ent;
@@ -19,9 +18,9 @@ use crate::lightmaps;
 use crate::material::{self, AlphaMode, MetalnessSource, RawMaterial, ResolvedMaterial};
 use crate::mesh::{DrawCall, Mesh};
 use crate::model::{self, Model};
+use crate::native_texture::{ColorSpace, Loaded, TextureCatalog};
 use crate::probes::{self, ProbeAtlasTextures, ProbeVolume};
 use crate::source::{Sources, compiled_path};
-use crate::texture::{self, TextureBudget};
 use crate::world::{self, AggregateRaw, SceneObjectRaw, WorldNodeRaw};
 
 /// Fixed encode scale for `_LPV`'s `UNSIGNED_SHORT` normalized channels (`gltf::add_lpv_u16`):
@@ -45,7 +44,6 @@ pub enum ExportError {
 #[derive(Debug, Clone)]
 pub struct ExportOptions {
     pub max_texture: u32,
-    pub jpeg_quality: u8,
     /// `--lightmap-quality high` (§1): irradiance at mip 0 (8192², the full-resolution file) in
     /// place of the mip-1 (4096²) default.
     pub lightmap_quality_high: bool,
@@ -55,7 +53,6 @@ impl Default for ExportOptions {
     fn default() -> Self {
         ExportOptions {
             max_texture: 1024,
-            jpeg_quality: 90,
             lightmap_quality_high: false,
         }
     }
@@ -65,22 +62,19 @@ pub struct ExportResult {
     pub glb: Vec<u8>,
     pub report: serde_json::Value,
     /// Files this export writes alongside `render.glb`/`render.json` (§1/§4/§6): raw lightmap/sky
-    /// cube blocks, fallback PNGs, `render_lut.bin`. `(file name, bytes)`.
+    /// cube blocks, fallback PNGs, `render_lut.bin`, and (`s6f3a6_native_tex.md`) every material's
+    /// `render_tex/<sha12>.bin`. `(file name, bytes)`.
     pub extra_files: Vec<(String, Vec<u8>)>,
 }
 
-/// Per-role texture budget (§2 of `s6f3a5_size.md`: "бюджет по ТИПУ, а не один на всё"). `Color`
-/// (base color, a layer's own color) stays at the export's full `--max-texture` budget -- already
-/// measured, in `texture.rs`'s own doc comment, at the 1024 default -- since surface albedo is
-/// what a player's eye resolves most readily at typical viewing distance. `Normal` (the normal
-/// map's own RGB) and `Mask` (AO, metalness, blend modulation, the tint mask, and -- handled
-/// specially, see `Ctx::get_normal_and_roughness` -- the roughness channel split out of a normal
-/// map's alpha) both get the smaller secondary budget: measuring the actual per-role byte split
-/// on real maps (receipt) showed color alone did not fit the goal's per-map ceiling even after
-/// dedup and the mask-only cut, and the spec's own suggested table explicitly allows normals
-/// "512–1024" (not just 1024) -- `SECONDARY_MAX_SIDE` picks the more conservative half of that
-/// same "512 или 256" range; halving linear resolution already cuts a role's bytes roughly 4x, and
-/// 256 is left as a follow-up if a map still needs to shed more weight after this pass.
+/// Per-role texture budget (§2 of `s6f3a5_size.md`: "бюджет по ТИПУ, а не один на всё", carried
+/// over unchanged by `s6f3a6_native_tex.md`, which only changes *how* a texture at a given budget
+/// is stored -- raw BC/RGBA8 mips now, not JPEG/PNG). `Color` (base color, a layer's own color,
+/// self-illum) stays at the export's full `--max-texture` budget, since surface albedo is what a
+/// player's eye resolves most readily at typical viewing distance. `Normal` (the normal map's own
+/// texel) and `Mask` (AO, metalness, blend modulation, the tint mask) both get the smaller
+/// secondary budget: the spec's own suggested table allows normals "512–1024" (not just 1024) --
+/// `SECONDARY_MAX_SIDE` picks the more conservative half of that same "512 или 256" range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum TextureRole {
     Color,
@@ -93,13 +87,10 @@ enum TextureRole {
 const SECONDARY_MAX_SIDE: u32 = 512;
 
 impl TextureRole {
-    fn budget(self, base: TextureBudget) -> TextureBudget {
+    fn max_side(self, base_max_side: u32) -> u32 {
         match self {
-            TextureRole::Color => base,
-            TextureRole::Normal | TextureRole::Mask => TextureBudget {
-                max_side: base.max_side.min(SECONDARY_MAX_SIDE),
-                jpeg_quality: base.jpeg_quality,
-            },
+            TextureRole::Color => base_max_side,
+            TextureRole::Normal | TextureRole::Mask => base_max_side.min(SECONDARY_MAX_SIDE),
         }
     }
 }
@@ -153,12 +144,6 @@ struct Report {
     /// `env_combined_light_probe_volume` entities that looked like a probe volume but were
     /// missing a required field.
     probe_volumes_skipped: u32,
-    /// Times an already-embedded texture's encoded bytes were reused for a different path/role
-    /// instead of being embedded again (§3 of `s6f3a5_size.md`).
-    texture_dedup_hits: u32,
-    texture_dedup_bytes_saved: u64,
-    /// Embedded (post-dedup) bytes per [`TextureRole`], for `render.json`'s per-type table (§2).
-    texture_bytes_by_role: HashMap<TextureRole, u64>,
 }
 
 /// `(mesh_key, flat draw-call index, overlay, material index)` -- `get_or_build_mesh`'s glTF-mesh
@@ -169,19 +154,15 @@ type MeshKey = (String, usize, bool, u32);
 /// glTF-mesh dedup cache keyed by (geometry source, draw call, overlay, material).
 struct Ctx<'a> {
     sources: &'a Sources,
-    budget: TextureBudget,
+    max_texture: u32,
     builder: GltfBuilder,
     models: HashMap<String, Option<Arc<Model>>>,
     raw_materials: HashMap<String, Option<Arc<RawMaterial>>>,
     resolved_materials: HashMap<String, Arc<ResolvedMaterial>>,
     gltf_materials: HashMap<(String, [u8; 4]), u32>,
-    textures: HashMap<(String, TextureRole), Option<u32>>,
-    /// `g_tNormal`-path -> `(normalTexture index, roughnessTexture index)`, both derived from one
-    /// decode (§7; `texture::load_and_encode_normal_pair`).
-    normal_pairs: HashMap<String, Option<(u32, u32)>>,
-    /// Encoded-image-bytes hash -> already-embedded `textures[]` index (§3 of `s6f3a5_size.md`'s
-    /// content-hash dedup, `Ctx::add_texture_deduped`).
-    image_hashes: HashMap<[u8; 32], u32>,
+    /// Native (raw BC/RGBA8) material textures, written as `render_tex/<sha12>.bin`
+    /// (`s6f3a6_native_tex.md`, change item 1) -- replaces the old JPEG/PNG-embedded-in-glb path.
+    tex_catalog: TextureCatalog,
     meshes: HashMap<MeshKey, (u32, [[f32; 4]; 3])>,
     /// Shared geometry for probe-lit draw calls, keyed without the material/tint (§2: geometry is
     /// instance-independent, only `_LPV` isn't).
@@ -262,95 +243,29 @@ impl<'a> Ctx<'a> {
         Some(resolved)
     }
 
-    /// Embeds `bytes` (already-encoded JPEG/PNG) as an image + texture, or reuses an earlier
-    /// texture whose encoded bytes hash the same (§3 of `s6f3a5_size.md`: "проверить, нет ли
-    /// повторно закодированных одинаковых изображений... дедуплицировать по хешу содержимого") --
-    /// catches both "one vtex under different paths" and "one texture in different roles", neither
-    /// of which the per-path caches above see (they key on the *path*/role that was requested, not
-    /// on what came out the other end).
-    fn add_texture_deduped(
+    /// Loads `path` natively (`s6f3a6_native_tex.md`, `TextureCatalog::load`) at `role`'s budget
+    /// and `color_space`, reporting (and returning `None` on) any failure -- the one entry point
+    /// every material-texture reference below goes through.
+    fn get_texture(
         &mut self,
-        bytes: &[u8],
-        mime_type: &'static str,
+        path: &str,
         role: TextureRole,
-    ) -> u32 {
-        let hash: [u8; 32] = Sha256::digest(bytes).into();
-        if let Some(&idx) = self.image_hashes.get(&hash) {
-            self.report.texture_dedup_hits += 1;
-            self.report.texture_dedup_bytes_saved += bytes.len() as u64;
-            return idx;
-        }
-        *self.report.texture_bytes_by_role.entry(role).or_insert(0) += bytes.len() as u64;
-        let image = self.builder.add_image(bytes, mime_type);
-        let idx = self.builder.add_texture(image);
-        self.image_hashes.insert(hash, idx);
-        idx
-    }
-
-    fn get_texture(&mut self, path: &str, role: TextureRole) -> Option<u32> {
-        let key = (path.to_string(), role);
-        if let Some(cached) = self.textures.get(&key) {
-            return *cached;
-        }
+        color_space: ColorSpace,
+    ) -> Option<Loaded> {
         let compiled = compiled_path(path);
-        let budget = role.budget(self.budget);
-        let result = match texture::load_and_encode(self.sources, &compiled, budget, false) {
-            Ok(t) => Some(self.add_texture_deduped(&t.bytes, t.mime_type, role)),
+        let max_side = role.max_side(self.max_texture);
+        match self
+            .tex_catalog
+            .load(self.sources, &compiled, max_side, color_space)
+        {
+            Ok(loaded) => Some(loaded),
             Err(e) => {
                 self.report
                     .missing_resources
                     .push(format!("{compiled}: failed to load texture: {e}"));
                 None
             }
-        };
-        self.textures.insert(key, result);
-        result
-    }
-
-    /// `(normalTexture index, roughnessTexture index)` for a normal map path, decoded once and
-    /// cached (§7): the roughness image is split out of the alpha channel `load_and_encode`
-    /// discards for the ordinary normal texture path. Both the normal's own RGB and the roughness
-    /// channel use the secondary (smaller) budget (§2 of `s6f3a5_size.md`'s per-type texture
-    /// table allows normals "512–1024"; measuring the actual per-role byte split on real maps,
-    /// receipt, showed the full budget didn't fit the goal's per-map ceiling even after dedup and
-    /// shrinking AO/metalness/masks alone) -- roughness is additionally box-downsampled from that
-    /// same decode rather than decoded again, since it's already lower-frequency than the normal
-    /// direction itself.
-    fn get_normal_and_roughness(&mut self, path: &str) -> Option<(u32, u32)> {
-        if let Some(cached) = self.normal_pairs.get(path) {
-            return *cached;
         }
-        let compiled = compiled_path(path);
-        let normal_budget = TextureRole::Normal.budget(self.budget);
-        let roughness_max_side = TextureRole::Mask.budget(self.budget).max_side;
-        let result = match texture::load_and_encode_normal_pair(
-            self.sources,
-            &compiled,
-            normal_budget,
-            roughness_max_side,
-        ) {
-            Ok(pair) => {
-                let normal_idx = self.add_texture_deduped(
-                    &pair.normal.bytes,
-                    pair.normal.mime_type,
-                    TextureRole::Normal,
-                );
-                let roughness_idx = self.add_texture_deduped(
-                    &pair.roughness.bytes,
-                    pair.roughness.mime_type,
-                    TextureRole::Mask,
-                );
-                Some((normal_idx, roughness_idx))
-            }
-            Err(e) => {
-                self.report
-                    .missing_resources
-                    .push(format!("{compiled}: failed to load normal texture: {e}"));
-                None
-            }
-        };
-        self.normal_pairs.insert(path.to_string(), result);
-        result
     }
 
     /// Builds (or reuses) the glTF material for `vmat_path` tinted by `tint_rgba`; `None` if the
@@ -367,30 +282,21 @@ impl<'a> Ctx<'a> {
         let mut mat = serde_json::Map::new();
         mat.insert("name".into(), json!(vmat_path));
 
+        // §7: standard glTF texture fields (baseColorTexture, normalTexture, the
+        // metallic-roughness texture, ...) are never populated -- every material texture lives
+        // only in render.json's own `textures[]`, referenced by index from `extras` below (this
+        // viewer is the only reader of either file).
         let mut pbr = serde_json::Map::new();
         pbr.insert("baseColorFactor".into(), json!(base_color_factor));
         pbr.insert("metallicFactor".into(), json!(0.0));
         pbr.insert("roughnessFactor".into(), json!(1.0));
-
         if resolved.constant_black {
             pbr.insert(
                 "baseColorFactor".into(),
                 json!([0.0, 0.0, 0.0, base_color_factor[3]]),
             );
-        } else if let Some(tex_path) = &resolved.base_color_texture
-            && let Some(tex_index) = self.get_texture(tex_path, TextureRole::Color)
-        {
-            pbr.insert("baseColorTexture".into(), json!({ "index": tex_index }));
         }
         mat.insert("pbrMetallicRoughness".into(), Value::Object(pbr));
-
-        let mut roughness_texture_index = None;
-        if let Some(normal_path) = &resolved.normal_texture
-            && let Some((normal_idx, roughness_idx)) = self.get_normal_and_roughness(normal_path)
-        {
-            mat.insert("normalTexture".into(), json!({ "index": normal_idx }));
-            roughness_texture_index = Some(roughness_idx);
-        }
 
         mat.insert(
             "alphaMode".into(),
@@ -412,55 +318,114 @@ impl<'a> Ctx<'a> {
         }
 
         let mut extras = serde_json::Map::new();
+        extras.insert(
+            "baseColorAlphaMeaning".into(),
+            json!(resolved.base_color_alpha_meaning),
+        );
         if resolved.mod2x {
             extras.insert("blendMode".into(), json!("mod2x"));
         }
         if let Some(tint) = extras_tint {
             extras.insert("tint".into(), json!(tint));
             if let Some(mask_path) = &resolved.tint_mask_texture
-                && let Some(idx) = self.get_texture(mask_path, TextureRole::Mask)
+                && let Some(loaded) =
+                    self.get_texture(mask_path, TextureRole::Mask, ColorSpace::Linear)
             {
-                extras.insert("tintMask".into(), json!(idx));
+                insert_loaded(&mut extras, "tintMask", loaded, None);
             }
         }
+
+        if !resolved.constant_black
+            && let Some(tex_path) = &resolved.base_color_texture
+        {
+            // §4's mod2x exception: `csgo_static_overlay`/`csgo_unlitgeneric` with
+            // `F_BLEND_MODE == 3` read `g_tColor` linear, not sRGB (`REPORT.md`'s "Exception").
+            let color_space = if resolved.mod2x {
+                ColorSpace::Linear
+            } else {
+                ColorSpace::Srgb
+            };
+            if let Some(loaded) = self.get_texture(tex_path, TextureRole::Color, color_space) {
+                insert_loaded(&mut extras, "baseColor", loaded, Some(color_space));
+            }
+        }
+
+        if let Some(normal_path) = &resolved.normal_texture
+            && let Some(loaded) =
+                self.get_texture(normal_path, TextureRole::Normal, ColorSpace::Linear)
+        {
+            insert_loaded(&mut extras, "normal", loaded, None);
+        }
+
         if let Some(layers) = &resolved.layers {
             let mut layer_json = serde_json::Map::new();
             if let Some(p) = &layers.layer2_color
-                && let Some(idx) = self.get_texture(p, TextureRole::Color)
+                && let Some(loaded) = self.get_texture(p, TextureRole::Color, ColorSpace::Srgb)
             {
-                layer_json.insert("layer2ColorTexture".into(), json!(idx));
+                insert_loaded(
+                    &mut layer_json,
+                    "layer2Color",
+                    loaded,
+                    Some(ColorSpace::Srgb),
+                );
             }
             if let Some(p) = &layers.layer2_normal
-                && let Some((normal_idx, _)) = self.get_normal_and_roughness(p)
+                && let Some(loaded) = self.get_texture(p, TextureRole::Normal, ColorSpace::Linear)
             {
-                // Shares `normal_pairs` (not the plain `textures` cache) so a layer-2 normal map
-                // that's also used as *some* material's primary normal map is decoded/embedded
-                // only once (§7/§11: "fix the double-embedding of the 3 normal maps used as
-                // layer-2 normals").
-                layer_json.insert("layer2NormalTexture".into(), json!(normal_idx));
+                insert_loaded(&mut layer_json, "layer2Normal", loaded, None);
             }
             if let Some(p) = &layers.blend_modulation
-                && let Some(idx) = self.get_texture(p, TextureRole::Mask)
+                && let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
             {
-                layer_json.insert("blendModulationTexture".into(), json!(idx));
+                insert_loaded(&mut layer_json, "blendModulation", loaded, None);
             }
             layer_json.insert("formula".into(), json!(material::LAYER_BLEND_FORMULA));
             extras.insert("layers".into(), Value::Object(layer_json));
         }
 
+        // `s6f3a6_native_tex.md` change item 5's fix: `g_tColor2`/`g_tNormal2` are now resolved
+        // (previously dropped entirely for every `csgo_environment_blend` material) -- see
+        // `EnvLayer2`'s own doc comment for why the viewer doesn't mix this layer in yet.
+        if let Some(env2) = &resolved.env_layer2 {
+            let mut env_json = serde_json::Map::new();
+            if let Some(p) = &env2.color2
+                && let Some(loaded) = self.get_texture(p, TextureRole::Color, ColorSpace::Srgb)
+            {
+                insert_loaded(&mut env_json, "color2", loaded, Some(ColorSpace::Srgb));
+            }
+            if let Some(p) = &env2.normal2
+                && let Some(loaded) = self.get_texture(p, TextureRole::Normal, ColorSpace::Linear)
+            {
+                insert_loaded(&mut env_json, "normal2", loaded, None);
+            }
+            if !env_json.is_empty() {
+                env_json.insert(
+                    "note".into(),
+                    json!(
+                        "g_tColor2/g_tNormal2 data only -- the blend-weight source for \
+                         csgo_environment_blend wasn't identified within the F3a-6 survey scope \
+                         (REPORT.md item 5 only flagged the missing textures, not the mix \
+                         formula), so the viewer does not mix this layer in yet; exported so a \
+                         follow-up can wire it without a second export"
+                    ),
+                );
+                extras.insert("envLayer2".into(), Value::Object(env_json));
+            }
+        }
+
         // §7: AO/metalness/roughness aren't part of glTF's metallic-roughness texture (that would
         // need resampling AO/roughness/metalness to one shared resolution first); each stays its
-        // own texture index instead, same as `extras.layers` above.
+        // own texture reference instead, same as `extras.layers` above.
         if let Some(ao_path) = &resolved.ao_texture
-            && let Some(idx) = self.get_texture(ao_path, TextureRole::Mask)
+            && let Some(loaded) = self.get_texture(ao_path, TextureRole::Mask, ColorSpace::Linear)
         {
-            extras.insert("aoTexture".into(), json!(idx));
+            insert_loaded(&mut extras, "ao", loaded, None);
             extras.insert("aoChannel".into(), json!("r"));
         }
         match &resolved.metalness {
             MetalnessSource::Texture(p) => {
-                if let Some(idx) = self.get_texture(p, TextureRole::Mask) {
-                    extras.insert("metalnessTexture".into(), json!(idx));
+                if let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear) {
+                    insert_loaded(&mut extras, "metalness", loaded, None);
                     // complex.frag.slang:604: `mat.Metalness = metalnessTexture.g` -- channel G,
                     // not R (unlike `g_tAmbientOcclusion`).
                     extras.insert("metalnessChannel".into(), json!("g"));
@@ -470,13 +435,15 @@ impl<'a> Ctx<'a> {
                 extras.insert("metalnessValue".into(), json!(v));
             }
         }
-        if let Some(idx) = roughness_texture_index {
-            extras.insert("roughnessTexture".into(), json!(idx));
-            extras.insert("roughnessChannel".into(), json!("r"));
-            extras.insert(
-                "roughnessSource".into(),
-                json!("normal map alpha after HemiOct decode (transform.rs:decode_hemi_oct; \"packed roughness\" moves b->a)"),
-            );
+        if let Some(si) = &resolved.self_illum
+            && let Some(loaded) =
+                self.get_texture(&si.texture, TextureRole::Color, ColorSpace::Srgb)
+        {
+            insert_loaded(&mut extras, "selfIllum", loaded, Some(ColorSpace::Srgb));
+            extras.insert("selfIllumScale".into(), json!(si.scale));
+            extras.insert("selfIllumBrightness".into(), json!(si.brightness));
+            extras.insert("selfIllumTint".into(), json!(si.tint));
+            extras.insert("selfIllumAlbedoFactor".into(), json!(si.albedo_factor));
         }
         extras.insert(
             "noSpecularAtFullRoughness".into(),
@@ -496,6 +463,32 @@ impl<'a> Ctx<'a> {
         }
         self.gltf_materials.insert(key, index);
         Some(index)
+    }
+}
+
+/// Inserts either `"{key}Texture": <render.json textures[] index>` or, for a 4x4-constant source
+/// (`native_texture::Loaded::Constant`), `"{key}Constant": [r,g,b,a]` (the pre-codec bytes a real
+/// texture sample would be in) plus `"{key}ConstantCodec"` (and, when `color_space` is given,
+/// `"{key}ConstantColorSpace"`) -- so the viewer runs the exact same per-texel decode on a constant
+/// as it would on a sampled texel, rather than this exporter duplicating that decode
+/// (`native_texture::Loaded`'s own doc comment).
+fn insert_loaded(
+    extras: &mut serde_json::Map<String, Value>,
+    key: &str,
+    loaded: Loaded,
+    color_space: Option<ColorSpace>,
+) {
+    match loaded {
+        Loaded::Texture(idx) => {
+            extras.insert(format!("{key}Texture"), json!(idx));
+        }
+        Loaded::Constant { raw, codec } => {
+            extras.insert(format!("{key}Constant"), json!(raw));
+            extras.insert(format!("{key}ConstantCodec"), json!(codec.as_str()));
+            if let Some(cs) = color_space {
+                extras.insert(format!("{key}ConstantColorSpace"), json!(cs.as_str()));
+            }
+        }
     }
 }
 
@@ -1828,18 +1821,13 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
 
     let mut ctx = Ctx {
         sources,
-        budget: TextureBudget {
-            max_side: options.max_texture,
-            jpeg_quality: options.jpeg_quality,
-        },
+        max_texture: options.max_texture,
         builder: GltfBuilder::new(),
         models: HashMap::new(),
         raw_materials: HashMap::new(),
         resolved_materials: HashMap::new(),
         gltf_materials: HashMap::new(),
-        textures: HashMap::new(),
-        normal_pairs: HashMap::new(),
-        image_hashes: HashMap::new(),
+        tex_catalog: TextureCatalog::default(),
         meshes: HashMap::new(),
         probe_geometries: HashMap::new(),
         probe_volumes,
@@ -1928,9 +1916,12 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
     let node_count = ctx.builder.node_count();
     let mesh_count = ctx.builder.mesh_count();
     let material_count = ctx.builder.material_count();
-    let texture_count = ctx.builder.texture_count();
+    // §7: material textures no longer live in the glb at all (`ctx.builder`'s own image/texture
+    // arrays are always empty now) -- these come from the native catalog's `render_tex/*.bin`
+    // files instead.
+    let texture_count = ctx.tex_catalog.count();
     let geometry_bytes = ctx.builder.geometry_bytes();
-    let texture_bytes = ctx.builder.texture_bytes();
+    let texture_bytes = ctx.tex_catalog.total_bytes();
     let position_float_fallback_meshes = ctx.builder.position_float_fallback_meshes();
 
     let sun_json = sun.as_ref().map(|s| {
@@ -2058,31 +2049,23 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         .collect();
     entity_table.sort_by(|a, b| a["classname"].as_str().cmp(&b["classname"].as_str()));
 
-    let normal_budget = TextureRole::Normal.budget(ctx.budget);
-    let mask_max_side = TextureRole::Mask.budget(ctx.budget).max_side;
-    let bytes_by_role = |role: TextureRole| {
-        ctx.report
-            .texture_bytes_by_role
-            .get(&role)
-            .copied()
-            .unwrap_or(0)
-    };
     let report = json!({
-        "formatVersion": 2,
+        "formatVersion": 3,
         "textureBudget": {
             "maxSide": options.max_texture,
-            "jpegQuality": options.jpeg_quality,
             "byType": {
-                "color": { "maxSide": options.max_texture, "jpegQuality": options.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Color), "note": "base color, layer-2 color" },
-                "normal": { "maxSide": normal_budget.max_side, "jpegQuality": normal_budget.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Normal), "note": "normal map RGB (HemiOct decoded to XYZ); measured error at the full 1024 budget is in texture.rs's own doc comment -- this map used the smaller secondary budget instead (s6f3a5_size.md's per-type table allows normals 512-1024)" },
-                "mask": { "maxSide": mask_max_side, "jpegQuality": options.jpeg_quality, "embeddedBytes": bytes_by_role(TextureRole::Mask), "note": "AO, metalness, blend modulation, tint mask, and the roughness channel split from a normal map's alpha (downsampled from the normal's own decode, not decoded separately) -- s6f3a5_size.md change item 2" },
+                "color": { "maxSide": TextureRole::Color.max_side(options.max_texture), "note": "base color, layer-2/env-layer-2 color, self-illum" },
+                "normal": { "maxSide": TextureRole::Normal.max_side(options.max_texture), "note": "normal map (HemiOct RG + roughness in B), layer-2/env-layer-2 normal" },
+                "mask": { "maxSide": TextureRole::Mask.max_side(options.max_texture), "note": "AO, metalness, blend modulation, tint mask" },
             },
             "dedup": {
-                "meaning": "textures whose encoded bytes hash the same as an earlier one (different vtex path, or the same texture reused in a different role) are embedded once and reused (s6f3a5_size.md change item 3)",
-                "hits": ctx.report.texture_dedup_hits,
-                "bytesSaved": ctx.report.texture_dedup_bytes_saved,
+                "meaning": "a texture whose raw multi-level blob hashes the same as an earlier one (different vtex path, or the same texture reused in a different role at the same base mip level) is written to render_tex/ once and reused (s6f3a6_native_tex.md change item 1's 'по пути+L, затем по SHA-256 содержимого')",
+                "hits": ctx.tex_catalog.dedup_hits(),
+                "bytesSaved": ctx.tex_catalog.dedup_bytes_saved(),
             },
         },
+        "textures": ctx.tex_catalog.textures_json(),
+        "texturesMeaning": "raw, still block-compressed (or, for the one RGBA8888 texture on de_inferno, uncompressed) mip levels straight out of the game's own vtex_c, largest mip first, in render_tex/<sha12>.bin (s6f3a6_native_tex.md); format is BC7/BC1(=DXT1)/BC4(=ATI1N)/RGBA8, colorSpace is srgb/linear as decided by the shader PARAMETER this texture was read through (not by the texture itself -- the same vtex_c could in principle be srgb in one slot and linear in another, though no texture on either surveyed map actually is), codec is the post-sample decode the viewer's shader must run (hemiOct/dxt5nm/ycocg/reconstructZ/none); each level's {width,height,offset,length} indexes straight into the file's bytes. Materials reference these by index from extras (baseColorTexture, normalTexture, aoTexture, ...) rather than glTF's own textures[]/images[], which this exporter no longer populates at all (change item 7) -- a 4x4 single-mip source is instead folded into the material as a Constant (see extras' own *Constant/*ConstantCodec keys)",
         "geometryCompression": {
             "extensionsRequired": ["KHR_mesh_quantization", "KHR_meshopt_compression"],
             "position": "SHORT (unnormalized) VEC3 -- a single power-of-two step (1/16 unit) shared by every mesh, with each mesh's own offset snapped to a multiple of that step and baked into its instance node's own matrix (composed with its placement transform); a vertex shared by two meshes therefore decodes to the same world position from both. Not normalized: KHR_mesh_quantization's own implementation note prefers unnormalized SHORT for POSITION. A mesh whose coordinates would overflow the SHORT range falls back to plain FLOAT VEC3 (positionFloatFallbackMeshes below counts these)",
@@ -2126,7 +2109,8 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         },
         "entities": entity_table,
         "materialExtras": {
-            "tintColorSpace": "linear (extras.tint is sRGB->linear converted, same as baseColorFactor; extras.layers/extras.tintMask hold glTF texture indices, not colors)",
+            "tintColorSpace": "linear (extras.tint is sRGB->linear converted, same as baseColorFactor)",
+            "textureRefMeaning": "every *Texture key (baseColorTexture, normalTexture, aoTexture, metalnessTexture, layers.layer2ColorTexture, ...) is an index into this file's top-level textures[], never a glTF texture/image index (this exporter writes neither); a 4x4 single-mip source instead appears as the sibling *Constant key (raw pre-codec RGBA8 bytes) plus *ConstantCodec (and, for a color-space-sensitive slot, *ConstantColorSpace) -- see textures[]/texturesMeaning and native_texture::Loaded's doc comment",
             "byMaterial": ctx.report.material_extras.iter().map(|(k,v)| (k.to_string(), v.clone())).collect::<serde_json::Map<_,_>>(),
         },
         "lighting": {
@@ -2152,6 +2136,9 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         extensions_used,
         json!({}),
     )?;
+    // Every material texture's render_tex/<sha12>.bin (§1/§7) -- `report` above already read
+    // everything it needs from `ctx.tex_catalog` by reference, so consuming it here is safe.
+    extra_files.extend(ctx.tex_catalog.into_files());
 
     Ok(ExportResult {
         glb,
@@ -2245,15 +2232,13 @@ mod tests {
     fn empty_ctx(sources: &Sources) -> Ctx<'_> {
         Ctx {
             sources,
-            budget: TextureBudget::default(),
+            max_texture: ExportOptions::default().max_texture,
             builder: GltfBuilder::new(),
             models: HashMap::new(),
             raw_materials: HashMap::new(),
             resolved_materials: HashMap::new(),
             gltf_materials: HashMap::new(),
-            textures: HashMap::new(),
-            normal_pairs: HashMap::new(),
-            image_hashes: HashMap::new(),
+            tex_catalog: TextureCatalog::default(),
             meshes: HashMap::new(),
             probe_geometries: HashMap::new(),
             probe_volumes: Vec::new(),

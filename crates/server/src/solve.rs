@@ -74,7 +74,7 @@ const MIN_AREA_AREA: f64 = 1.0;
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 10;
+const CACHE_VERSION: u32 = 11;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -112,6 +112,10 @@ pub struct LineupJson {
     #[serde(rename = "flightTime")]
     pub flight_time: f32,
     pub stability: f32,
+    /// `s6l_aim_precision.md`: the 5-probe stability at the reference ±0.6° window around the
+    /// chosen aim, even in precise mode - equals `stability` outside precise mode.
+    #[serde(rename = "stabilityWide")]
+    pub stability_wide: f32,
     pub scatter: f32,
     pub pin: Option<&'static str>,
     #[serde(rename = "wallGap")]
@@ -205,6 +209,7 @@ pub fn json_payload(
                     bounces: l.bounces,
                     flight_time: l.flight_time,
                     stability: l.stability,
+                    stability_wide: l.stability_wide,
                     scatter: l.rest_scatter,
                     pin: match rl.pin {
                         2 => Some("corner"),
@@ -392,6 +397,16 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
         && !fine.is_boolean()
     {
         return Some("fineScan must be a boolean".to_string());
+    }
+    // `s6l_aim_precision.md`: opt-in precision mode.
+    if let Some(precision) = query.get("aimPrecision")
+        && !precision.is_null()
+    {
+        let lower = precision.as_str().map(|s| s.to_ascii_lowercase());
+        match lower.as_deref() {
+            Some("precise") | Some("normal") => {}
+            _ => return Some("aimPrecision must be \"precise\" or \"normal\"".to_string()),
+        }
     }
     if let Some(types) = query.get("types") {
         let ok = types.as_array().is_some_and(|a| {
@@ -740,6 +755,14 @@ pub fn query_cache_key(
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| s == "corner" || s == "wall")
         .unwrap_or_else(|| "none".to_string());
+    // `s6l_aim_precision.md`: `aimPrecision` changes the verify aim-window step/reach and turns on
+    // `stability_wide`, same idiom as `pin_key`.
+    let precision_key = query
+        .get("aimPrecision")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| s == "precise")
+        .unwrap_or_else(|| "normal".to_string());
     // `s6g_origin_area.md`: the polygon's own vertices (in order - a self-intersecting ring is a
     // different region than its reordered self, per the even-odd rule) at fixed precision, plus
     // its optional Z range; "none" when no `originArea` was given, same idiom as `origin` above.
@@ -807,7 +830,7 @@ pub fn query_cache_key(
     // live: `tolerance:80` and `tolerance:80.4`) collide on one cache file and answer from the
     // wrong query.
     let seed = format!(
-        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{pin_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
+        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{pin_key}|{precision_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
         i32::from(fine)
     );
     let digest = Sha256::digest(seed.as_bytes());
@@ -974,6 +997,11 @@ fn build_solve_query(
         Some(s) if s.eq_ignore_ascii_case("wall") => 1,
         _ => 0,
     };
+    // `s6l_aim_precision.md`: validated to "precise"/"normal"/absent-or-null already.
+    let precise_aim = query
+        .get("aimPrecision")
+        .and_then(Value::as_str)
+        .is_some_and(|s| s.eq_ignore_ascii_case("precise"));
 
     let q = SolveQuery {
         target,
@@ -993,6 +1021,7 @@ fn build_solve_query(
         exact_origin: scope == "exact",
         referee: false,
         origin_pin_min,
+        precise_aim,
     };
     (q, origin_click)
 }
@@ -1638,5 +1667,27 @@ mod tests {
         assert_ne!(none, wall);
         assert_ne!(none, corner);
         assert_ne!(wall, corner);
+    }
+
+    #[test]
+    fn cache_key_differs_by_aim_precision() {
+        let constants = ThrowConstants::default();
+        let normal = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0] }),
+            "attrs",
+            "none",
+        );
+        let precise = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0], "aimPrecision": "precise" }),
+            "attrs",
+            "none",
+        );
+        assert_ne!(normal, precise);
     }
 }

@@ -17,10 +17,12 @@ use crate::lineup::{Lineup, normalize_yaw};
 use crate::sweep::{self, ordinal_cmp, settled};
 use crate::zone::zone_lookup;
 
-/// `LineupSolver.cs:673` (`StepDeg`).
-const STEP_DEG: f32 = 0.6;
-/// `LineupSolver.cs:674` (`AimReach`).
-const AIM_REACH: i32 = 2;
+/// `LineupSolver.cs:673` (`StepDeg`); `VerifyOptions::step_deg`'s default. `pub(crate)` so
+/// `target.rs` can name the non-precise value explicitly next to its own `PRECISE_STEP_DEG`
+/// (`s6l_aim_precision.md`).
+pub(crate) const STEP_DEG: f32 = 0.6;
+/// `LineupSolver.cs:674` (`AimReach`); `VerifyOptions::aim_reach`'s default - see `STEP_DEG`.
+pub(crate) const AIM_REACH: i32 = 2;
 /// `LineupSolver.cs:675` (aim-window/stability offsets).
 const OFFSETS: [(i32, i32); 5] = [(0, 0), (-1, 0), (1, 0), (0, -1), (0, 1)];
 /// `LineupSolver.cs:100` (`ScatterOffsets`).
@@ -74,14 +76,15 @@ fn sim_at<C: Collider>(
     k: &ThrowConstants,
     eye: V3,
     lineup: &Lineup,
+    step_deg: f32,
     d_yaw: i32,
     d_pitch: i32,
 ) -> TrajectoryResult {
     *cache.entry((d_yaw, d_pitch)).or_insert_with(|| {
         let spec = ThrowSpec {
             eye,
-            yaw_deg: lineup.yaw_deg + d_yaw as f32 * STEP_DEG,
-            pitch_deg: lineup.pitch_deg + d_pitch as f32 * STEP_DEG,
+            yaw_deg: lineup.yaw_deg + d_yaw as f32 * step_deg,
+            pitch_deg: lineup.pitch_deg + d_pitch as f32 * step_deg,
             throw_type: lineup.throw_type,
             strength: lineup.strength,
             run_yaw_offset_deg: lineup.run_yaw_offset_deg,
@@ -97,6 +100,7 @@ fn stability_around<C: Collider>(
     k: &ThrowConstants,
     eye: V3,
     lineup: &Lineup,
+    step_deg: f32,
     grid: &VoxelGrid,
     zone_crossings: &HashMap<usize, i32>,
     aim_target: Option<V3>,
@@ -107,7 +111,7 @@ fn stability_around<C: Collider>(
 ) -> f32 {
     let mut hits = 0;
     for &(dy, dp) in &OFFSETS {
-        let r = sim_at(cache, collider, k, eye, lineup, cy + dy, cp + dp);
+        let r = sim_at(cache, collider, k, eye, lineup, step_deg, cy + dy, cp + dp);
         if settled(&r)
             && accepts(
                 grid,
@@ -140,6 +144,17 @@ pub struct VerifyOptions<'a, C: Collider> {
     /// candidate after it, since the flag does not clear) contributes
     /// nothing.
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    /// `s6l_aim_precision.md`: the aim-window/stability probe step, `STEP_DEG` (0.6) by default,
+    /// `0.2` in precise mode.
+    pub step_deg: f32,
+    /// `s6l_aim_precision.md`: the aim-window half-width in `step_deg` units, `AIM_REACH` (2) by
+    /// default, `4` in precise mode (a 9x9 lattice at `step_deg` 0.2, ±0.8°).
+    pub aim_reach: i32,
+    /// `s6l_aim_precision.md`: also compute the 5-probe stability at the reference ±0.6° step
+    /// around the final chosen aim and carry it as `Lineup::stability_wide` - set alongside a
+    /// precise `step_deg`/`aim_reach`, so a difficulty badge can tell a lineup that is only
+    /// precise-mode-stable from one that is stable even at the coarser reference window.
+    pub wide_stability: bool,
 }
 
 impl<C: Collider> Default for VerifyOptions<'_, C> {
@@ -153,6 +168,9 @@ impl<C: Collider> Default for VerifyOptions<'_, C> {
             collider_glass_gone: None,
             on_candidate: None,
             cancel: None,
+            step_deg: STEP_DEG,
+            aim_reach: AIM_REACH,
+            wide_stability: false,
         }
     }
 }
@@ -200,9 +218,18 @@ pub fn verify_exact<C: Collider>(
             let stability: f32;
             if let Some(goal) = opts.aim_target {
                 let mut in_window: Vec<(f32, i32, i32)> = Vec::new();
-                for d_yaw in -AIM_REACH..=AIM_REACH {
-                    for d_pitch in -AIM_REACH..=AIM_REACH {
-                        let r = sim_at(&mut cache, collider, k, eye, lineup, d_yaw, d_pitch);
+                for d_yaw in -opts.aim_reach..=opts.aim_reach {
+                    for d_pitch in -opts.aim_reach..=opts.aim_reach {
+                        let r = sim_at(
+                            &mut cache,
+                            collider,
+                            k,
+                            eye,
+                            lineup,
+                            opts.step_deg,
+                            d_yaw,
+                            d_pitch,
+                        );
                         if !settled(&r)
                             || !accepts(
                                 grid,
@@ -232,6 +259,7 @@ pub fn verify_exact<C: Collider>(
                         k,
                         eye,
                         lineup,
+                        opts.step_deg,
                         grid,
                         &zone_crossings,
                         opts.aim_target,
@@ -264,7 +292,7 @@ pub fn verify_exact<C: Collider>(
                 // sweep rest (never re-simulated, never re-checked against the exact area) once
                 // `settled_ok` below went false - require (0,0) to settle and accept on its own
                 // before taking the fast path, else fall through to the best-offset search.
-                let r0 = sim_at(&mut cache, collider, k, eye, lineup, 0, 0);
+                let r0 = sim_at(&mut cache, collider, k, eye, lineup, opts.step_deg, 0, 0);
                 let r0_ok = settled(&r0)
                     && accepts(
                         grid,
@@ -280,6 +308,7 @@ pub fn verify_exact<C: Collider>(
                     k,
                     eye,
                     lineup,
+                    opts.step_deg,
                     grid,
                     &zone_crossings,
                     opts.aim_target,
@@ -296,9 +325,18 @@ pub fn verify_exact<C: Collider>(
                     let mut best_score = f32::MAX;
                     let mut best_offset = (0i32, 0i32);
                     let mut found_any = false;
-                    for d_yaw in -AIM_REACH..=AIM_REACH {
-                        for d_pitch in -AIM_REACH..=AIM_REACH {
-                            let r = sim_at(&mut cache, collider, k, eye, lineup, d_yaw, d_pitch);
+                    for d_yaw in -opts.aim_reach..=opts.aim_reach {
+                        for d_pitch in -opts.aim_reach..=opts.aim_reach {
+                            let r = sim_at(
+                                &mut cache,
+                                collider,
+                                k,
+                                eye,
+                                lineup,
+                                opts.step_deg,
+                                d_yaw,
+                                d_pitch,
+                            );
                             if !settled(&r)
                                 || !accepts(
                                     grid,
@@ -329,6 +367,7 @@ pub fn verify_exact<C: Collider>(
                         k,
                         eye,
                         lineup,
+                        opts.step_deg,
                         grid,
                         &zone_crossings,
                         opts.aim_target,
@@ -347,7 +386,16 @@ pub fn verify_exact<C: Collider>(
                 }
             }
 
-            let best = sim_at(&mut cache, collider, k, eye, lineup, aim_yaw, aim_pitch);
+            let best = sim_at(
+                &mut cache,
+                collider,
+                k,
+                eye,
+                lineup,
+                opts.step_deg,
+                aim_yaw,
+                aim_pitch,
+            );
             let settled_ok = settled(&best)
                 && accepts(
                     grid,
@@ -365,8 +413,8 @@ pub fn verify_exact<C: Collider>(
                 report(false);
                 return None;
             }
-            let final_yaw = lineup.yaw_deg + aim_yaw as f32 * STEP_DEG;
-            let final_pitch = lineup.pitch_deg + aim_pitch as f32 * STEP_DEG;
+            let final_yaw = lineup.yaw_deg + aim_yaw as f32 * opts.step_deg;
+            let final_pitch = lineup.pitch_deg + aim_pitch as f32 * opts.step_deg;
 
             let mut rest_if_broken: Option<V3> = None;
             if settled_ok
@@ -409,6 +457,36 @@ pub fn verify_exact<C: Collider>(
                 }
             }
 
+            // `s6l_aim_precision.md`: precise mode's own ±`opts.step_deg` probes are what let a
+            // chaotic-landing lineup like this pass `min_stability` at all - `stability_wide`
+            // re-probes the same chosen aim at the reference ±`STEP_DEG` (0.6°) window so a caller
+            // can tell "stable only with a precise aim reference" from "stable even at the coarser
+            // window" (in normal mode `step_deg` already *is* `STEP_DEG`, so re-probing would just
+            // repeat `stability` - skip it and copy instead).
+            let stability_wide = if opts.wide_stability {
+                let mut at_final = *lineup;
+                at_final.yaw_deg = final_yaw;
+                at_final.pitch_deg = final_pitch;
+                let mut wide_cache: HashMap<(i32, i32), TrajectoryResult> = HashMap::new();
+                stability_around(
+                    &mut wide_cache,
+                    collider,
+                    k,
+                    eye,
+                    &at_final,
+                    STEP_DEG,
+                    grid,
+                    &zone_crossings,
+                    opts.aim_target,
+                    opts.tolerance,
+                    opts.area_accept,
+                    0,
+                    0,
+                )
+            } else {
+                stability
+            };
+
             let mut out = *lineup;
             out.yaw_deg = normalize_yaw(final_yaw);
             out.pitch_deg = final_pitch;
@@ -428,6 +506,7 @@ pub fn verify_exact<C: Collider>(
                 lineup.flight_time
             };
             out.stability = stability;
+            out.stability_wide = stability_wide;
             out.rest_scatter = scatter;
             out.glass_breaks = if settled_ok { best.glass_breaks } else { 0 };
             out.rest_if_broken = rest_if_broken;
@@ -747,6 +826,201 @@ mod tests {
             verified[0].stability < 1.0,
             "knife-edge zone should not survive every perturbation, got {}",
             verified[0].stability
+        );
+    }
+
+    /// `s6l_aim_precision.md`: `VerifyOptions::default()` must keep the exact pre-precision-mode
+    /// aim-window step/reach and never opt into `stability_wide` on its own.
+    #[test]
+    fn default_verify_options_keep_the_reference_step_reach_and_no_wide_stability() {
+        let opts: VerifyOptions<UniformGrid> = VerifyOptions::default();
+        assert_eq!(opts.step_deg, STEP_DEG);
+        assert_eq!(opts.aim_reach, AIM_REACH);
+        assert!(!opts.wide_stability);
+    }
+
+    /// `s6l_aim_precision.md`: default `VerifyOptions` (`step_deg`/`aim_reach` left at their
+    /// `Default::default()` values) must reproduce the pre-change behavior - checked against
+    /// values computed with no `VerifyOptions` involved at all (a direct `simulate_exact` call per
+    /// probe), not against a second `VerifyOptions` construction, so this cannot pass merely
+    /// because two option structs agree with each other.
+    #[test]
+    fn default_verify_options_reproduce_the_pre_change_explicit_constants() {
+        let (mesh, mask) = flat_plane(4000.0);
+        let collider = UniformGrid::build(&mesh, &mask, None, 128.0).unwrap();
+        let bounds = geom::math::Aabb {
+            min: V3::new(-4000.0, -4000.0, -8.0),
+            max: V3::new(4000.0, 4000.0, 512.0),
+        };
+        let grid = VoxelGrid::build(&mesh, &mask, 16.0, bounds).unwrap();
+        let k = ThrowConstants::default();
+
+        let feet = V3::new(0.0, 0.0, 0.0);
+        let eye = feet + V3::new(0.0, 0.0, sim::STAND_EYE_HEIGHT);
+        let spec = ThrowSpec {
+            eye,
+            yaw_deg: 0.0,
+            pitch_deg: -1.0,
+            throw_type: ThrowType::Stand,
+            strength: 1.0,
+            run_yaw_offset_deg: 0.0,
+        };
+        let exact = simulate_exact(&collider, &spec, &k, sim::Trace::default());
+        assert!(settled(&exact));
+        let lineup = Lineup::new(
+            feet,
+            0.0,
+            -1.0,
+            ThrowType::Stand,
+            exact.rest,
+            exact.bounces,
+            exact.flight_time,
+            1,
+        );
+        let narrow_zone = crate::zone::point_target_zone(&grid, exact.rest, 16.0);
+        let zone_crossings = zone_lookup(&narrow_zone);
+
+        let opts_default: VerifyOptions<UniformGrid> = VerifyOptions {
+            min_stability: 0.0,
+            constants: Some(&k),
+            ..Default::default()
+        };
+        let a = verify_exact(&grid, &collider, &narrow_zone, &[lineup], &opts_default);
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].yaw_deg, 0.0);
+        assert_eq!(a[0].pitch_deg, -1.0);
+        assert_eq!(a[0].rest_point, exact.rest);
+
+        // The reference 5-probe stability window: the base aim itself, plus the base yaw/pitch
+        // each nudged by the literal `STEP_DEG` (0.6) - computed independently of `VerifyOptions`
+        // or `sim_at`'s own cache, straight from `simulate_exact`.
+        let probe_offsets: [(f32, f32); 5] =
+            [(0.0, 0.0), (-0.6, 0.0), (0.6, 0.0), (0.0, -0.6), (0.0, 0.6)];
+        let hits = probe_offsets
+            .iter()
+            .filter(|&&(d_yaw, d_pitch)| {
+                let probe = ThrowSpec {
+                    eye,
+                    yaw_deg: d_yaw,
+                    pitch_deg: -1.0 + d_pitch,
+                    throw_type: ThrowType::Stand,
+                    strength: 1.0,
+                    run_yaw_offset_deg: 0.0,
+                };
+                let r = simulate_exact(&collider, &probe, &k, sim::Trace::default());
+                settled(&r) && in_zone(&grid, &zone_crossings, r.rest)
+            })
+            .count();
+        let expected_stability = hits as f32 / probe_offsets.len() as f32;
+        assert_eq!(a[0].stability, expected_stability);
+        assert_eq!(a[0].stability_wide, a[0].stability);
+    }
+
+    /// `s6l_aim_precision.md`: synthetic case where the reference ±0.6° probes miss a tight
+    /// landing zone (a near-horizontal, grazing throw is exactly the kind of high-sensitivity
+    /// aim the real window evidence describes) but precise mode's ±0.2° probes hit it. Uses a
+    /// `Target::Point`-style `aim_target`/`tolerance` (the real evidence's own `--tolerance 32`
+    /// query shape) rather than a cell-based zone, so the accept test is a plain continuous
+    /// distance check with no voxel-grid boundary effects to account for.
+    #[test]
+    fn precise_step_recovers_stability_a_coarser_probe_step_misses() {
+        let (mesh, mask) = flat_plane(4000.0);
+        let collider = UniformGrid::build(&mesh, &mask, None, 128.0).unwrap();
+        let bounds = geom::math::Aabb {
+            min: V3::new(-4000.0, -4000.0, -8.0),
+            max: V3::new(4000.0, 4000.0, 512.0),
+        };
+        let grid = VoxelGrid::build(&mesh, &mask, 16.0, bounds).unwrap();
+        let k = ThrowConstants::default();
+
+        let feet = V3::new(0.0, 0.0, 0.0);
+        let eye = feet + V3::new(0.0, 0.0, sim::STAND_EYE_HEIGHT);
+        let base_pitch = -1.0;
+        let spec_at = |pitch_deg: f32| ThrowSpec {
+            eye,
+            yaw_deg: 0.0,
+            pitch_deg,
+            throw_type: ThrowType::Stand,
+            strength: 1.0,
+            run_yaw_offset_deg: 0.0,
+        };
+        let exact = simulate_exact(&collider, &spec_at(base_pitch), &k, sim::Trace::default());
+        assert!(settled(&exact));
+        let lineup = Lineup::new(
+            feet,
+            0.0,
+            base_pitch,
+            ThrowType::Stand,
+            exact.rest,
+            exact.bounces,
+            exact.flight_time,
+            1,
+        );
+
+        // How far a reference-step (0.6 deg) vs a precise-step (0.2 deg) pitch nudge moves the
+        // rest point - the tolerance sits strictly between the two, so the reference step's probe
+        // falls outside it while the precise step's stays inside.
+        let coarse = simulate_exact(
+            &collider,
+            &spec_at(base_pitch + STEP_DEG),
+            &k,
+            sim::Trace::default(),
+        );
+        let precise_probe = simulate_exact(
+            &collider,
+            &spec_at(base_pitch + 0.2),
+            &k,
+            sim::Trace::default(),
+        );
+        assert!(settled(&coarse) && settled(&precise_probe));
+        let d_coarse = (coarse.rest - exact.rest).length();
+        let d_precise = (precise_probe.rest - exact.rest).length();
+        assert!(
+            d_precise < d_coarse,
+            "a smaller probe step should move the rest point less: {d_precise} vs {d_coarse}"
+        );
+        let tolerance = (d_coarse + d_precise) / 2.0;
+
+        let opts_coarse: VerifyOptions<UniformGrid> = VerifyOptions {
+            min_stability: 0.0,
+            constants: Some(&k),
+            aim_target: Some(exact.rest),
+            tolerance: Some(tolerance),
+            ..Default::default()
+        };
+        let coarse_verified = verify_exact(&grid, &collider, &[], &[lineup], &opts_coarse);
+        assert_eq!(coarse_verified.len(), 1);
+        assert!(
+            coarse_verified[0].stability < 0.8,
+            "the reference 0.6 deg probes should not all land inside so tight a tolerance, got {}",
+            coarse_verified[0].stability
+        );
+
+        let opts_precise: VerifyOptions<UniformGrid> = VerifyOptions {
+            min_stability: 0.0,
+            constants: Some(&k),
+            aim_target: Some(exact.rest),
+            tolerance: Some(tolerance),
+            step_deg: 0.2,
+            aim_reach: 4,
+            wide_stability: true,
+            ..Default::default()
+        };
+        let precise_verified = verify_exact(&grid, &collider, &[], &[lineup], &opts_precise);
+        assert_eq!(precise_verified.len(), 1);
+        assert!(
+            precise_verified[0].stability > coarse_verified[0].stability,
+            "the precise 0.2 deg probes should land inside the tolerance more reliably, got {} vs coarse {}",
+            precise_verified[0].stability,
+            coarse_verified[0].stability
+        );
+        // Both the coarse run's own `stability` and the precise run's `stability_wide` are the
+        // same ±0.6 deg 5-probe stability around the same (unmoved, `min_stability: 0.0` keeps the
+        // closest-to-goal offset (0,0) since `exact.rest` itself is the aim target) final aim -
+        // they must agree.
+        assert_eq!(
+            precise_verified[0].stability_wide,
+            coarse_verified[0].stability
         );
     }
 

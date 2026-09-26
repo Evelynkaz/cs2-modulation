@@ -17,6 +17,10 @@ pub struct Lineup {
     pub flight_time: f32,
     pub rest_crossings: i32,
     pub stability: f32,
+    /// `s6l_aim_precision.md`: the 5-probe stability at the reference ±0.6° window around the
+    /// chosen aim, even when the lineup was found/verified with a finer precise-mode step; equals
+    /// `stability` outside precise mode.
+    pub stability_wide: f32,
     pub strength: f32,
     /// Movement-key direction of a running jump throw relative to the
     /// facing; 0 for every grounded/W throw.
@@ -38,8 +42,9 @@ pub struct Lineup {
 impl Lineup {
     /// A `Lineup` with every reference-default field (`Stability: 0f,
     /// Strength: 1f, RunYawOffsetDeg: 0f, RestScatter: 0f, DirectLos: false,
-    /// GlassBreaks: 0, RestIfBroken: null`) except the ones every caller
-    /// must supply.
+    /// GlassBreaks: 0, RestIfBroken: null`), plus `StabilityWide: 0f`
+    /// (`s6l_aim_precision.md`, not in the reference), except the ones every
+    /// caller must supply.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         feet: V3,
@@ -61,6 +66,7 @@ impl Lineup {
             flight_time,
             rest_crossings,
             stability: 0.0,
+            stability_wide: 0.0,
             strength: 1.0,
             run_yaw_offset_deg: 0.0,
             rest_scatter: 0.0,

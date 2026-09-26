@@ -206,6 +206,10 @@ enum Command {
         /// single wall.
         #[arg(long)]
         pin: Option<String>,
+        /// Narrow the aim re-verify search/probe step from 0.6°/±2 steps to 0.2°/±4 steps (±0.8°)
+        /// and also report `stability_wide`, the same 5-probe stability at the coarser 0.6° window.
+        #[arg(long)]
+        precise: bool,
         /// Also run the exhaustive exact-spot referee (exact-origin solves only).
         #[arg(long)]
         referee: bool,
@@ -558,6 +562,7 @@ fn run() -> anyhow::Result<u8> {
             broken,
             spawns,
             pin,
+            precise,
             referee,
             top,
             json,
@@ -578,6 +583,7 @@ fn run() -> anyhow::Result<u8> {
             broken.as_deref(),
             spawns.as_deref(),
             pin.as_deref(),
+            precise,
             referee,
             top,
             json.as_deref(),

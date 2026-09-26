@@ -226,6 +226,7 @@ pub fn solve(
     broken_spec: Option<&str>,
     spawns_spec: Option<&str>,
     pin_spec: Option<&str>,
+    precise_aim: bool,
     referee: bool,
     top: usize,
     json_out: Option<&Path>,
@@ -400,6 +401,7 @@ pub fn solve(
         exact_origin: exact,
         referee,
         origin_pin_min,
+        precise_aim,
     };
     let constants = resolve_constants(constants_path)?;
     let cancel = AtomicBool::new(false);
@@ -475,7 +477,7 @@ pub fn solve(
             + (l.rest_point.y - solve.target.y).powi(2))
         .sqrt();
         println!(
-            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}",
+            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} stability_wide {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}",
             i + 1,
             rl.console,
             rl.describe,
@@ -486,6 +488,7 @@ pub fn solve(
             l.bounces,
             l.flight_time,
             l.stability,
+            l.stability_wide,
             l.rest_scatter,
             rl.human_error,
             rl.pin,

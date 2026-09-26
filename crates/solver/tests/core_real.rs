@@ -177,6 +177,7 @@ fn de_mirage_bombsite_a_sweep_and_verify() {
         collider_glass_gone: None,
         on_candidate: None,
         cancel: None,
+        ..Default::default()
     };
     let start = Instant::now();
     let verified =

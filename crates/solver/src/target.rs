@@ -37,6 +37,12 @@ const TARGET_FLOOR_DROP: f32 = 96.0;
 /// `TargetSolver.cs:142` (`voxelSize`), hardcoded independently of the
 /// caller's own `--voxel` option.
 const VOXEL_SIZE: f32 = 16.0;
+/// `s6l_aim_precision.md`: `q.precise_aim`'s aim-window step, in place of
+/// `verify::VerifyOptions`'s default (`STEP_DEG` 0.6°).
+const PRECISE_STEP_DEG: f32 = 0.2;
+/// `s6l_aim_precision.md`: `q.precise_aim`'s aim-window half-width, in place of
+/// `verify::VerifyOptions`'s default (`AIM_REACH` 2) - a 9x9 lattice, ±0.8°.
+const PRECISE_AIM_REACH: i32 = 4;
 
 /// `Target::Area`'s per-`(origin, throw kind)` sweep bucket depth - see `keep_per_bucket` on
 /// `sweep::SweepOptions` and the round-based verify loop below. 32, not a smaller depth: a
@@ -370,6 +376,11 @@ pub struct SolveQuery {
     /// [`origins::position_pin`]'s own 0/1/2 scale. Skipped for an exact origin click
     /// (`exact_origin && origin_click.is_some()`), which is an explicit user spot.
     pub origin_pin_min: u8,
+    /// `s6l_aim_precision.md`: opt-in precision mode - narrows `verify::VerifyOptions`'s aim-window
+    /// search/probe step from `STEP_DEG`/`AIM_REACH` (0.6°, ±2 steps) to 0.2°/±4 steps (±0.8°),
+    /// and turns on `stability_wide` (the same 5-probe stability re-measured at the reference
+    /// 0.6° window). `false` (the default) must reproduce the pre-existing behavior byte-for-byte.
+    pub precise_aim: bool,
 }
 
 impl Default for SolveQuery {
@@ -396,6 +407,7 @@ impl Default for SolveQuery {
             exact_origin: false,
             referee: false,
             origin_pin_min: 0,
+            precise_aim: false,
         }
     }
 }
@@ -1515,6 +1527,17 @@ pub fn solve_for_target(
         collider_glass_gone: collider_glass_gone.as_ref(),
         on_candidate: hooks.on_candidate,
         cancel: Some(cancel),
+        step_deg: if q.precise_aim {
+            PRECISE_STEP_DEG
+        } else {
+            verify::STEP_DEG
+        },
+        aim_reach: if q.precise_aim {
+            PRECISE_AIM_REACH
+        } else {
+            verify::AIM_REACH
+        },
+        wide_stability: q.precise_aim,
     };
     let mut verified = match &area_buckets {
         Some(buckets) => {

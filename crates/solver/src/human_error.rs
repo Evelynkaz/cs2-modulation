@@ -66,7 +66,13 @@ pub fn estimate(
         + (1.0 - stability.clamp(0.0, 1.0)) * FRAGILITY_ERROR
 }
 
-/// `HumanError.cs:69-70` (`Estimate(Lineup, pin, band)`).
+/// `HumanError.cs:69-70` (`Estimate(Lineup, pin, band)`). Uses `stability_wide`, not `stability`
+/// (`s6l_aim_precision.md`, not in the reference): in precise mode `stability` is measured at the
+/// narrower ±0.2° probe, so ranking by it would reward a lineup for surviving a tighter window it
+/// was only ever asked to clear because precise mode was on, not because it is actually more
+/// fragile to throw by hand - `stability_wide` is always the same ±0.6° reference-window measure
+/// regardless of mode, and equals `stability` outside precise mode, so normal-mode ranking is
+/// unaffected.
 pub fn estimate_lineup(l: &Lineup, pin: i32, band: i32) -> f32 {
     let dx = l.feet.x - l.rest_point.x;
     let dy = l.feet.y - l.rest_point.y;
@@ -77,13 +83,14 @@ pub fn estimate_lineup(l: &Lineup, pin: i32, band: i32) -> f32 {
         horizontal_distance,
         l.throw_type,
         l.rest_scatter,
-        l.stability,
+        l.stability_wide,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use geom::math::V3;
 
     #[test]
     fn position_error_by_pin() {
@@ -130,6 +137,28 @@ mod tests {
         );
         let expected = 24.0 + 100.0 * (5.0f32.to_radians()).tan() + 16.0 + 20.0 + 12.0;
         assert!((e - expected).abs() < 1e-4);
+    }
+
+    /// `s6l_aim_precision.md`: `estimate_lineup` must key off `stability_wide`, not `stability` -
+    /// a lineup that only clears precise mode's own narrower probe (`stability` 1.0) but is
+    /// fragile at the reference ±0.6° window (`stability_wide` 0.4) must rank as more error-prone
+    /// than one that is stable at both.
+    #[test]
+    fn estimate_lineup_keys_off_stability_wide_not_stability() {
+        let mut fragile = Lineup::new(V3::ZERO, 0.0, 0.0, ThrowType::Stand, V3::ZERO, 0, 0.0, 1);
+        fragile.stability = 1.0;
+        fragile.stability_wide = 0.4;
+
+        let mut sturdy = fragile;
+        sturdy.stability = 1.0;
+        sturdy.stability_wide = 1.0;
+
+        let fragile_err = estimate_lineup(&fragile, 0, 0);
+        let sturdy_err = estimate_lineup(&sturdy, 0, 0);
+        assert!(
+            fragile_err > sturdy_err,
+            "stability_wide 0.4 should cost more than 1.0, got {fragile_err} vs {sturdy_err}"
+        );
     }
 
     #[test]

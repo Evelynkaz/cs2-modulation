@@ -382,9 +382,13 @@ function renderProgressBox() {
   return { box, label, barSpan };
 }
 
-// Which of `extract`/`standspots`/`viewerdata` a map still needs, in run order. "Подготовить"
-// only runs these - not the ones it already has - so a machine missing only the radar (say, the
-// CS2 install is gone) still gets the radar instead of failing at `extract`.
+// Which of `extract`/`standspots`/`viewerdata`/`render` a map still needs, in run order.
+// "Подготовить" only runs these - not the ones it already has - so a machine missing only the
+// radar (say, the CS2 install is gone) still gets the radar instead of failing at `extract`.
+// `render` (`s6i_render_job_areas3d.md`: "одной кнопкой получает всё... И 3D-файлы карты") joins
+// the chain here only for a map that isn't otherwise ready yet; a map already ready for 2D but
+// still missing 3D keeps its "Открыть" button here - it gets a dedicated "Подготовить 3D" button
+// on the map screen instead (`showMapScreen`'s 3D toggle).
 function missingKinds(m) {
   const kinds = [];
   if (!m.hasLineups) {
@@ -395,6 +399,9 @@ function missingKinds(m) {
   }
   if (!m.hasRadar) {
     kinds.push("viewerdata");
+  }
+  if (!hasUsableRender(m)) {
+    kinds.push("render");
   }
   return kinds;
 }
@@ -836,11 +843,24 @@ async function showMapScreen(map, opts = {}) {
   // exists and says this map actually has the data for it (`sceneView.isLightingSupported()`).
   const lightingBtn = el("button", { type: "button", textContent: strings.view3d.lightingSimple, hidden: true });
   const view3dStatus = el("span", { className: "hint" });
+  // `s6i_render_job_areas3d.md` change item 2: a map already ready for 2D but still missing a
+  // usable 3D export gets this button in place of the plain "нет 3D-данных" message, instead of
+  // sending the user back to the map list (whose own "Подготовить" only appears while *something*
+  // 2D is still missing too - see `missingKinds`). Hidden until `switchViewMode` finds it needed.
+  const prepare3dBtn = el("button", { type: "button", className: "primary", textContent: strings.view3d.prepareButton, hidden: true });
+  const {
+    box: render3dProgressBox,
+    label: render3dProgressLabel,
+    barSpan: render3dBarSpan,
+  } = renderProgressBox();
+  const render3dCancelBtn = el("button", { type: "button", textContent: strings.maps.cancelButton, hidden: true });
   const viewToolbar = el(
     "div",
     { className: "view-toolbar" },
     el("div", { className: "field-row", role: "group", "aria-label": "2D/3D" }, toggle2dBtn, toggle3dBtn, collisionsBtn, cameraModeBtn, lightingBtn),
     view3dStatus,
+    el("div", { className: "field-row" }, prepare3dBtn, render3dCancelBtn),
+    render3dProgressBox,
   );
 
   // RED-1: params is the tallest box by far - it goes last, collapsed, so target/run/results
@@ -920,6 +940,24 @@ async function showMapScreen(map, opts = {}) {
   // (`s6f3b_viewer3d.md`: "состояние общее").
   function views() {
     return [mapView, sceneView].filter(Boolean);
+  }
+
+  // `s6i_render_job_areas3d.md` change item 3: keeps the 3D view's own area prisms in sync with
+  // the 2D tool's polygon and height range - called after anything that changes
+  // `solveState.originArea`/`targetArea` or their z fields. A no-op before a 3D view exists;
+  // `ensureSceneView` replays the current state for both keys once it's created.
+  function updateSceneArea(key) {
+    if (!sceneView) {
+      return;
+    }
+    const area = key === "origin" ? solveState.originArea : solveState.targetArea;
+    if (!area) {
+      sceneView.clearArea(key);
+      return;
+    }
+    const zMin = key === "origin" ? solveState.params.areaZMin : solveState.params.targetAreaZMin;
+    const zMax = key === "origin" ? solveState.params.areaZMax : solveState.params.targetAreaZMax;
+    sceneView.setArea(key, area.polygon, zMin, zMax);
   }
 
   // AMBER-12: a right-click origin must be reflected in the "where to throw from" select, not
@@ -1056,6 +1094,7 @@ async function showMapScreen(map, opts = {}) {
     areaDraftCount = 0;
     areaLevels = null;
     mapView.setArea("origin", null);
+    updateSceneArea("origin");
     if (areaMode) {
       areaMode = false;
       mapView.setAreaMode("origin", false);
@@ -1110,6 +1149,7 @@ async function showMapScreen(map, opts = {}) {
     targetAreaDraftCount = 0;
     targetAreaLevels = null;
     mapView.setArea("target", null);
+    updateSceneArea("target");
     if (targetAreaMode) {
       targetAreaMode = false;
       mapView.setAreaMode("target", false);
@@ -1367,17 +1407,20 @@ async function showMapScreen(map, opts = {}) {
     areaZMinInput.addEventListener("input", () => {
       const v = parseFloat(areaZMinInput.value);
       solveState.params.areaZMin = Number.isFinite(v) ? v : null;
+      updateSceneArea("origin");
     });
     const areaZMaxInput = el("input", { id: "area-zmax", type: "number", placeholder: "-", value: solveState.params.areaZMax ?? "" });
     areaZMaxInput.addEventListener("input", () => {
       const v = parseFloat(areaZMaxInput.value);
       solveState.params.areaZMax = Number.isFinite(v) ? v : null;
+      updateSceneArea("origin");
     });
     const areaLevelButtons = renderAreaLevelButtons(areaLevels, (zMin, zMax) => {
       areaZMinInput.value = zMin;
       areaZMaxInput.value = zMax;
       solveState.params.areaZMin = zMin;
       solveState.params.areaZMax = zMax;
+      updateSceneArea("origin");
     });
     paramsContent.append(
       el("p", { textContent: strings.solveParams.areaLabel }),
@@ -1577,17 +1620,20 @@ async function showMapScreen(map, opts = {}) {
     zMinInput.addEventListener("input", () => {
       const v = parseFloat(zMinInput.value);
       solveState.params.targetAreaZMin = Number.isFinite(v) ? v : null;
+      updateSceneArea("target");
     });
     const zMaxInput = el("input", { id: "target-area-zmax", type: "number", placeholder: "-", value: solveState.params.targetAreaZMax ?? "" });
     zMaxInput.addEventListener("input", () => {
       const v = parseFloat(zMaxInput.value);
       solveState.params.targetAreaZMax = Number.isFinite(v) ? v : null;
+      updateSceneArea("target");
     });
     const targetAreaLevelButtons = renderAreaLevelButtons(targetAreaLevels, (zMin, zMax) => {
       zMinInput.value = zMin;
       zMaxInput.value = zMax;
       solveState.params.targetAreaZMin = zMin;
       solveState.params.targetAreaZMax = zMax;
+      updateSceneArea("target");
     });
     targetBox.append(
       el("p", { className: "hint", textContent: strings.solveParams.targetAreaHint }),
@@ -1846,11 +1892,79 @@ async function showMapScreen(map, opts = {}) {
     if (solveState.origin) {
       sceneView.setOrigin(solveState.origin);
     }
+    updateSceneArea("origin");
+    updateSceneArea("target");
     sceneView.setLineups(lastLineups);
     if (lastSelectedId) {
       sceneView.setSelected(lastSelectedId);
     }
     return sceneView;
+  }
+
+  // `s6i_render_job_areas3d.md` change item 2: whether `switchViewMode("3d")` is currently
+  // refusing because this map has no usable render yet - distinct from `viewMode` itself, which
+  // never actually becomes "3d" on that path. Reset the moment the user leaves for 2D or a fresh
+  // render becomes usable, so a background "Подготовить 3D" job finishing after the user already
+  // moved on doesn't yank them back into 3D.
+  let render3dBlocked = false;
+
+  // Shows "Подготовить 3D" exactly while it would do something useful - blocked on this map's own
+  // missing/outdated render, and no `render` job (started from here or from the map list) already
+  // in flight for it.
+  function syncPrepare3dButton() {
+    prepare3dBtn.hidden = !render3dBlocked || hasUsableRender(mapSummary) || state.activeJobs.has(map);
+  }
+
+  prepare3dBtn.addEventListener("click", () => {
+    startJobFlow(
+      ["render"],
+      map,
+      {
+        progressBox: render3dProgressBox,
+        label: render3dProgressLabel,
+        barSpan: render3dBarSpan,
+        disableButtons: [prepare3dBtn],
+        cancelBtn: render3dCancelBtn,
+      },
+      onRenderPrepared,
+    );
+    // A cancelled job settles without calling onRenderPrepared - bring the button back then.
+    state.activeJobs.get(map)?.controller.promise.then((outcome) => {
+      if (outcome.cancelled) {
+        syncPrepare3dButton();
+      }
+    });
+    syncPrepare3dButton();
+  });
+
+  // Refetches `/api/maps` and, if this screen is still open, updates `mapSummary` in place (same
+  // object `ensureSceneView`/`switchViewMode` already read from) so a freshly built render.glb
+  // becomes usable without a page reload (`s6i_render_job_areas3d.md`: "кнопка 3D становится
+  // доступной без перезагрузки страницы"). Only actually enters 3D on its own when the user is
+  // still sitting on the blocked 3D attempt that started this job - not if they've since switched
+  // back to 2D.
+  async function onRenderPrepared() {
+    const { data } = await fetchMaps();
+    if (Array.isArray(data)) {
+      state.maps = data;
+      const fresh = data.find((x) => x.map === map);
+      if (fresh) {
+        Object.assign(mapSummary, fresh);
+      }
+    }
+    if (!viewToolbar.isConnected) {
+      // This map screen was left while the job ran - never touch its views (a hidden scene on a
+      // detached container, and radarView reset for whatever screen is open now). Re-render the
+      // list if the user is on it, the same way the list's own flows settle.
+      if (state.screen === "maps") {
+        renderMapsScreen();
+      }
+      return;
+    }
+    syncPrepare3dButton();
+    if (render3dBlocked && hasUsableRender(mapSummary)) {
+      switchViewMode("3d");
+    }
   }
 
   function switchViewMode(mode) {
@@ -1860,8 +1974,11 @@ async function showMapScreen(map, opts = {}) {
     if (mode === "3d" && !hasUsableRender(mapSummary)) {
       view3dStatus.className = "hint status-error";
       view3dStatus.textContent = mapSummary.hasRender ? strings.view3d.renderOutdated : strings.view3d.noRender;
+      render3dBlocked = true;
+      syncPrepare3dButton();
       return;
     }
+    render3dBlocked = false;
     viewMode = mode;
     if (mode === "3d") {
       // Unhide *before* creating/resizing the scene view - `threeContainer.getBoundingClientRect()`
@@ -1891,6 +2008,7 @@ async function showMapScreen(map, opts = {}) {
       view3dStatus.className = "hint";
       view3dStatus.textContent = "";
     }
+    syncPrepare3dButton();
   }
   toggle2dBtn.addEventListener("click", () => switchViewMode("2d"));
   toggle3dBtn.addEventListener("click", () => switchViewMode("3d"));
@@ -1984,6 +2102,7 @@ async function showMapScreen(map, opts = {}) {
       const justClosed = closed && !solveState.originArea;
       if (closed) {
         solveState.originArea = { polygon: points.map((p) => [p.x, p.y]) };
+        updateSceneArea("origin");
         if (solveState.origin) {
           solveState.origin = null;
           for (const v of views()) v.clearOrigin();
@@ -1999,11 +2118,13 @@ async function showMapScreen(map, opts = {}) {
               solveState.params.areaZMin = null;
               solveState.params.areaZMax = null;
               renderParamsBox();
+              updateSceneArea("origin");
               return;
             }
             areaLevels = prefill.clusters;
             [solveState.params.areaZMin, solveState.params.areaZMax] = prefill.range;
             renderParamsBox();
+            updateSceneArea("origin");
           });
         }
       }
@@ -2016,6 +2137,7 @@ async function showMapScreen(map, opts = {}) {
       const justClosed = closed && !solveState.targetArea;
       if (closed) {
         solveState.targetArea = { polygon: points.map((p) => [p.x, p.y]) };
+        updateSceneArea("target");
         if (solveState.target) {
           solveState.target = null;
           for (const v of views()) v.clearTarget();
@@ -2030,11 +2152,13 @@ async function showMapScreen(map, opts = {}) {
               solveState.params.targetAreaZMin = null;
               solveState.params.targetAreaZMax = null;
               renderTargetBox();
+              updateSceneArea("target");
               return;
             }
             targetAreaLevels = prefill.clusters;
             [solveState.params.targetAreaZMin, solveState.params.targetAreaZMax] = prefill.range;
             renderTargetBox();
+            updateSceneArea("target");
           });
         }
       }

@@ -11,7 +11,7 @@ import { OrbitControls } from "../lib/three/examples/jsm/controls/OrbitControls.
 import { MeshoptDecoder } from "../lib/three/examples/jsm/libs/meshopt_decoder.module.js";
 import { parseSm3d, flattenGroups } from "./mesh3d.js?v=1";
 import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RADIUS } from "./camera.js?v=1";
-import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, hasUsableRender } from "./api.js?v=1";
+import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, fetchLevels, hasUsableRender } from "./api.js?v=1";
 import { strings } from "./strings.js?v=1";
 import { createLightingPipeline, hasGameLightingData } from "./lighting.js?v=1";
 import { loadStoredLightingMode, storeLightingMode } from "./state.js?v=1";
@@ -993,6 +993,85 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     targetGroup.add(stem);
   }
 
+  // ---- origin/target areas (`s6i_render_job_areas3d.md`): translucent prism "walls" around each
+  // drawn area's polygon - cold for the throw area, warm for the landing area, the radar's own
+  // areaOrigin/areaTarget hex - from a floor level up to a capped ceiling. Editing stays in 2D;
+  // `setArea`/`clearArea` below just redraw from whatever `main.js` currently has. Basic/line
+  // materials, like the target/lineup markers above, so they stay visible regardless of which
+  // lighting pipeline is active (`applyLightingMode` never touches this group).
+  const AREA_COLORS = { origin: 0x7c3aed, target: 0xc2410c };
+  const AREA_DEFAULT_HEIGHT = 96; // `s6i_render_job_areas3d.md`: "или 96 единиц" when no zMax is given.
+  const areaGroups = { origin: new THREE.Group(), target: new THREE.Group() };
+  scene.add(areaGroups.origin, areaGroups.target);
+  // Bumped on every `setArea`/`clearArea` call for that key - guards a slower `/api/levels` floor
+  // lookup from overwriting a newer call's result once it finally resolves.
+  const areaGen = { origin: 0, target: 0 };
+
+  function clearAreaGroup(key) {
+    disposeObject3D(areaGroups[key]);
+    areaGroups[key].clear();
+  }
+
+  function buildAreaPrism(key, polygon, zMin, zMax) {
+    clearAreaGroup(key);
+    const color = AREA_COLORS[key];
+    const positions = [];
+    for (let i = 0; i < polygon.length; i++) {
+      const [x0, y0] = polygon[i];
+      const [x1, y1] = polygon[(i + 1) % polygon.length];
+      positions.push(
+        x0, y0, zMin, x1, y1, zMin, x1, y1, zMax,
+        x0, y0, zMin, x1, y1, zMax, x0, y0, zMax,
+      );
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    const walls = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.25, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    areaGroups[key].add(walls);
+
+    const outline = (z) => {
+      const pts = polygon.map(([x, y]) => new THREE.Vector3(x, y, z));
+      pts.push(pts[0].clone());
+      areaGroups[key].add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color })));
+    };
+    outline(zMin);
+    outline(zMax);
+  }
+
+  // The floor under `polygon`'s centroid, from `/api/levels` - the fallback source `setArea` uses
+  // when it isn't given a `zMin` (`s6i_render_job_areas3d.md`: "иначе из /api/levels"); the
+  // topmost level there, matching `main.js`'s own top-first default for a spot with several floors
+  // stacked under it.
+  async function resolveAreaFloor(polygon) {
+    const cx = polygon.reduce((sum, p) => sum + p[0], 0) / polygon.length;
+    const cy = polygon.reduce((sum, p) => sum + p[1], 0) / polygon.length;
+    const { data } = await fetchLevels(map, cx, cy);
+    const levels = data?.levels ?? [];
+    return levels.length > 0 ? Math.max(...levels.map((l) => l.z)) : null;
+  }
+
+  function updateArea(key, polygon, zMin, zMax) {
+    const gen = ++areaGen[key];
+    if (!polygon || polygon.length < 3) {
+      clearAreaGroup(key);
+      return;
+    }
+    if (zMin != null) {
+      buildAreaPrism(key, polygon, zMin, zMax != null ? zMax : zMin + AREA_DEFAULT_HEIGHT);
+      return;
+    }
+    clearAreaGroup(key);
+    resolveAreaFloor(polygon).then((floor) => {
+      if (destroyed || gen !== areaGen[key] || floor == null) {
+        return;
+      }
+      buildAreaPrism(key, polygon, floor, zMax != null ? zMax : floor + AREA_DEFAULT_HEIGHT);
+    });
+  }
+
   let lineups = [];
   let selectedId = null;
   const lineupGroup = new THREE.Group();
@@ -1147,6 +1226,13 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     },
     setOrigin() {},
     clearOrigin() {},
+    setArea(key, polygon, zMin, zMax) {
+      updateArea(key, polygon, zMin, zMax);
+    },
+    clearArea(key) {
+      areaGen[key]++;
+      clearAreaGroup(key);
+    },
     recolor() {},
     setLineups(list) {
       lineups = list;
@@ -1263,6 +1349,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       });
       materialTexLoaderReady.then((l) => l?.dispose());
       domListeners.abort();
+      areaGen.origin++;
+      areaGen.target++;
+      clearAreaGroup("origin");
+      clearAreaGroup("target");
       if (collision) {
         disposeObject3D(collision.overlay);
       }

@@ -662,6 +662,8 @@ pub async fn get_smoke(
         || at.x > mesh_max[0] + SMOKE_BOUNDS_MARGIN
         || at.y < mesh_min[1] - SMOKE_BOUNDS_MARGIN
         || at.y > mesh_max[1] + SMOKE_BOUNDS_MARGIN
+        || at.z < mesh_min[2] - SMOKE_BOUNDS_MARGIN
+        || at.z > mesh_max[2] + SMOKE_BOUNDS_MARGIN
     {
         return api_error(StatusCode::BAD_REQUEST, "point is outside the map bounds");
     }

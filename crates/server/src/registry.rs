@@ -163,7 +163,19 @@ impl MapEntry {
     pub fn has_render(&self) -> bool {
         self.dir.join("render.glb").is_file()
     }
+
+    /// The same "has a *usable* render export" test the viewer applies client-side
+    /// (`api.js::hasUsableRender`, "the single gate both main.js... and scene3d.js... use") - a
+    /// `render.glb` whose `render.json` predates [`MIN_RENDER_FORMAT_VERSION`] doesn't count, so
+    /// the render job (`jobs.rs::run_render`) knows to rebuild it rather than report `reused`.
+    pub fn has_usable_render(&self) -> bool {
+        self.has_render()
+            && render_json_version(&self.dir).is_some_and(|v| v >= MIN_RENDER_FORMAT_VERSION)
+    }
 }
+
+/// Mirrors `viewer/js/api.js`'s own `MIN_RENDER_FORMAT_VERSION` constant.
+const MIN_RENDER_FORMAT_VERSION: u32 = 3;
 
 /// `GET /api/maps`' shape.
 #[derive(Debug, Clone, Serialize)]

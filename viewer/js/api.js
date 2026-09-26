@@ -202,7 +202,12 @@ export async function solveLineup(body, onLine, signal) {
   return { error: null };
 }
 
-const JOB_KINDS = { extract: "extract", standspots: "standspots", viewerdata: "viewerdata" };
+const JOB_KINDS = {
+  extract: "extract",
+  standspots: "standspots",
+  viewerdata: "viewerdata",
+  render: "render",
+};
 
 export async function postJob(kind, map) {
   let res;

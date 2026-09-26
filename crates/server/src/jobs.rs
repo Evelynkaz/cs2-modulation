@@ -48,6 +48,7 @@ pub enum JobKind {
     Extract,
     StandSpots,
     ViewerData,
+    Render,
 }
 
 impl JobKind {
@@ -56,6 +57,7 @@ impl JobKind {
             JobKind::Extract => "extract",
             JobKind::StandSpots => "standspots",
             JobKind::ViewerData => "viewerdata",
+            JobKind::Render => "render",
         }
     }
 }
@@ -321,6 +323,7 @@ async fn run_job(state: Arc<AppState>, job: Arc<Job>) {
             JobKind::Extract => run_extract(&state, &job).await,
             JobKind::StandSpots => run_standspots(&state, &job).await,
             JobKind::ViewerData => run_viewerdata(&state, &job).await,
+            JobKind::Render => run_render(&state, &job).await,
         };
 
         match outcome {
@@ -586,6 +589,72 @@ async fn run_viewerdata(state: &Arc<AppState>, job: &Arc<Job>) -> JobOutcome {
     }
 }
 
+/// `s2render::export::export_and_write` with the game's default export budget - `cmd_render.rs::
+/// export_glb`'s own settings (`ExportOptions::default()`). Unlike that CLI command, this job
+/// never auto-extracts: it needs an already-extracted cache directory the same way
+/// `run_standspots`/`run_viewerdata` do (`get_entry_blocking` reports "unknown map" otherwise -
+/// the job API's own "Подготовить" chain always runs `extract` first), but still needs the *live*
+/// game install to read the map's own `.vpk` (materials/textures/lightmaps the extraction step
+/// never captures). Progress is reported per file during the write phase only - `export_map`
+/// itself has no separable geometry/texture/lighting phases short of a large rework
+/// (`s6i_render_job_areas3d.md`: "иначе — стадии и честное «идёт экспорт»"), and `run_job`'s own
+/// preamble line already announced "render 0/1" as that honest in-progress marker.
+async fn run_render(state: &Arc<AppState>, job: &Arc<Job>) -> JobOutcome {
+    let entry = match get_entry_blocking(state, &job.map).await {
+        Ok(e) => e,
+        Err(outcome) => return outcome,
+    };
+    if entry.has_usable_render() {
+        return JobOutcome::Done(json!({ "map": job.map, "reused": true }));
+    }
+    let Some(game_dir) = effective_game_dir(state) else {
+        return JobOutcome::Error(
+            "no game directory configured - open the setup page (or PUT /api/config) and set one first"
+                .to_string(),
+        );
+    };
+
+    let map = job.map.clone();
+    let dir = entry.dir.clone();
+    let cancel = job.cancel.clone();
+    let job_for_progress = job.clone();
+    let res =
+        tokio::task::spawn_blocking(move || -> Result<s2render::export::ExportResult, String> {
+            let install = extract::GameInstall::new(&game_dir).map_err(|e| e.to_string())?;
+            let sources =
+                s2render::source::Sources::open(&install.map_vpk(&map), &install.csgo_dir)
+                    .map_err(|e| e.to_string())?;
+            s2render::export::export_and_write(
+                &sources,
+                &s2render::export::ExportOptions::default(),
+                &dir,
+                &cancel,
+                |stage| {
+                    if let s2render::export::ExportStage::Writing { done, total } = stage {
+                        job_for_progress
+                            .push_line(&json!({ "stage": "render", "done": done, "total": total }));
+                    }
+                },
+            )
+            .map_err(|e| e.to_string())
+        })
+        .await;
+
+    match res {
+        Ok(Ok(result)) => {
+            let counts = &result.report["counts"];
+            JobOutcome::Done(json!({
+                "map": job.map,
+                "triangles": counts["triangles"],
+                "textures": counts["textures"],
+            }))
+        }
+        Ok(Err(msg)) if msg == "cancelled" => JobOutcome::Cancelled,
+        Ok(Err(msg)) => JobOutcome::Error(msg),
+        Err(_) => JobOutcome::Error("render task panicked - check server log".to_string()),
+    }
+}
+
 // ---- routes ---------------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -693,6 +762,14 @@ pub async fn post_viewerdata(
     body: Bytes,
 ) -> Response {
     start_job(state, JobKind::ViewerData, headers, body).await
+}
+
+pub async fn post_render(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    start_job(state, JobKind::Render, headers, body).await
 }
 
 pub async fn get_job(State(state): State<Arc<AppState>>, AxPath(id): AxPath<String>) -> Response {

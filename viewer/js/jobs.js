@@ -9,6 +9,7 @@ const STAGE_LABELS = {
   extract: strings.maps.stageExtract,
   standspots: strings.maps.stageStandspots,
   viewerdata: strings.maps.stageViewerdata,
+  render: strings.maps.stageRender,
 };
 
 export function stageLabel(kind) {
@@ -65,7 +66,7 @@ export async function reconnectJob(jobId, handlers = {}) {
 // everything `runOneJob` takes. Returns a controller: `promise` resolves to the last job's
 // outcome (or `{ cancelled: true }` if `cancel()` was called first); `cancel()` requests the
 // currently running job be cancelled and stops the chain from starting the next one.
-export function startPrepare(map, handlers = {}, kinds = ["extract", "standspots", "viewerdata"]) {
+export function startPrepare(map, handlers = {}, kinds = ["extract", "standspots", "viewerdata", "render"]) {
   let cancelled = false;
   let currentJobId = null;
 
@@ -83,7 +84,7 @@ export function startPrepare(map, handlers = {}, kinds = ["extract", "standspots
             deleteJob(id);
           }
         },
-        onLine: (msg) => handlers.onLine?.(kind, msg),
+        onLine: (msg) => handlers.onLine?.(msg),
       });
       if (!outcome.done) {
         return outcome;

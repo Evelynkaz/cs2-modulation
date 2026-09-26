@@ -5,7 +5,10 @@
 //! `GltfModelExporter.Material.cs`; facts cross-checked against `scratch/f3_survey/REPORT.md`.
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use s2fmt::entities::{self, Entity, EntityLump, entity_transform};
 use serde_json::{Value, json};
@@ -2278,6 +2281,120 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         report,
         extra_files,
     })
+}
+
+/// A cheap, coarse checkpoint [`export_and_write`] reports through its `on_stage` callback -
+/// `export_map` has no finer internal phases short of a large rework of this file
+/// (`s6i_render_job_areas3d.md`: "иначе — стадии и честное «идёт экспорт»"), so callers get an
+/// honest two-stage split instead: building the export in memory, then writing it to disk (the one
+/// part that genuinely has per-file progress).
+#[derive(Debug, Clone, Copy)]
+pub enum ExportStage {
+    Exporting,
+    Writing { done: usize, total: usize },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ExportWriteError {
+    #[error(transparent)]
+    Export(#[from] ExportError),
+    #[error("failed to write {}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("cancelled")]
+    Cancelled,
+}
+
+/// `path`'s parent directory (created first) + a temp file + rename - the same atomic-write dance
+/// every other cache writer in this workspace uses (`extract::cache::save_extraction`,
+/// `extract::mapdata::save_stand_spots`), factored out of `cmd_render.rs`'s own former copy.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ExportWriteError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| ExportWriteError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    let mut tmp_name = path.as_os_str().to_os_string();
+    tmp_name.push(format!(".tmp-{}", std::process::id()));
+    let tmp_path = PathBuf::from(tmp_name);
+    if let Err(source) = fs::write(&tmp_path, bytes) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ExportWriteError::Io {
+            path: tmp_path,
+            source,
+        });
+    }
+    if let Err(source) = fs::rename(&tmp_path, path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(ExportWriteError::Io {
+            path: path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(())
+}
+
+/// [`export_map`] plus atomically writing every file it returns into `dir`: first
+/// `result.extra_files`, then `render.glb`, and `render.json` last, since its presence is what
+/// marks the export usable - the sequence `cs2mod export-glb` ran by hand before this
+/// existed; factored out so the server's render job (`jobs.rs::run_render`) doesn't duplicate it
+/// (`s6i_render_job_areas3d.md` change item 1: "вынеси общую функцию... в s2render"). `cancel` is
+/// checked before the export starts and between each file write - `export_map` itself has no
+/// cancellation hook (threading one through every nested placement/material call would be a much
+/// larger change than this job warrants), so a cancel arriving mid-export still finishes that
+/// (possibly multi-minute) call before taking effect, exactly like `jobs.rs::run_extract`'s own
+/// coarse cancellation.
+pub fn export_and_write(
+    sources: &Sources,
+    options: &ExportOptions,
+    dir: &Path,
+    cancel: &AtomicBool,
+    mut on_stage: impl FnMut(ExportStage),
+) -> Result<ExportResult, ExportWriteError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportWriteError::Cancelled);
+    }
+    on_stage(ExportStage::Exporting);
+    let result = export_map(sources, options)?;
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportWriteError::Cancelled);
+    }
+
+    let total = 2 + result.extra_files.len();
+    let mut done = 0;
+    on_stage(ExportStage::Writing { done, total });
+    // render.json is the "export complete" marker (registry has_usable_render, api.js
+    // hasUsableRender): write it only after every file it references, so a cancel or an I/O error
+    // part-way leaves an export the next run rebuilds, never a "usable" one missing its textures.
+    for (name, bytes) in &result.extra_files {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportWriteError::Cancelled);
+        }
+        write_atomic(&dir.join(name), bytes)?;
+        done += 1;
+        on_stage(ExportStage::Writing { done, total });
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportWriteError::Cancelled);
+    }
+    write_atomic(&dir.join("render.glb"), &result.glb)?;
+    done += 1;
+    on_stage(ExportStage::Writing { done, total });
+
+    let json_text =
+        serde_json::to_string_pretty(&result.report).map_err(|e| ExportWriteError::Io {
+            path: dir.join("render.json"),
+            source: std::io::Error::other(e),
+        })?;
+    write_atomic(&dir.join("render.json"), json_text.as_bytes())?;
+    done += 1;
+    on_stage(ExportStage::Writing { done, total });
+
+    Ok(result)
 }
 
 #[cfg(test)]

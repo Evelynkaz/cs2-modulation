@@ -423,6 +423,181 @@ async fn delete_during_standspots_cancels_and_leaves_no_temp_files() {
     );
 }
 
+/// `s6i_render_job_areas3d.md` change item 1's "ошибка без извлечения": a `render` job for a map
+/// with no cache directory at all must error in the stream, not panic - same treatment as
+/// `standspots_on_unknown_map_errors_in_the_stream_not_a_panic` above, checked here for `render`
+/// specifically since it needs both an extracted cache dir *and* a live game install, and must
+/// report the former missing before ever getting to the latter.
+#[tokio::test]
+async fn render_on_unextracted_map_errors_in_the_stream_not_a_panic() {
+    let cache_root = temp_dir("unknown_render");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
+
+    let (status, body) = post_job(&router, "render", "de_nope").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = body["job"].as_str().unwrap().to_string();
+
+    let mut last_text = String::new();
+    for _ in 0..50 {
+        let (status, text) = get_job_stream(&router, &id).await;
+        assert_eq!(status, StatusCode::OK);
+        last_text = text;
+        if last_text.contains("\"error\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        last_text.contains("unknown map"),
+        "expected an error line, got {last_text:?}"
+    );
+}
+
+/// A `render` job for an already-extracted map with no game directory configured must error with
+/// a helpful message, not attempt to read a `.vpk` it has no install path for.
+#[tokio::test]
+async fn render_without_game_dir_errors_with_a_helpful_message() {
+    let cache_root = temp_dir("render_no_game_dir");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
+
+    let (status, body) = post_job(&router, "render", "de_test").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = body["job"].as_str().unwrap().to_string();
+
+    let mut last_text = String::new();
+    for _ in 0..50 {
+        let (status, text) = get_job_stream(&router, &id).await;
+        assert_eq!(status, StatusCode::OK);
+        last_text = text;
+        if last_text.contains("\"error\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        last_text.contains("no game directory configured"),
+        "expected a game-dir error line, got {last_text:?}"
+    );
+}
+
+/// Two immediate `POST /api/jobs/render` calls for the same map return the same job id - same
+/// dedupe mechanism as the other job kinds (`repeated_post_returns_the_same_job_id`).
+#[tokio::test]
+async fn render_repeated_post_returns_the_same_job_id() {
+    let cache_root = temp_dir("render_dedupe");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
+
+    let (status_a, body_a) = post_job(&router, "render", "de_test").await;
+    assert_eq!(status_a, StatusCode::ACCEPTED);
+    let (status_b, body_b) = post_job(&router, "render", "de_test").await;
+    assert_eq!(status_b, StatusCode::ACCEPTED);
+    assert_eq!(body_a["job"], body_b["job"], "expected the same job id");
+}
+
+/// `DELETE` right after `POST` must be accepted and the job must end up in a terminal state
+/// (`error` here, since there is no configured game dir to actually cancel mid-export - real
+/// mid-export cancellation needs `CS2_GAME_DIR` and is covered by the ignored real test below),
+/// never left hanging.
+#[tokio::test]
+async fn render_delete_is_accepted_and_job_reaches_a_terminal_state() {
+    let cache_root = temp_dir("render_cancel");
+    sample_cache_dir(&cache_root, "de_test", 200.0);
+    let router = router_over(&cache_root);
+
+    let (status, body) = post_job(&router, "render", "de_test").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = body["job"].as_str().unwrap().to_string();
+    let (del_status, _del_body) = delete_job(&router, &id).await;
+    assert_eq!(del_status, StatusCode::OK);
+
+    let mut last_text = String::new();
+    for _ in 0..50 {
+        let (status, text) = get_job_stream(&router, &id).await;
+        assert_eq!(status, StatusCode::OK);
+        last_text = text.clone();
+        if text.contains("\"error\"") || text.contains("\"status\":\"cancelled\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        last_text.contains("\"error\"") || last_text.contains("\"status\":\"cancelled\""),
+        "expected a terminal line: {last_text:?}"
+    );
+}
+
+/// Real de_mirage: the `render` job runs `s2render::export::export_and_write` end to end, writes
+/// `render.glb`/`render.json` into the resolved cache dir, and `/api/maps` reports `hasRender`/
+/// `renderVersion` for it without a server restart. Needs `CS2_GAME_DIR` and a prior `cs2mod
+/// extract de_mirage`.
+#[tokio::test]
+#[ignore = "needs CS2_GAME_DIR"]
+async fn de_mirage_render_job_writes_a_usable_export() {
+    let game_dir = std::env::var_os("CS2_GAME_DIR").expect("CS2_GAME_DIR must be set");
+    let cache_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("cache");
+
+    let config_dir = temp_dir("real_mirage_render_config");
+    let config_path = config_dir.join("config.json");
+    let viewer_dir = temp_dir("real_mirage_render_viewer_empty");
+    let state = Arc::new(
+        AppState::new(
+            config_path,
+            AppConfig::default(),
+            cache_root.clone(),
+            viewer_dir.to_path_buf(),
+        )
+        .with_overrides(Some(PathBuf::from(&game_dir)), None, None),
+    );
+    let router = server::routes::router(state);
+
+    let start = std::time::Instant::now();
+    let (status, body) = post_job(&router, "render", "de_mirage").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = body["job"].as_str().unwrap().to_string();
+
+    let mut last_text = String::new();
+    for _ in 0..3000 {
+        let (status, text) = get_job_stream(&router, &id).await;
+        assert_eq!(status, StatusCode::OK);
+        last_text = text.clone();
+        if text.contains("\"result\"") || text.contains("\"error\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        last_text.contains("\"result\""),
+        "job did not complete: {last_text}"
+    );
+    println!("de_mirage render job took {elapsed:?}");
+
+    let install = GameInstall::new(PathBuf::from(&game_dir)).expect("game install");
+    let dir = cache::find_cached(&cache_root, &install, "de_mirage")
+        .expect("find_cached")
+        .expect("cache dir for de_mirage");
+    assert!(dir.join("render.glb").is_file());
+    assert!(dir.join("render.json").is_file());
+
+    let (_status, maps) = get(&router, "/api/maps").await;
+    let mirage = maps
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["map"] == "de_mirage")
+        .expect("de_mirage in /api/maps");
+    assert_eq!(mirage["hasRender"], json!(true));
+    assert!(mirage["renderVersion"].as_u64().unwrap() >= 3);
+}
+
 /// Real de_mirage: `POST /api/jobs/standspots` through the API must report the same count as an
 /// expected count computed independently in this test the way the CLI does it
 /// (`crates/cli/src/cmd_solver.rs:71-103`: load the mesh and nav areas from the resolved cache

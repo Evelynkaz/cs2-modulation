@@ -76,6 +76,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/jobs/extract", post(jobs::post_extract))
         .route("/api/jobs/standspots", post(jobs::post_standspots))
         .route("/api/jobs/viewerdata", post(jobs::post_viewerdata))
+        .route("/api/jobs/render", post(jobs::post_render))
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
         .route(
             "/data/maps/{map}/render_tex/{file}",

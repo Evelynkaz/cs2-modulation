@@ -942,6 +942,26 @@ async fn trajectory_contacts_match_recorded_bounces_on_a_flat_floor() {
     }
 }
 
+// `s6i_render_job_areas3d.md` change item 4: `/api/smoke` used to bounds-check only x/y - a
+// finite but wildly out-of-range z fell through to the physics computation below instead of a
+// clean 400, unlike `target`'s own z check in `solve.rs`.
+#[tokio::test]
+async fn smoke_rejects_z_far_outside_the_mesh_bounds() {
+    let cache_root = temp_dir("smoke_z_bounds");
+    let _dir = sample_cache_dir(&cache_root, floor_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
+
+    let (status, body) = get(&router, "/api/smoke?map=de_test&x=0&y=0&z=5000").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("outside the map bounds"),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn levels_two_stacked_floors_bottom_to_top() {
     let nav = NavAreasDump {

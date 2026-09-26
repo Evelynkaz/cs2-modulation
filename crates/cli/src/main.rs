@@ -14,10 +14,15 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "cs2mod", version, about = "CS2 grenade lineup calculator")]
+#[command(
+    name = "cs2mod",
+    version,
+    about = "CS2 grenade lineup calculator; run with no command to start the viewer server \
+             and open it in the browser (same as `cs2mod serve --open`)"
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -422,7 +427,20 @@ fn is_broken_pipe(err: &anyhow::Error) -> bool {
 fn run() -> anyhow::Result<u8> {
     let cli = Cli::parse();
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        return match cmd_serve::serve(None, true, None, None) {
+            Ok(code) => Ok(code),
+            Err(e) => {
+                eprintln!("Error: {e:?}");
+                eprintln!("Press Enter to close this window.");
+                let mut input = String::new();
+                let _ = std::io::stdin().read_line(&mut input);
+                Ok(1)
+            }
+        };
+    };
+
+    match command {
         Command::Extract {
             maps,
             game,

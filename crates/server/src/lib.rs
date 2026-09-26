@@ -145,15 +145,31 @@ fn find_git_root(mut dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// `<repo-or-cwd>/cache`, matching the CLI's own default.
-fn default_cache_dir() -> PathBuf {
+/// The repository root the viewer/cache defaults hang off: the nearest `.git` ancestor of the
+/// current directory, else of the running executable's own directory (a shortcut or a launch
+/// from another folder), else the current directory itself.
+fn default_root() -> PathBuf {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = find_git_root(&cwd).unwrap_or_else(|| cwd.clone());
-    root.join("cache")
+    if let Some(root) = find_git_root(&cwd) {
+        return root;
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+        && let Some(root) = find_git_root(dir)
+    {
+        return root;
+    }
+    cwd
 }
 
-/// `viewer/` next to the running executable if it exists there, else `<repo-or-cwd>/viewer`
-/// (running from the source tree during development).
+/// `<repo-or-exe-dir-or-cwd>/cache` (see [`default_root`]), matching the CLI's own default.
+fn default_cache_dir() -> PathBuf {
+    default_root().join("cache")
+}
+
+/// `viewer/` next to the running executable if it exists there, else
+/// `<repo-or-exe-dir-or-cwd>/viewer` (see [`default_root`]; the latter covers running from the
+/// source tree during development).
 fn find_viewer_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
@@ -163,9 +179,7 @@ fn find_viewer_dir() -> PathBuf {
             return candidate;
         }
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = find_git_root(&cwd).unwrap_or_else(|| cwd.clone());
-    root.join("viewer")
+    default_root().join("viewer")
 }
 
 fn open_browser(port: u16) {

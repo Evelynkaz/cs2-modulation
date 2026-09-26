@@ -80,6 +80,11 @@ function buildSkyboxSharedUniforms(outerRenderJson, outerShared, skyboxReport, r
     uSunToSun: outerShared.uSunToSun,
     uSunColorLinear: outerShared.uSunColorLinear,
     uLpvScale: outerShared.uLpvScale,
+    // `s6f3a9_effects.md`: shared, unmodified, with the main pipeline's own live clock (cloud/dust
+    // card mask panning). F_DEPTH_FEATHER stays feather=1 here specifically (the main scene now
+    // implements it for real, review fix item 3) - this skybox scene has no opaque depth of its
+    // own to feather against, see `createSkyboxPass`'s own `buildGameMaterials` call.
+    uTime: outerShared.uTime,
     uIrradianceMap: { value: res.irradianceMap },
     uShadowMap: { value: res.shadowMap },
     uIrradianceRgbmRange: { value: res.irradianceRgbmRange },
@@ -143,7 +148,11 @@ export async function createSkyboxPass(renderer, map, outerRenderJson, outerShar
   });
 
   const materialPool = new Map();
-  await buildGameMaterials(gltf, patchedReport, shared, materialPool, texLoader);
+  // review fix item 3 (s6f3a9_effects.md): the 3D skybox draws in one single pass, before the main
+  // scene's own opaque depth exists (and clears depth right after itself) - there is no opaque
+  // depth here to feather a skybox effects material against (e.g. dust_002_skybox.vmat), so
+  // F_DEPTH_FEATHER stays forced off for every material built through this call.
+  await buildGameMaterials(gltf, patchedReport, shared, materialPool, texLoader, { disableEffectsDepthFeather: true });
   const gameMaterials = new Map();
   gltf.scene.traverse((o) => {
     if (o.isMesh && o.userData.gameMaterial) {

@@ -174,11 +174,14 @@ impl MapEntry {
     }
 }
 
-/// Mirrors `viewer/js/api.js`'s own `MIN_RENDER_FORMAT_VERSION` constant. `4` (bumped from `3`,
-/// review_f3a8 fix item 4): a `render.json` older than that has no `skybox`/`cables`/layer-1
-/// `uvRotation1` data, so it's reported as needing a rebuild ("Подготовить 3D" offers one) rather
-/// than treated as already usable.
-const MIN_RENDER_FORMAT_VERSION: u32 = 4;
+/// Mirrors `viewer/js/api.js`'s own `MIN_RENDER_FORMAT_VERSION` constant. `5` (bumped from `4`,
+/// `s6f3a9_effects.md` review fix item 4): a `render.json` older than that has no
+/// `extras.effects` (csgo_effects masks/fresnel/feather/fade/blendMode), so a cached dust/cloud/
+/// glow card would keep rendering as a flat panel forever unless offered a rebuild. `4` (bumped
+/// from `3`, review_f3a8 fix item 4): a `render.json` older than that has no `skybox`/`cables`/
+/// layer-1 `uvRotation1` data, so it's reported as needing a rebuild ("Подготовить 3D" offers
+/// one) rather than treated as already usable.
+const MIN_RENDER_FORMAT_VERSION: u32 = 5;
 
 /// `GET /api/maps`' shape.
 #[derive(Debug, Clone, Serialize)]

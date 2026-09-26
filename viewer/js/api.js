@@ -91,10 +91,13 @@ export function renderGlbUrl(map) {
 // `normalTexture` fields instead of `render.json`'s `textures[]`, so an older export would render
 // completely untextured rather than erroring. `/api/maps`' own `renderVersion` (`null` when there's
 // no render.glb at all, or render.json doesn't parse) is checked against this before ever treating
-// a map as "has a usable 3D export". `4` (bumped from `3`, review_f3a8 fix item 4): a `render.json`
-// at version 3 has no `skybox`/`cables` data and no layer-1 `uvRotation1`, so it's reported as
-// needing a rebuild too.
-export const MIN_RENDER_FORMAT_VERSION = 4;
+// a map as "has a usable 3D export". `5` (bumped from `4`, `s6f3a9_effects.md` review fix item 4):
+// a `render.json` at version 4 has no csgo_effects `extras.effects` (masks/fresnel/feather/fade/
+// blendMode), so a cached dust/cloud/glow card would keep rendering as a flat panel forever unless
+// offered a rebuild. `4` (bumped from `3`, review_f3a8 fix item 4): a `render.json` at version 3
+// has no `skybox`/`cables` data and no layer-1 `uvRotation1`, so it's reported as needing a
+// rebuild too.
+export const MIN_RENDER_FORMAT_VERSION = 5;
 
 /** True only when `mapSummary` (an `/api/maps` entry) has a `render.glb` *and* its `render.json`
  * is at least `MIN_RENDER_FORMAT_VERSION` - the single gate both `main.js` (the 2D/3D toggle) and

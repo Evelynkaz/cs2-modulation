@@ -14,7 +14,7 @@ import { parseSm3d, flattenGroups } from "./mesh3d.js?v=1";
 import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RADIUS } from "./camera.js?v=1";
 import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, fetchLevels, hasUsableRender } from "./api.js?v=1";
 import { strings } from "./strings.js?v=1";
-import { createLightingPipeline, hasGameLightingData } from "./lighting.js?v=1";
+import { createLightingPipeline, hasGameLightingData, FEATHER_LAYER, OVERLAY_LAYER } from "./lighting.js?v=1";
 import { loadStoredLightingMode, storeLightingMode } from "./state.js?v=1";
 import { createMaterialTextureLoader, srgbToLinear } from "./materialTextures.js?v=1";
 
@@ -222,6 +222,44 @@ function albedoAlphaMetalnessPatch(shader) {
   );
 }
 
+// `s6f3a9_effects.md` change item 2's "simple mode: at minimum fresnel + fade" - csgo_effects's
+// own masks/colorBoost/depth-feather (the game-lighting path's full formula, `lightingShader.js`)
+// are not replicated here, only the two cheapest terms that keep a dust/cloud card from being a
+// flat opaque panel in "simple" mode too.
+//
+// review fix: csgo_effects is unlit (`KHR_materials_unlit`), so GLTFLoader builds a
+// `MeshBasicMaterial` here, not `MeshStandardMaterial` - its stock shader chunks have no
+// `normal_fragment_begin` and no `vViewPosition`/`vNormal` at all (`meshbasic_vert`/`_frag` in
+// three.module.js), so the original patch's markers/varyings never existed and this whole block
+// was silently never applied (`mirage_mid_simple_after.png` still showed the flat panel). This
+// version carries its own view-space position/normal varyings instead of borrowing
+// `MeshStandardMaterial`'s.
+function makeEffectsFresnelFadePatch(fx) {
+  const flipBackface = fx.dontFlipBackfaceNormals !== true;
+  return (shader) => {
+    shader.uniforms.fxFresnelParams = {
+      value: new THREE.Vector4(fx.fresnelExponent, fx.fresnelFalloff, fx.fresnelMin, fx.fresnelMax),
+    };
+    shader.uniforms.fxFadeParams = { value: new THREE.Vector4(fx.fadeDistance, fx.fadeFalloff, fx.fadeMin, fx.fadeMax) };
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vFxViewPos;\nvarying vec3 vFxViewNormal;")
+      .replace(
+        "#include <project_vertex>",
+        "#include <project_vertex>\n\tvFxViewPos = mvPosition.xyz;\n\tvFxViewNormal = normalize( normalMatrix * normal );",
+      );
+    const flip = flipBackface ? "\n\t\t#ifdef DOUBLE_SIDED\n\t\tif ( !gl_FrontFacing ) fxN = -fxN;\n\t\t#endif" : "";
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        "#include <common>\nvarying vec3 vFxViewPos;\nvarying vec3 vFxViewNormal;\nuniform vec4 fxFresnelParams;\nuniform vec4 fxFadeParams;",
+      )
+      .replace(
+        "#include <alphahash_fragment>",
+        `#include <alphahash_fragment>\n\t{\n\t\tvec3 fxRay = vFxViewPos;\n\t\tvec3 fxN = normalize( vFxViewNormal );${flip}\n\t\tfloat fxFresnel = clamp( dot( -normalize( fxRay ), fxN ), 0.0001, 1.0 );\n\t\tfxFresnel = pow( fxFresnel, fxFresnelParams.x ) * fxFresnelParams.y;\n\t\tfxFresnel = clamp( fxFresnel, 0.0, 1.0 );\n\t\tfxFresnel = mix( fxFresnelParams.z, fxFresnelParams.w, fxFresnel );\n\t\tfloat fxFade = clamp( length( fxRay / vec3( fxFadeParams.x ) ), 0.0, 1.0 );\n\t\tfxFade = mix( fxFadeParams.z, fxFadeParams.w, fxFade );\n\t\tfxFade = pow( max( fxFade, 0.0001 ), fxFadeParams.y );\n\t\tdiffuseColor.a *= fxFresnel * fxFade;\n\t}`,
+      );
+  };
+}
+
 async function applyMaterialExtras(gltf, renderer, texLoader, renderJson, tintIsSrgb) {
   const materialDefs = gltf.parser.json.materials || [];
   // Anisotropy is set once, at upload time, by the shared loader itself (review fix item 2:
@@ -331,6 +369,26 @@ async function applyMaterialExtras(gltf, renderer, texLoader, renderJson, tintIs
         kinds.push("envLayer2");
       }
     }
+    if (extras.effects) {
+      patches.push(makeEffectsFresnelFadePatch(extras.effects));
+      // review fix: the injected fragment text itself differs by this flag (the backface-flip
+      // block is only present when it's needed), so it has to be part of the cache key too - two
+      // materials sharing "effectsFresnelFade" alone would wrongly share one compiled program.
+      kinds.push(extras.effects.dontFlipBackfaceNormals !== true ? "effectsFresnelFade:flip" : "effectsFresnelFade:noflip");
+      // review fix item 2: F_ADDITIVE_BLEND materials (sun_glow_001/sun_disc_glow_001 on Mirage's
+      // 3D skybox, steam_001 on Inferno) - RenderMaterial.cs:354-357,892 blends (SrcAlpha, One),
+      // not the translucent (SrcAlpha, InvSrcAlpha) GLTFLoader already set from alphaMode BLEND.
+      // Not the `THREE.AdditiveBlending` preset (same reasoning as `lightingShader.js`'s own fix):
+      // it's (One, One) for a non-premultiplied-alpha material (this one is, the default), which
+      // would ignore this material's own alpha (fresnel x fade) and render at full brightness
+      // everywhere instead of fading at the glow's edges.
+      if (extras.effects.blendMode === "additive") {
+        material.blending = THREE.CustomBlending;
+        material.blendEquation = THREE.AddEquation;
+        material.blendSrc = THREE.SrcAlphaFactor;
+        material.blendDst = THREE.OneFactor;
+      }
+    }
     // review fix item 7: applied last so its patch text lands directly after `#include <map_fragment>`,
     // ahead of tint/layers above, which pushed earlier and therefore ended up further down.
     if (material.map?.userData?.manualSrgb) {
@@ -430,6 +488,16 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   const camera = new THREE.PerspectiveCamera(VERTICAL_FOV_DEG, 1, 4, 40000);
   camera.up.set(0, 0, 1);
   camera.position.set(0, 0, 2000);
+  // `s6f3a9_effects.md` review fixes: `lighting.js`'s own `FEATHER_LAYER`/`OVERLAY_LAYER` - a
+  // depth-feather effects mesh, or an "always on top" scene helper (target beacon, hover ring,
+  // area-draft tool), lives ONLY on one of these layers (not layer 0), so game mode's opaque/
+  // feather/overlay three-pass split (`lighting.js`'s `renderFrame`) can select each independently.
+  // Enabling both here too (in addition to the default layer 0) keeps everything visible whenever
+  // this camera renders in a single pass instead - "simple" mode (which never calls `renderFrame`
+  // at all), raycasting, a returning user whose stored preference is "simple", a map with no
+  // feather material to split passes for in the first place.
+  camera.layers.enable(FEATHER_LAYER);
+  camera.layers.enable(OVERLAY_LAYER);
 
   // `s6f3b_viewer3d.md`: "свет — временный: солнце из render.json + полусферический".
   const hemi = new THREE.HemisphereLight(0x9fc3ff, 0x1a1f2b, 0.9);
@@ -761,7 +829,8 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     }
     updateHover();
     if (lightingPipeline && effectiveLightingMode() === "game") {
-      lightingPipeline.renderFrame(scene, camera);
+      // `s6f3a9_effects.md`: csgo_effects mask panning's live g_flTime-equivalent.
+      lightingPipeline.renderFrame(scene, camera, { timeSeconds: clock.elapsedTime });
     } else {
       renderer.render(scene, camera);
     }
@@ -1097,6 +1166,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       new THREE.LineBasicMaterial({ color: 0xb3261e, transparent: true, opacity: 0.6, depthTest: false }),
     );
     beacon.renderOrder = 999;
+    beacon.layers.set(OVERLAY_LAYER); // review fix item 2: `OVERLAY_LAYER`'s own doc comment.
     targetGroup.add(beacon);
   }
 
@@ -1282,6 +1352,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       const dot = new THREE.Mesh(new THREE.SphereGeometry(5, 10, 8), dotMaterial);
       dot.position.set(p.x, p.y, p.z);
       dot.renderOrder = 999;
+      dot.layers.set(OVERLAY_LAYER); // review fix item 2: `OVERLAY_LAYER`'s own doc comment.
       group.add(dot);
     }
     const linePts = a.points.map((p) => new THREE.Vector3(p.x, p.y, p.z));
@@ -1296,6 +1367,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
         new THREE.LineBasicMaterial({ color, depthTest: false }),
       );
       line.renderOrder = 999;
+      line.layers.set(OVERLAY_LAYER); // review fix item 2: `OVERLAY_LAYER`'s own doc comment.
       group.add(line);
     }
   }
@@ -1371,6 +1443,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }),
   );
   hoverRing.renderOrder = 998;
+  hoverRing.layers.set(OVERLAY_LAYER); // review fix item 2: `OVERLAY_LAYER`'s own doc comment.
   hoverRing.visible = false;
   scene.add(hoverRing);
   const hoverLabel = document.createElement("div");

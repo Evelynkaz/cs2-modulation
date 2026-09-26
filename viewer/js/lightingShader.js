@@ -257,6 +257,54 @@ uniform float uSkyRgbmRange;
 #endif
 #endif
 
+// s6f3a9_effects.md: csgo_effects (dust cards, 3D-skybox cloud cards, ...) own masks/fresnel/
+// feather/fade opacity formula (csgo_effects.frag.slang:36-110) - previously these materials
+// rendered as a flat unlit albedo x baseColorFactor.a panel. HAS_EFFECTS is always paired with
+// LIGHTING_UNLIT (extras.effects only ever appears with unlit==true - material.rs's unlit()),
+// so the mask/colorBoost work below only has to touch albedoColor before the LIGHTING_UNLIT
+// branch reads it as finalColor.
+#ifdef HAS_EFFECTS
+uniform float uTime;
+#ifdef HAS_EFFECTS_MASK1
+uniform sampler2D uEffectsMask1;
+uniform vec2 uEffectsMask1Scale;
+uniform vec2 uEffectsMask1Pan;
+#endif
+#ifdef HAS_EFFECTS_MASK2
+uniform sampler2D uEffectsMask2;
+uniform vec2 uEffectsMask2Scale;
+uniform vec2 uEffectsMask2Pan;
+#endif
+#ifdef HAS_EFFECTS_MASK3
+uniform sampler2D uEffectsMask3;
+uniform vec2 uEffectsMask3Scale;
+uniform vec2 uEffectsMask3Pan;
+#endif
+uniform float uEffectsOpacityScale;
+uniform float uEffectsColorBoost;
+uniform float uEffectsFadeDistance;
+uniform float uEffectsFadeFalloff;
+uniform float uEffectsFadeMin;
+uniform float uEffectsFadeMax;
+uniform float uEffectsFresnelExponent;
+uniform float uEffectsFresnelFalloff;
+uniform float uEffectsFresnelMin;
+uniform float uEffectsFresnelMax;
+#ifdef HAS_EFFECTS_DEPTH_FEATHER
+// Soft edge against the main scene's own opaque depth (lighting.js's renderFrame - opaque/
+// feather-layer two-pass split, depth blitted out between them - FEATHER_LAYER's own doc
+// comment). The 3D skybox has no equivalent opaque depth buffer of its own, see
+// lightingSkybox.js's own note, so this define is never set there even when a skybox material's
+// own F_DEPTH_FEATHER is 1.
+uniform float uEffectsFeatherDistance;
+uniform float uEffectsFeatherFalloff;
+uniform sampler2D uEffectsSceneDepth;
+uniform mat4 uEffectsProjInverse;
+uniform mat4 uEffectsViewInverse;
+uniform vec2 uEffectsResolution;
+#endif
+#endif
+
 // sRGB (gamma) -> linear, per channel - only used when a texture's own compressed format can't
 // carry an sRGB GPU-native internal format on this browser/GPU (change item 1's DXT1 fallback:
 // WEBGL_compressed_texture_s3tc_srgb missing, WEBGL_compressed_texture_s3tc present).
@@ -390,6 +438,63 @@ void main() {
     albedoColor.rgb = mix( albedoColor.rgb, albedoColor.rgb * uTintColor, tintAmount );
   }
 #endif
+
+// csgo_effects.frag.slang:58-104: color x colorBoost (tint already applied above, same mix
+// formula as HAS_TINT); opacity = color.a x vertexColor.a x opacityScale x mask1 x mask2 x mask3
+// x fresnel x feather x fade (vertexColor.a already folded into uBaseColorFactor.a like every
+// other material's tint - base_color_factor).
+#ifdef HAS_EFFECTS
+  {
+    float mask1 = 1.0;
+    float mask2 = 1.0;
+    float mask3 = 1.0;
+#ifdef HAS_EFFECTS_MASK1
+    mask1 = texture2D( uEffectsMask1, vUv * uEffectsMask1Scale + uEffectsMask1Pan * uTime ).x;
+#endif
+#ifdef HAS_EFFECTS_MASK2
+    mask2 = texture2D( uEffectsMask2, vUv * uEffectsMask2Scale + uEffectsMask2Pan * uTime ).x;
+#endif
+#ifdef HAS_EFFECTS_MASK3
+    mask3 = texture2D( uEffectsMask3, vUv * uEffectsMask3Scale + uEffectsMask3Pan * uTime ).x;
+#endif
+    albedoColor.rgb *= uEffectsColorBoost;
+    albedoColor.a *= uEffectsOpacityScale * mask1 * mask2 * mask3;
+
+    vec3 fxCameraRay = vWorldPos - cameraPosition;
+    vec3 fxNormal = normalize( vNormal );
+#ifdef EFFECTS_FLIP_BACKFACE
+    if ( !gl_FrontFacing ) fxNormal = -fxNormal;
+#endif
+    float fresnel = clamp( dot( -normalize( fxCameraRay ), fxNormal ), 0.0001, 1.0 );
+    fresnel = pow( fresnel, uEffectsFresnelExponent ) * uEffectsFresnelFalloff;
+    fresnel = clamp( fresnel, 0.0, 1.0 );
+    fresnel = mix( uEffectsFresnelMin, uEffectsFresnelMax, fresnel );
+
+    float feather = 1.0;
+#ifdef HAS_EFFECTS_DEPTH_FEATHER
+    {
+      vec2 screenUv = gl_FragCoord.xy / uEffectsResolution;
+      float rawDepth = texture2D( uEffectsSceneDepth, screenUv ).x;
+      vec4 ndc = vec4( screenUv * 2.0 - 1.0, rawDepth * 2.0 - 1.0, 1.0 );
+      vec4 viewPos4 = uEffectsProjInverse * ndc;
+      vec3 viewPos = viewPos4.xyz / viewPos4.w;
+      vec3 scenePos = ( uEffectsViewInverse * vec4( viewPos, 1.0 ) ).xyz;
+      float sceneDist = distance( vWorldPos, scenePos );
+      feather = clamp( sceneDist / uEffectsFeatherDistance, 0.0001, 1.0 );
+      feather = pow( feather, uEffectsFeatherFalloff );
+    }
+#endif
+
+    // SafePow (csgo_effects.frag.slang:100): the reference clamps fade to non-negative first so
+    // a fadeFalloff != 1 never hits pow() with a negative base.
+    float fade = clamp( length( fxCameraRay / vec3( uEffectsFadeDistance ) ), 0.0, 1.0 );
+    fade = mix( uEffectsFadeMin, uEffectsFadeMax, fade );
+    fade = pow( max( fade, 0.0001 ), uEffectsFadeFalloff );
+
+    albedoColor.a *= fresnel * feather * fade;
+  }
+#endif
+
 #ifdef HAS_LAYERS
   float layerBlendB;
   {
@@ -708,6 +813,18 @@ function buildDefines(recipe) {
   if (recipe.baseColorAlphaMeaning === "ao") d.ALBEDO_ALPHA_AO = "";
   else if (recipe.baseColorAlphaMeaning === "metalness") d.ALBEDO_ALPHA_METALNESS = "";
   if (recipe.tintMaskMap) d.HAS_TINT = "";
+  // `s6f3a9_effects.md`: csgo_effects's masks/fresnel/feather/fade opacity formula.
+  if (recipe.effects) {
+    d.HAS_EFFECTS = "";
+    if (recipe.effects.mask1Map) d.HAS_EFFECTS_MASK1 = "";
+    if (recipe.effects.mask2Map) d.HAS_EFFECTS_MASK2 = "";
+    if (recipe.effects.mask3Map) d.HAS_EFFECTS_MASK3 = "";
+    // review fix item 3: real in the main scene (lighting.js's opaque/feather two-pass,
+    // `FEATHER_LAYER`'s own doc comment); the 3D skybox forces this false regardless
+    // (`opts.disableEffectsDepthFeather`, no opaque depth of its own to feather against).
+    if (recipe.effects.depthFeather) d.HAS_EFFECTS_DEPTH_FEATHER = "";
+    if (recipe.effects.flipBackface) d.EFFECTS_FLIP_BACKFACE = "";
+  }
   if (recipe.hasLayers) {
     d.HAS_LAYERS = "";
     if (recipe.layer2Map) {
@@ -793,6 +910,43 @@ export function buildWorldMaterial(recipe) {
   if (recipe.tintMaskMap) {
     uniforms.uTintMaskMap = { value: recipe.tintMaskMap };
     uniforms.uTintColor = { value: recipe.tintColor };
+  }
+  if (recipe.effects) {
+    const fx = recipe.effects;
+    uniforms.uTime = shared.uTime;
+    if (fx.mask1Map) {
+      uniforms.uEffectsMask1 = { value: fx.mask1Map };
+      uniforms.uEffectsMask1Scale = { value: new THREE.Vector2(...fx.mask1Scale) };
+      uniforms.uEffectsMask1Pan = { value: new THREE.Vector2(...fx.mask1PanSpeed) };
+    }
+    if (fx.mask2Map) {
+      uniforms.uEffectsMask2 = { value: fx.mask2Map };
+      uniforms.uEffectsMask2Scale = { value: new THREE.Vector2(...fx.mask2Scale) };
+      uniforms.uEffectsMask2Pan = { value: new THREE.Vector2(...fx.mask2PanSpeed) };
+    }
+    if (fx.mask3Map) {
+      uniforms.uEffectsMask3 = { value: fx.mask3Map };
+      uniforms.uEffectsMask3Scale = { value: new THREE.Vector2(...fx.mask3Scale) };
+      uniforms.uEffectsMask3Pan = { value: new THREE.Vector2(...fx.mask3PanSpeed) };
+    }
+    uniforms.uEffectsOpacityScale = { value: fx.opacityScale };
+    uniforms.uEffectsColorBoost = { value: fx.colorBoost };
+    uniforms.uEffectsFadeDistance = { value: fx.fadeDistance };
+    uniforms.uEffectsFadeFalloff = { value: fx.fadeFalloff };
+    uniforms.uEffectsFadeMin = { value: fx.fadeMin };
+    uniforms.uEffectsFadeMax = { value: fx.fadeMax };
+    uniforms.uEffectsFresnelExponent = { value: fx.fresnelExponent };
+    uniforms.uEffectsFresnelFalloff = { value: fx.fresnelFalloff };
+    uniforms.uEffectsFresnelMin = { value: fx.fresnelMin };
+    uniforms.uEffectsFresnelMax = { value: fx.fresnelMax };
+    if (fx.depthFeather) {
+      uniforms.uEffectsFeatherDistance = { value: fx.featherDistance };
+      uniforms.uEffectsFeatherFalloff = { value: fx.featherFalloff };
+      uniforms.uEffectsSceneDepth = shared.uEffectsSceneDepth;
+      uniforms.uEffectsProjInverse = shared.uEffectsProjInverse;
+      uniforms.uEffectsViewInverse = shared.uEffectsViewInverse;
+      uniforms.uEffectsResolution = shared.uEffectsResolution;
+    }
   }
   if (recipe.hasLayers) {
     if (recipe.layer2Map) uniforms.uLayer2Map = { value: recipe.layer2Map };
@@ -895,6 +1049,17 @@ export function buildWorldMaterial(recipe) {
     material.blendEquation = THREE.AddEquation;
     material.blendSrc = THREE.DstColorFactor;
     material.blendDst = THREE.SrcColorFactor;
+  }
+  // review fix item 2: F_ADDITIVE_BLEND - RenderMaterial.cs:892 blends (SrcAlpha, One). Built as
+  // `CustomBlending` with those exact factors, not the `THREE.AdditiveBlending` preset: three's
+  // preset is (One, One) for a non-premultiplied-alpha material (this one is, the default) - it
+  // would ignore this material's own alpha (masks x fresnel x feather x fade) entirely, rendering
+  // every fragment at full brightness regardless of opacity instead of fading at the glow's edges.
+  if (recipe.effects?.additive) {
+    material.blending = THREE.CustomBlending;
+    material.blendEquation = THREE.AddEquation;
+    material.blendSrc = THREE.SrcAlphaFactor;
+    material.blendDst = THREE.OneFactor;
   }
   const key = "cs2mod-world:" + cacheKey(defines);
   material.customProgramCacheKey = () => key;

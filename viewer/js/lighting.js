@@ -27,6 +27,32 @@ import { createHdrTarget, createPostPass } from "./lightingPost.js?v=1";
 import { renderAssetUrl } from "./api.js?v=1";
 import { decodeHemiOctConstant, srgbToLinear, buildConstantTexture } from "./materialTextures.js?v=1";
 
+// `s6f3a9_effects.md` review fix item 3: the `THREE.Object3D.layers` bit a mesh whose material has
+// `F_DEPTH_FEATHER==1` is placed on, via `.layers.set` (not `.enable` - it moves OFF layer 0
+// entirely, so `renderFrame`'s own pass 1 below can exclude it by disabling just this layer on the
+// camera). `renderFrame` draws the main scene up to three times when any such mesh is present: pass
+// 1 with this layer (and `OVERLAY_LAYER`) disabled (opaque + every ordinary translucent, whose
+// resulting depth gets copied out for feathering), pass 2 with *only* this layer enabled (just the
+// feather-flagged effects meshes, `autoClear: false`), pass 3 with only `OVERLAY_LAYER` (review fix
+// item 2 - see its own doc comment). `scene3d.js` enables both layers on the camera by default (in
+// addition to its own layer 0) so a mesh set to either one stays visible whenever that camera
+// renders in one single pass instead (a map with no feather/overlay split at all, "simple" mode,
+// raycasting, ...).
+export const FEATHER_LAYER = 1;
+// review fix item 2: "always on top" scene helpers (target beacon, area-draft vertex dots/rubber-
+// band line, hover ring - scene3d.js's own `depthTest:false` objects) - the ONLY things in
+// scene3d.js that use `depthTest:false` at all (checked by grep, `s6f3a9_effects.md` review round
+// 3's receipt lists each one and why every other S6k helper - area prisms, origin ring, the
+// selected lineup's capsule/aim line/trajectory/bounce marks, the collision overlay - stays off
+// this layer instead: they're all normally depth-tested, meant to be occluded by real geometry,
+// not "always visible"). Before the opaque/feather two-pass split (review fix item 3) these worked
+// correctly in a single `renderer.render` call purely from `depthTest:false` + a high `renderOrder`
+// (998/999) sorting them last; splitting the feather-flagged effects meshes into their own later
+// pass draws over them again since they're already-composited pixels by then, with no `renderOrder`
+// left to save them - moving them to their own layer and giving them pass 3 (after feather, still
+// `autoClear: false`) restores "always on top" regardless of how many passes the scene needs.
+export const OVERLAY_LAYER = 2;
+
 function findLightmap(lighting, needle) {
   return lighting.lightmaps.find((f) => f.file.includes(needle));
 }
@@ -152,6 +178,16 @@ function buildSharedUniforms(renderJson, res) {
     uFogLodBias: { value: fog?.lodBias ?? 0 },
     uFogSkyExposureBias: { value: fog?.skyExposureBias ?? 0 },
     uFogSkyMips: { value: fog?.skyMips ?? 0 },
+    // `s6f3a9_effects.md`: csgo_effects's live g_flTime-equivalent (mask panning), shared unchanged
+    // by every effects material (like `uSunToSun`) and updated once per frame in `renderFrame`.
+    uTime: { value: 0 },
+    // review fix item 3: F_DEPTH_FEATHER's own inputs - `uEffectsSceneDepth` is filled in once
+    // `featherDepthTarget` is built (lazily, `applyToGltf`); the other three are refreshed every
+    // frame in `renderFrame`, right before the feather-layer pass reads them.
+    uEffectsSceneDepth: { value: null },
+    uEffectsProjInverse: { value: new THREE.Matrix4() },
+    uEffectsViewInverse: { value: new THREE.Matrix4() },
+    uEffectsResolution: { value: new THREE.Vector2(1, 1) },
     _bakedShadowChannel: sun.bakedShadowChannel,
     _skyTint: sky.tint,
     _skyExposureBias: sky.exposureBias,
@@ -186,7 +222,7 @@ function resolveSlot(extras, key) {
   return { textureIndex: null, constant: null };
 }
 
-async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
+async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader, opts) {
   const material = mesh.material;
   const extras = material.userData ?? {};
   // A single texture's fetch/decode failure (bad network, unsupported format) degrades just that
@@ -404,6 +440,58 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
   }
   const hasSelfIllum = !!selfIllumMap || selfIllumConstantMask != null;
 
+  // `s6f3a9_effects.md`: csgo_effects's own masks/fresnel/feather/fade opacity formula.
+  const fxExtras = extras.effects ?? null;
+  let effects = null;
+  if (fxExtras) {
+    const m1 = resolveSlot(fxExtras, "mask1");
+    const m2 = resolveSlot(fxExtras, "mask2");
+    const m3 = resolveSlot(fxExtras, "mask3");
+    const [mask1Map, mask2Map, mask3Map] = await Promise.all([getTex(m1.textureIndex), getTex(m2.textureIndex), getTex(m3.textureIndex)]);
+    // A mask that folded to a 4x4 constant is uniform everywhere it's sampled, so scale/pan-speed
+    // (which only ever change WHERE it's sampled) can't change its value - fold it into
+    // opacityScale up front instead of building a texture/sampler for it.
+    let constantOpacity = 1;
+    if (!mask1Map && m1.constant) constantOpacity *= m1.constant.raw[0] / 255;
+    if (!mask2Map && m2.constant) constantOpacity *= m2.constant.raw[0] / 255;
+    if (!mask3Map && m3.constant) constantOpacity *= m3.constant.raw[0] / 255;
+    effects = {
+      mask1Map,
+      mask1Scale: fxExtras.mask1Scale ?? [1, 1],
+      mask1PanSpeed: fxExtras.mask1PanSpeed ?? [0, 0],
+      mask2Map,
+      mask2Scale: fxExtras.mask2Scale ?? [1, 1],
+      mask2PanSpeed: fxExtras.mask2PanSpeed ?? [0, 0],
+      mask3Map,
+      mask3Scale: fxExtras.mask3Scale ?? [1, 1],
+      mask3PanSpeed: fxExtras.mask3PanSpeed ?? [0, 0],
+      opacityScale: (fxExtras.opacityScale ?? 1) * constantOpacity,
+      colorBoost: fxExtras.colorBoost ?? 1,
+      fadeDistance: fxExtras.fadeDistance ?? 1,
+      fadeFalloff: fxExtras.fadeFalloff ?? 1,
+      fadeMin: fxExtras.fadeMin ?? 0,
+      fadeMax: fxExtras.fadeMax ?? 1,
+      fresnelExponent: fxExtras.fresnelExponent ?? 0.001,
+      fresnelFalloff: fxExtras.fresnelFalloff ?? 1,
+      fresnelMin: fxExtras.fresnelMin ?? 0,
+      fresnelMax: fxExtras.fresnelMax ?? 1,
+      // review fix item 3: real F_DEPTH_FEATHER in the main scene (the two-pass/layer scheme in
+      // `createLightingPipeline`'s `renderFrame`, `FEATHER_LAYER`'s own doc comment) - the 3D
+      // skybox still can't (`opts.disableEffectsDepthFeather`, `lightingSkybox.js`'s own call):
+      // it draws in one single pass with its own camera/scene, before the main scene's opaque
+      // depth even exists yet, and clears depth right after - there is nothing to feather against.
+      depthFeather: fxExtras.depthFeather === true && opts?.disableEffectsDepthFeather !== true,
+      featherDistance: fxExtras.featherDistance ?? 1,
+      featherFalloff: fxExtras.featherFalloff ?? 1,
+      flipBackface: material.side === THREE.DoubleSide && fxExtras.dontFlipBackfaceNormals !== true,
+      // review fix item 2: F_ADDITIVE_BLEND (RenderMaterial.cs:354-357,892) - sun_glow_001/
+      // sun_disc_glow_001 (Mirage's 3D skybox), steam_001 (Inferno) - blends (SrcAlpha, One), not
+      // the (SrcAlpha, InvSrcAlpha) every other csgo_effects material uses.
+      additive: fxExtras.blendMode === "additive",
+    };
+    if (effects.depthFeather) shared._depthFeatherNeeded = true;
+  }
+
   return {
     lightingType,
     alphaMode: alphaModeOf(material),
@@ -433,6 +521,7 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
       : null,
     baseColorAlphaMeaning: extras.baseColorAlphaMeaning,
     tintMaskMap,
+    effects,
     hasLayers,
     layer2Map,
     layer2ManualSrgb: layer2Map?.userData?.manualSrgb === true,
@@ -482,7 +571,7 @@ function applyOverlayOrder(root) {
 /** Exported for `lightingSkybox.js`'s own reuse (§5, `s6f3b2_lighting_shader.md`): the 3D skybox's
  * `render_sky.glb` needs the exact same per-(material,lightingType) game-material build, just fed
  * its own `render.json` (`renderJson.skybox.report`) and its own `shared` uniform bag. */
-export async function buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader) {
+export async function buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader, opts) {
   const cache = new Map(); // `${materialIndex}:${lightingType}` -> THREE.ShaderMaterial
   const meshes = [];
   gltf.scene.traverse((o) => {
@@ -495,14 +584,24 @@ export async function buildGameMaterials(gltf, renderJson, shared, materialPool,
     const key = `${materialIndex}:${lightingType}`;
     let material = cache.get(key);
     if (!material) {
-      const recipe = await buildRecipe(mesh, lightingType, renderJson, shared, texLoader);
+      const recipe = await buildRecipe(mesh, lightingType, renderJson, shared, texLoader, opts);
       const built = buildWorldMaterial(recipe);
       material = built.material;
+      // review fix item 3: stashed once per distinct material (not per mesh) so every mesh below
+      // sharing this cache entry - including one built on a later loop iteration, a cache hit -
+      // gets the same `FEATHER_LAYER` placement.
+      material.userData.effectsDepthFeatherLayer = recipe.effects?.depthFeather === true;
       materialPool.set(built.cacheKey, true);
       cache.set(key, material);
     }
     mesh.userData.simpleMaterial = mesh.material;
     mesh.userData.gameMaterial = material;
+    // `FEATHER_LAYER`'s own doc comment: `.set` (not `.enable`) - this mesh moves OFF layer 0
+    // entirely, so the opaque/feather two-pass split in `renderFrame` can actually exclude it from
+    // the first pass by disabling this layer on the camera. `scene3d.js` enables this same layer
+    // on the camera by default (in addition to its own layer 0) so the mesh stays visible whenever
+    // that camera renders in one single pass instead (simple mode, raycasting, ...).
+    if (material.userData.effectsDepthFeatherLayer) mesh.layers.set(FEATHER_LAYER);
   }
 }
 
@@ -542,6 +641,13 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
   }
 
   let hdrTarget = createHdrTarget(renderer, 1, 1);
+  // review fix item 3: F_DEPTH_FEATHER's own opaque-scene depth, resolved out of `hdrTarget`'s own
+  // (possibly multisampled) depth via `renderer.copyTextureToTexture` (a GL `blitFramebuffer`,
+  // which needs a matching-size destination framebuffer of its own - not a bare texture) right
+  // after the opaque/ordinary-translucent pass, in `renderFrame`. Built lazily, only once a map
+  // actually loads an effects material with F_DEPTH_FEATHER==1 (`shared._depthFeatherNeeded`, set
+  // by `buildRecipe`), so every other map pays nothing extra.
+  let featherDepthTarget = null;
   const materialPool = new Map(); // distinct customProgramCacheKey values actually handed out.
   const gameMaterials = new Map(); // all THREE.ShaderMaterial instances, for dispose().
 
@@ -566,6 +672,12 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
       gltf.scene.traverse((o) => {
         if (o.isMesh && o.userData.gameMaterial) gameMaterials.set(o.userData.gameMaterial.uuid, o.userData.gameMaterial);
       });
+      if (shared._depthFeatherNeeded && !featherDepthTarget) {
+        const w = Math.max(1, hdrTarget.width);
+        const h = Math.max(1, hdrTarget.height);
+        featherDepthTarget = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true, depthTexture: new THREE.DepthTexture(w, h) });
+        shared.uEffectsSceneDepth.value = featherDepthTarget.depthTexture;
+      }
       return materialPool.size - before;
     },
 
@@ -582,18 +694,43 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
     },
 
     resize(width, height) {
-      hdrTarget.setSize(Math.max(1, width), Math.max(1, height));
+      const w = Math.max(1, width);
+      const h = Math.max(1, height);
+      hdrTarget.setSize(w, h);
+      // review fix item 3: must stay pixel-identical to `hdrTarget` - depth/stencil blits
+      // (`renderer.copyTextureToTexture`'s own `blitFramebuffer` path) require matching source/
+      // destination dimensions.
+      featherDepthTarget?.setSize(w, h);
+      shared.uEffectsResolution.value.set(w, h);
     },
 
     // Draws `scene` with `camera` into the HDR target, then the sky (cleared first, normal depth
     // test keeps it behind anything opaque already/later drawn - see `lightingSky.js`), then this
-    // pipeline's own tonemap/LUT/dither pass straight to the canvas (`renderer`'s current target).
-    // None of these three materials include three's own `colorspace_fragment`/`tonemapping_fragment`
-    // chunks (every fragment shader here is hand-written, ending in a literal `gl_FragColor`/
-    // `fragColor` assignment) - so `renderer.outputColorSpace`/`toneMapping` never touch their
-    // output either way, and are left exactly as `scene3d.js` set them (`SRGBColorSpace`,
-    // `NoToneMapping`) - conveniently already the right tag for the post pass's sRGB-encoded bytes.
-    renderFrame(scene, camera) {
+    // pipeline's own tonemap/LUT/dither pass to `options.outputTarget` (`null`, the default, means
+    // the canvas - `renderer`'s current target). None of these three materials include three's own
+    // `colorspace_fragment`/`tonemapping_fragment` chunks (every fragment shader here is hand-
+    // written, ending in a literal `gl_FragColor`/`fragColor` assignment) - so
+    // `renderer.outputColorSpace`/`toneMapping` never touch their output either way, and are left
+    // exactly as `scene3d.js` set them (`SRGBColorSpace`, `NoToneMapping`) - conveniently already
+    // the right tag for the post pass's sRGB-encoded bytes.
+    //
+    // `options` (review fix item 3, the parallel-previews branch's own offscreen captures):
+    //  - `timeSeconds`: `scene3d.js`'s own `THREE.Clock.elapsedTime` - csgo_effects's mask panning
+    //    (`g_flTime` in the reference shader, `s6f3a9_effects.md`) reads this through `uTime`,
+    //    shared unchanged by every effects material (like `uSunToSun`); omitted leaves it at
+    //    whatever it last was (a capture doesn't need to advance the animation).
+    //  - `outputTarget`: where the post pass writes - `null` (default) is the canvas, otherwise a
+    //    `THREE.WebGLRenderTarget` the caller wants the graded LDR frame in instead.
+    //  - `overrideHdrTarget`: the HDR target the main scene actually draws into and the post pass
+    //    reads back from, in place of this pipeline's own persistent `hdrTarget` (sized for the
+    //    live canvas) - a preview capture's own off-canvas-resolution target. F_DEPTH_FEATHER only
+    //    runs when this target already carries its own `depthTexture` (`canFeather` below); when it
+    //    does, a temporary depth-copy destination is allocated for this one call and disposed at
+    //    the end, since a preview capture is occasional, unlike `hdrTarget`'s own persistent
+    //    `featherDepthTarget` (built once, reused every frame of the live animation loop).
+    renderFrame(scene, camera, { timeSeconds, outputTarget = null, overrideHdrTarget = null } = {}) {
+      if (timeSeconds != null) shared.uTime.value = timeSeconds;
+      const target = overrideHdrTarget ?? hdrTarget;
       const prevAutoClear = renderer.autoClear;
       // `WebGLBackground.render()` force-clears whenever `scene.background` is a solid `Color`
       // (three.module.js's own `forceClear = true` for that case) - ignoring `autoClear = false`
@@ -603,7 +740,7 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
       const prevBackground = scene.background;
       scene.background = null;
 
-      renderer.setRenderTarget(hdrTarget);
+      renderer.setRenderTarget(target);
       renderer.autoClear = true;
       skyPass.render(renderer, camera);
       renderer.autoClear = false;
@@ -615,13 +752,68 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
         skyboxPass.render(renderer, camera);
         renderer.clearDepth();
       }
-      renderer.render(scene, camera);
+      // review fix item 3: an override target the caller didn't attach a depthTexture to (it
+      // doesn't care about F_DEPTH_FEATHER) skips feathering rather than failing.
+      const canFeather = !!featherDepthTarget && !!target.depthTexture;
+      let tempFeatherDepth = null;
+      // review fix items 2/3: F_DEPTH_FEATHER's own opaque/feather/overlay three-pass split
+      // (`FEATHER_LAYER`/`OVERLAY_LAYER`'s own doc comments) - pass 1 (opaque + ordinary
+      // translucents, both special layers disabled) draws and its resulting depth is blitted out;
+      // pass 2 (only FEATHER_LAYER, autoClear false) draws the feather-flagged effects meshes on
+      // top, reading that copy; pass 3 (only OVERLAY_LAYER) draws the "always on top" scene helpers
+      // (target beacon, hover ring, area-draft tool) over THAT, so pass 2 never ends up on top of
+      // them. Trade-off: feather-flagged effects meshes always draw after every OTHER translucent
+      // object in the scene (not correctly depth-sorted among them, since they're now a separate
+      // draw call) - acceptable since they're atmospheric dust/steam cards that rarely share screen
+      // space with other translucent geometry (glass, ...).
+      if (canFeather) {
+        const featherDest = overrideHdrTarget
+          ? (tempFeatherDepth = new THREE.WebGLRenderTarget(target.width, target.height, {
+              depthBuffer: true,
+              depthTexture: new THREE.DepthTexture(target.width, target.height),
+            }))
+          : featherDepthTarget;
+        shared.uEffectsSceneDepth.value = featherDest.depthTexture;
+        shared.uEffectsResolution.value.set(target.width, target.height);
+        const prevCameraLayers = camera.layers.mask;
+        camera.layers.disable(FEATHER_LAYER);
+        camera.layers.disable(OVERLAY_LAYER);
+        renderer.render(scene, camera);
+        // `renderer.copyTextureToTexture`'s depth path blits between the two textures' OWN
+        // framebuffers (`properties.get(texture).__renderTarget`); that back-reference is only
+        // set up the first time a render target is actually used ("rendered to" - `target` just
+        // was, by the render() call above, but `featherDest` never is, only ever copied INTO) -
+        // `initRenderTarget` is three's own documented fix for exactly this case, and is re-checked
+        // every frame (a cheap no-op once already set up) since `resize()`'s own `setSize()`
+        // disposes and re-allocates `featherDepthTarget`'s GPU storage, invalidating it again.
+        renderer.initRenderTarget(featherDest);
+        renderer.copyTextureToTexture(target.depthTexture, featherDest.depthTexture);
+        // review fix item 1: `copyTextureToTexture`'s depth path unbinds both READ/DRAW
+        // framebuffers once it's done (three.module.js's own blit call, ~19494-19495) without
+        // telling the renderer's own `_currentRenderTarget` bookkeeping - the next `render()` call
+        // trusts that bookkeeping and skips rebinding, so its draws silently land on whatever's
+        // still bound at the raw GL level (the canvas) instead of `target`. `setRenderTarget`
+        // forces the rebind (this was the bug behind the feather-flagged dust cards - Mirage's mid
+        // haze - going invisible in game mode: the corrected pixels landed on the canvas, then the
+        // post pass's own `renderer.setRenderTarget(outputTarget)` below overwrote them anyway).
+        renderer.setRenderTarget(target);
+        shared.uEffectsProjInverse.value.copy(camera.projectionMatrixInverse);
+        shared.uEffectsViewInverse.value.copy(camera.matrixWorld);
+        camera.layers.set(FEATHER_LAYER);
+        renderer.render(scene, camera);
+        camera.layers.set(OVERLAY_LAYER);
+        renderer.render(scene, camera);
+        camera.layers.mask = prevCameraLayers;
+      } else {
+        renderer.render(scene, camera);
+      }
       scene.background = prevBackground;
 
-      renderer.setRenderTarget(null);
-      postPass.render(renderer, camera, hdrTarget);
+      renderer.setRenderTarget(outputTarget);
+      postPass.render(renderer, camera, target);
 
       renderer.autoClear = prevAutoClear;
+      tempFeatherDepth?.dispose();
     },
 
     dispose() {
@@ -634,6 +826,7 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
       skyboxPass?.dispose();
       postPass.dispose();
       hdrTarget.dispose();
+      featherDepthTarget?.dispose();
       for (const m of gameMaterials.values()) m.dispose();
       gameMaterials.clear();
       // `texLoader` is owned by the caller (`scene3d.js`'s `materialTexLoaderReady`, shared with

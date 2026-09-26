@@ -88,7 +88,9 @@ export function createHdrTarget(renderer, width, height) {
   } catch {
     samples = 0; // SwiftShader/older drivers may not expose MAX_SAMPLES meaningfully.
   }
-  return new THREE.WebGLRenderTarget(Math.max(1, width), Math.max(1, height), {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  return new THREE.WebGLRenderTarget(w, h, {
     type: THREE.HalfFloatType,
     format: THREE.RGBAFormat,
     colorSpace: THREE.NoColorSpace,
@@ -97,6 +99,12 @@ export function createHdrTarget(renderer, width, height) {
     samples,
     depthBuffer: true,
     stencilBuffer: false,
+    // `s6f3a9_effects.md` review fix item 3: F_DEPTH_FEATHER's own opaque-scene depth source -
+    // `lighting.js`'s `renderFrame` blits this (resolving MSAA in the process) into a separate,
+    // single-sample `featherDepthTarget` right after the opaque/ordinary-translucent pass, which
+    // the feather-layer effects pass then samples - never this texture itself while it's still the
+    // active render target (that would be a WebGL feedback loop).
+    depthTexture: new THREE.DepthTexture(w, h),
   });
 }
 

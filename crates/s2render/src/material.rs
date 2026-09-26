@@ -266,6 +266,9 @@ pub struct ResolvedMaterial {
     /// (`csgo_environment.frag.slang:41,83`); otherwise `F_METALNESS_TEXTURE` reads it as
     /// metalness (`complex.frag.slang:618`); everything else ignores it.
     pub base_color_alpha_meaning: &'static str,
+    /// `csgo_effects`'s masks/fresnel/feather/fade opacity formula (`s6f3a9_effects.md`),
+    /// `None` for every other shader.
+    pub effects: Option<EffectsParams>,
 }
 
 /// `csgo_environment`/`csgo_environment_blend` layer N's height/roughness/AO/metalness/colour
@@ -414,6 +417,89 @@ pub struct SelfIllum {
     pub brightness: f32,
     pub tint: [f32; 3],
     pub albedo_factor: f32,
+}
+
+/// `csgo_effects`'s own masks/fresnel/feather/fade opacity formula (`s6f3a9_effects.md`;
+/// `csgo_effects.frag.slang:36-53` for the uniform declarations/defaults this mirrors, `:58-110`
+/// for the formula the viewer must implement). `None` for every other shader. Every field here
+/// is read regardless of `F_DEPTH_FEATHER`/`F_TINT_MASK` -- the viewer decides whether to use
+/// `feather_distance`/`feather_falloff` from `depth_feather`, and `F_TINT_MASK`'s own texture
+/// stays on `ResolvedMaterial::tint_mask`/`tint_mask_texture` (already generic across shaders,
+/// and its mix formula is identical to this shader's `tintFactor` mix).
+#[derive(Debug, Clone)]
+pub struct EffectsParams {
+    pub mask1: Option<String>,
+    pub mask2: Option<String>,
+    pub mask3: Option<String>,
+    pub mask1_scale: [f32; 2],
+    pub mask2_scale: [f32; 2],
+    pub mask3_scale: [f32; 2],
+    pub mask1_pan_speed: [f32; 2],
+    pub mask2_pan_speed: [f32; 2],
+    pub mask3_pan_speed: [f32; 2],
+    /// `g_vTexCoordScrollSpeed`: declared by the reference fragment shader but never actually
+    /// read in its `main()` (confirmed on both `dust_002.vmat`/`clouds_001.vmat`, which leave it
+    /// at the zero default anyway) -- exported for completeness, not applied by the viewer.
+    pub texcoord_scroll_speed: [f32; 2],
+    pub opacity_scale: f32,
+    pub color_boost: f32,
+    pub fade_distance: f32,
+    pub fade_falloff: f32,
+    pub fade_min: f32,
+    pub fade_max: f32,
+    pub fresnel_exponent: f32,
+    pub fresnel_falloff: f32,
+    pub fresnel_min: f32,
+    pub fresnel_max: f32,
+    /// `F_DEPTH_FEATHER`: set on both `materials/effects/smoke/dust_002.vmat` and its
+    /// `_skybox` variant (feather against the opaque scene's own depth), not on
+    /// `materials/effects/clouds_001.vmat` (the 3D-skybox cloud cards themselves).
+    pub depth_feather: bool,
+    pub feather_distance: f32,
+    pub feather_falloff: f32,
+    pub dont_flip_backface_normals: bool,
+    /// `F_ADDITIVE_BLEND` (`RenderMaterial.cs:354-357,892`): wins over the shader's always-
+    /// translucent blend mode (`shader_is_always_translucent`/`compute_blend` above), blending
+    /// `(SrcAlpha, One)` instead of `(SrcAlpha, InvSrcAlpha)` -- set on
+    /// `materials/effects/glows/sun_glow_001.vmat`/`sun_disc_glow_001.vmat` (Mirage's 3D skybox)
+    /// and `materials/effects/smoke/steam_001.vmat` (Inferno); without it these darken the
+    /// background instead of glowing (Mirage's sun rendered with a dark halo).
+    pub additive_blend: bool,
+}
+
+fn effects_params(mat: &RawMaterial) -> Option<EffectsParams> {
+    if mat.shader != "csgo_effects" {
+        return None;
+    }
+    let vec2 =
+        |name: &str, default: [f32; 2]| mat.vector(name).map(|v| [v[0], v[1]]).unwrap_or(default);
+    Some(EffectsParams {
+        mask1: mat.texture("g_tMask1").map(str::to_string),
+        mask2: mat.texture("g_tMask2").map(str::to_string),
+        mask3: mat.texture("g_tMask3").map(str::to_string),
+        mask1_scale: vec2("g_vMask1Scale", [1.0, 1.0]),
+        mask2_scale: vec2("g_vMask2Scale", [1.0, 1.0]),
+        mask3_scale: vec2("g_vMask3Scale", [1.0, 1.0]),
+        mask1_pan_speed: vec2("g_vMask1PanSpeed", [0.0, 0.0]),
+        mask2_pan_speed: vec2("g_vMask2PanSpeed", [0.0, 0.0]),
+        mask3_pan_speed: vec2("g_vMask3PanSpeed", [0.0, 0.0]),
+        texcoord_scroll_speed: vec2("g_vTexCoordScrollSpeed", [0.0, 0.0]),
+        opacity_scale: mat.float("g_flOpacityScale").unwrap_or(1.0),
+        color_boost: mat.float("g_flColorBoost").unwrap_or(1.0),
+        fade_distance: mat.float("g_flFadeDistance").unwrap_or(1.0),
+        fade_falloff: mat.float("g_flFadeFalloff").unwrap_or(1.0),
+        fade_min: mat.float("g_flFadeMin").unwrap_or(0.0),
+        fade_max: mat.float("g_flFadeMax").unwrap_or(1.0),
+        fresnel_exponent: mat.float("g_flFresnelExponent").unwrap_or(0.001),
+        fresnel_falloff: mat.float("g_flFresnelFalloff").unwrap_or(1.0),
+        fresnel_min: mat.float("g_flFresnelMin").unwrap_or(0.0),
+        fresnel_max: mat.float("g_flFresnelMax").unwrap_or(1.0),
+        depth_feather: mat.int("F_DEPTH_FEATHER") == 1,
+        feather_distance: mat.float("g_flFeatherDistance").unwrap_or(0.0),
+        feather_falloff: mat.float("g_flFeatherFalloff").unwrap_or(1.0),
+        dont_flip_backface_normals: mat.int("F_DONT_FLIP_BACKFACE_NORMALS") == 1,
+        additive_blend: mat.int("F_ADDITIVE_BLEND") == 1,
+    })
 }
 
 /// Where a material's metalness value comes from (§7: "g_tMetalness или скаляр").
@@ -733,6 +819,7 @@ pub fn resolve(mat: &RawMaterial) -> ResolvedMaterial {
         env_layer2: env_layer2(mat),
         env1: env1(mat),
         base_color_alpha_meaning: base_color_alpha_meaning(mat, alpha_mode),
+        effects: effects_params(mat),
     }
 }
 
@@ -758,6 +845,17 @@ pub fn srgb_to_linear(c: [f32; 3]) -> [f32; 3] {
 /// `baseColorFactor` stays neutral white (alpha still carried through) and the tint is returned,
 /// sRGB->linear like `baseColorFactor` itself, separately for `extras.tint`/`extras.tintMask`
 /// (§4).
+///
+/// `csgo_effects.vert.slang:32-39`'s own `vColorOut` (the effects formula's `vertexColor` --
+/// `s6f3a9_effects.md`) is this same chained draw-call/scene-object tint alpha, `GetObjectTintSrgb`
+/// combined with `vCOLOR`. That `vCOLOR` factor is a genuine per-vertex `COLOR_0` stream
+/// (`VertexPaintTintColor`, `attributes::decode_color` -- present in this crate but never called
+/// from anywhere), which this exporter does not read at all, on any shader -- only the draw-call-
+/// level alpha `tint_rgba` folds in here. A material painted per-vertex (rare) would render with
+/// `vCOLOR` effectively always `(1,1,1,1)`; every csgo_effects material on the maps this exporter
+/// re-exports carries a uniform white `COLOR_0` anyway, so this has no visible effect on
+/// Mirage's/Inferno's own dust/cloud/glow cards, but it is a real, unimplemented gap worth
+/// flagging for any future material that isn't.
 pub fn base_color_factor(
     resolved: &ResolvedMaterial,
     tint_rgba: [f32; 4],
@@ -1263,6 +1361,73 @@ mod tests {
         for (got, want) in tint.iter().zip(expected) {
             assert!((got - want).abs() < 1e-5, "{tint:?}");
         }
+    }
+
+    /// `s6f3a9_effects.md`: `csgo_effects` gets `effects` with the reference shader's own defaults
+    /// (`csgo_effects.frag.slang:36-53`) when a material leaves every one of these params unset.
+    #[test]
+    fn effects_params_only_on_csgo_effects_with_shader_defaults() {
+        assert!(
+            resolve(&base_material("csgo_vertexlitgeneric"))
+                .effects
+                .is_none()
+        );
+
+        let fx = resolve(&base_material("csgo_effects"))
+            .effects
+            .expect("csgo_effects has effects params");
+        assert!(fx.mask1.is_none());
+        assert_eq!(fx.mask1_scale, [1.0, 1.0]);
+        assert_eq!(fx.mask2_scale, [1.0, 1.0]);
+        assert_eq!(fx.mask3_scale, [1.0, 1.0]);
+        assert_eq!(fx.mask1_pan_speed, [0.0, 0.0]);
+        assert_eq!(fx.texcoord_scroll_speed, [0.0, 0.0]);
+        assert_eq!(fx.opacity_scale, 1.0);
+        assert_eq!(fx.color_boost, 1.0);
+        assert_eq!(fx.fade_distance, 1.0);
+        assert_eq!(fx.fade_falloff, 1.0);
+        assert_eq!(fx.fade_min, 0.0);
+        assert_eq!(fx.fade_max, 1.0);
+        assert_eq!(fx.fresnel_exponent, 0.001);
+        assert_eq!(fx.fresnel_falloff, 1.0);
+        assert_eq!(fx.fresnel_min, 0.0);
+        assert_eq!(fx.fresnel_max, 1.0);
+        assert!(!fx.depth_feather);
+        assert_eq!(fx.feather_falloff, 1.0);
+        assert!(!fx.dont_flip_backface_normals);
+        assert!(!fx.additive_blend);
+    }
+
+    /// `materials/effects/smoke/dust_002.vmat`'s own overrides (§5's example material) resolve
+    /// exactly, including `F_DEPTH_FEATHER` gating `feather_distance`/`feather_falloff`.
+    #[test]
+    fn effects_params_reads_material_overrides() {
+        let mut mat = base_material("csgo_effects");
+        mat.texture_params.insert(
+            "g_tMask1".into(),
+            "materials/effects/smoke/dust_001_mask.vtex".into(),
+        );
+        mat.int_params.insert("F_DEPTH_FEATHER".into(), 1);
+        mat.int_params.insert("F_ADDITIVE_BLEND".into(), 1);
+        mat.float_params.insert("g_flFeatherDistance".into(), 80.0);
+        mat.float_params.insert("g_flFresnelExponent".into(), 1.369);
+        mat.vector_params
+            .insert("g_vMask1Scale".into(), [0.25, 1.0, 0.0, 0.0]);
+        mat.vector_params
+            .insert("g_vMask1PanSpeed".into(), [0.015, 0.0, 0.0, 0.0]);
+        let fx = resolve(&mat)
+            .effects
+            .expect("csgo_effects has effects params");
+        assert_eq!(
+            fx.mask1.as_deref(),
+            Some("materials/effects/smoke/dust_001_mask.vtex")
+        );
+        assert_eq!(fx.mask1_scale, [0.25, 1.0]);
+        assert_eq!(fx.mask1_pan_speed, [0.015, 0.0]);
+        assert!(fx.depth_feather);
+        assert_eq!(fx.feather_distance, 80.0);
+        assert_eq!(fx.fresnel_exponent, 1.369);
+        assert!(fx.additive_blend);
     }
 
     #[test]

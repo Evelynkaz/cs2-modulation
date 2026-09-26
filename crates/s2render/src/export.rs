@@ -589,6 +589,70 @@ impl<'a> Ctx<'a> {
             extras.insert("selfIllumTint".into(), json!(si.tint));
             extras.insert("selfIllumAlbedoFactor".into(), json!(si.albedo_factor));
         }
+        // `s6f3a9_effects.md`: `csgo_effects` (dust cards over Mirage mid, 3D-skybox cloud cards,
+        // ...) masks/fresnel/feather/fade opacity formula -- previously this shader rendered as a
+        // flat unlit albedo x baseColorFactor.a panel, ignoring all of this entirely.
+        if let Some(fx) = &resolved.effects {
+            let mut fx_json = serde_json::Map::new();
+            if let Some(p) = &fx.mask1
+                && let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
+            {
+                insert_loaded(&mut fx_json, "mask1", loaded, None);
+            }
+            if let Some(p) = &fx.mask2
+                && let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
+            {
+                insert_loaded(&mut fx_json, "mask2", loaded, None);
+            }
+            if let Some(p) = &fx.mask3
+                && let Some(loaded) = self.get_texture(p, TextureRole::Mask, ColorSpace::Linear)
+            {
+                insert_loaded(&mut fx_json, "mask3", loaded, None);
+            }
+            fx_json.insert("mask1Scale".into(), json!(fx.mask1_scale));
+            fx_json.insert("mask2Scale".into(), json!(fx.mask2_scale));
+            fx_json.insert("mask3Scale".into(), json!(fx.mask3_scale));
+            fx_json.insert("mask1PanSpeed".into(), json!(fx.mask1_pan_speed));
+            fx_json.insert("mask2PanSpeed".into(), json!(fx.mask2_pan_speed));
+            fx_json.insert("mask3PanSpeed".into(), json!(fx.mask3_pan_speed));
+            fx_json.insert(
+                "texCoordScrollSpeed".into(),
+                json!(fx.texcoord_scroll_speed),
+            );
+            fx_json.insert("opacityScale".into(), json!(fx.opacity_scale));
+            fx_json.insert("colorBoost".into(), json!(fx.color_boost));
+            fx_json.insert("fadeDistance".into(), json!(fx.fade_distance));
+            fx_json.insert("fadeFalloff".into(), json!(fx.fade_falloff));
+            fx_json.insert("fadeMin".into(), json!(fx.fade_min));
+            fx_json.insert("fadeMax".into(), json!(fx.fade_max));
+            fx_json.insert("fresnelExponent".into(), json!(fx.fresnel_exponent));
+            fx_json.insert("fresnelFalloff".into(), json!(fx.fresnel_falloff));
+            fx_json.insert("fresnelMin".into(), json!(fx.fresnel_min));
+            fx_json.insert("fresnelMax".into(), json!(fx.fresnel_max));
+            fx_json.insert("depthFeather".into(), json!(fx.depth_feather));
+            if fx.depth_feather {
+                fx_json.insert("featherDistance".into(), json!(fx.feather_distance));
+                fx_json.insert("featherFalloff".into(), json!(fx.feather_falloff));
+            }
+            fx_json.insert(
+                "dontFlipBackfaceNormals".into(),
+                json!(fx.dont_flip_backface_normals),
+            );
+            // review fix item 2: F_ADDITIVE_BLEND (RenderMaterial.cs:354-357,892) wins over the
+            // shader's always-translucent blend mode -- (SrcAlpha, One), not (SrcAlpha,
+            // InvSrcAlpha) -- on materials/effects/glows/sun_glow_001.vmat/sun_disc_glow_001.vmat
+            // (Mirage's 3D skybox) and materials/effects/smoke/steam_001.vmat (Inferno); without
+            // it these darken the background behind them instead of glowing.
+            fx_json.insert(
+                "blendMode".into(),
+                json!(if fx.additive_blend {
+                    "additive"
+                } else {
+                    "translucent"
+                }),
+            );
+            extras.insert("effects".into(), Value::Object(fx_json));
+        }
         extras.insert(
             "noSpecularAtFullRoughness".into(),
             json!(resolved.no_specular_at_full_roughness),
@@ -2394,13 +2458,13 @@ pub fn export_map_with(
     entity_table.sort_by(|a, b| a["classname"].as_str().cmp(&b["classname"].as_str()));
 
     let report = json!({
-        "formatVersion": 4,
+        "formatVersion": 5,
         "textureBudget": {
             "maxSide": options.max_texture,
             "byType": {
                 "color": { "maxSide": TextureRole::Color.max_side(options.max_texture), "note": "base color, layer-2/env-layer-2 color, self-illum" },
                 "normal": { "maxSide": TextureRole::Normal.max_side(options.max_texture), "note": "normal map (HemiOct RG + roughness in B), layer-2/env-layer-2 normal" },
-                "mask": { "maxSide": TextureRole::Mask.max_side(options.max_texture), "note": "AO, metalness, blend modulation, tint mask, csgo_environment(_blend) g_tHeight1/2" },
+                "mask": { "maxSide": TextureRole::Mask.max_side(options.max_texture), "note": "AO, metalness, blend modulation, tint mask, csgo_environment(_blend) g_tHeight1/2, csgo_effects g_tMask1/2/3" },
             },
             "dedup": {
                 "meaning": "a texture whose raw multi-level blob hashes the same as an earlier one (different vtex path, or the same texture reused in a different role at the same base mip level) is written to render_tex/ once and reused (s6f3a6_native_tex.md change item 1's 'по пути+L, затем по SHA-256 содержимого')",
@@ -2456,6 +2520,7 @@ pub fn export_map_with(
             "tintColorSpace": "linear (extras.tint is sRGB->linear converted, same as baseColorFactor)",
             "textureRefMeaning": "every *Texture key (baseColorTexture, normalTexture, aoTexture, metalnessTexture, layers.layer2ColorTexture, ...) is an index into this file's top-level textures[], never a glTF texture/image index (this exporter writes neither); a 4x4 single-mip source instead appears as the sibling *Constant key (raw pre-codec RGBA8 bytes) plus *ConstantCodec (and, for a color-space-sensitive slot, *ConstantColorSpace) -- see textures[]/texturesMeaning and native_texture::Loaded's doc comment",
             "envMaterialsMeaning": "csgo_environment/csgo_environment_blend materials (s6f3a7_env_materials.md): extras.env1 is layer 1's own height/roughness/colour inputs, present whenever g_tHeight1 resolves; extras.envLayer2 additionally carries layer 2's (only when csgo_environment_blend AND colour/normal/height all resolve). height{1,2}Texture/height{1,2}Constant: R = height (the blend-weight input to GetBlendWeights, csgo_environment.frag.slang:348-377), G = tintMask{1,2}'s source (remapped by tintMaskContrast{1,2}/tintMaskBrightness{1,2} into 0..1, gates how much of colorAdjust{1,2} shows through, csgo_environment.frag.slang:767,781-787), B = AO for alpha-tested materials only (not read by this viewer), A = metalness (zeroed unless metalnessEnabled{1,2}). roughnessContrast{1,2}/roughnessBrightness{1,2}: the same remap applied to the normal map's own B channel (roughness), csgo_environment.frag.slang:769. normalContrast{1,2}: normalize(mix(Up, decodedNormal, contrast)) after the HemiOct decode (csgo_environment.frag.slang:486-505 LayerNormal). aoLevels{1,2} = (x,y,z): the ambient-occlusion curve mix(x,z,pow(ao,max(y,0.001))) applied to the base-colour alpha (csgo_environment.frag.slang:1046), lerped between layers by the blend weight for envLayer2. colorAdjust{1,2}/adjust{1,2}: 16-float column-major mat4 (crates/s2render/src/color_correct.rs, RenderMaterial.cs:671-744) -- colorAdjust is g_mTextureColorAdjust{1,2} (tinted), adjust is g_mTextureAdjust{1,2} (tint forced white), mixed by tintMask{1,2} and, when colorCorrectionMode{1,2}==1, adjust replaces the raw texel as the base before that mix. envLayer2 additionally carries heightScale{1,2}/heightZeroPoint{1,2}/blendSoftness2 (GetBlendWeights' own inputs) and uvScale2/uvOffset2 (layer 2's UV transform, csgo_environment.vert.slang:175-180, applied to every layer-2 sample). envLayer2.unsupported (present only when non-empty): [{flag, why}] for a material that sets F_USE_NEW_BLENDING/F_ENABLE_LAYER_3/a biplanar g_nUVSet -- none of which this exporter/viewer implements, so weight2 (and everything mixed by it) is wrong for that material.",
+            "effectsMaterialsMeaning": "csgo_effects materials (s6f3a9_effects.md) -- dust cards over Mirage mid (materials/effects/smoke/dust_002(_skybox).vmat), 3D-skybox cloud cards (materials/effects/clouds_001.vmat, same shader, no F_DEPTH_FEATHER), etc: extras.effects, present on every csgo_effects material. mask{1,2,3}Texture/Constant: channel .x (=r) only, sampled at vUv*mask{n}Scale + mask{n}PanSpeed*time (a live per-frame uniform, not baked); a missing mask (texture failed to load) means that factor is 1 (no-op), matching the reference's own always-bound default-white sampler. opacity = baseColor.a * vertexColor.a * opacityScale * mask1.x * mask2.x * mask3.x * fresnel * feather * fade (csgo_effects.frag.slang:58-104); vertexColor.a here is the chained draw-call/scene-object tint alpha already folded into baseColorFactor.a (base_color_factor's own doc comment) -- NOT a per-vertex COLOR_0 stream (VertexPaintTintColor), which this exporter does not read on any shader (attributes::decode_color exists but is never called); every csgo_effects material on the maps this exporter re-exports carries a uniform white COLOR_0 anyway, so this has no visible effect here, but a per-vertex-painted effects material (none surveyed) would render wrong. colour = mix(albedo, albedo*tint, tintFactor) * colorBoost -- tintFactor/tint are this material's own generic extras.tint/extras.tintMask (F_TINT_MASK, same mix formula, no csgo_effects-specific field needed). blendMode: \"additive\" (F_ADDITIVE_BLEND==1, blends (SrcAlpha, One) -- sun_glow_001/sun_disc_glow_001/steam_001) or \"translucent\" (blends (SrcAlpha, InvSrcAlpha), every other csgo_effects material). fresnel = mix(fresnelMin, fresnelMax, saturate(pow(saturate(dot(-viewDir, geometricNormal)), fresnelExponent) * fresnelFalloff)). fade = mix(fadeMin, fadeMax, saturate(|cameraRay|/fadeDistance)) ** fadeFalloff. depthFeather (F_DEPTH_FEATHER): when true, feather = pow(clamp(distance(fragment, opaqueSceneDepthPosition)/featherDistance, 1e-4, 1), featherFalloff), else feather = 1 -- implemented for real in the main scene (lighting.js's renderFrame draws it in two passes on a dedicated layer, FEATHER_LAYER, so the opaque scene's own depth can be blitted out and read back without a WebGL feedback loop); the 3D skybox still always resolves this to feather=1 (opts.disableEffectsDepthFeather), since it draws in one single pass before the main scene's opaque depth even exists and clears depth right after itself -- see the receipt. texCoordScrollSpeed is exported but never applied: the reference fragment shader declares g_vTexCoordScrollSpeed but never reads it in main() (confirmed on both example materials, which leave it at zero anyway). dontFlipBackfaceNormals is F_DONT_FLIP_BACKFACE_NORMALS, read only when the material is also double-sided.",
             "byMaterial": ctx.report.material_extras.iter().map(|(k,v)| (k.to_string(), v.clone())).collect::<serde_json::Map<_,_>>(),
         },
         "lighting": {

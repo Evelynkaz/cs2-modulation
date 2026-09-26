@@ -10,9 +10,7 @@ use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
 use geom::mesh::CollisionMesh;
 use geom::voxel::VoxelGrid;
-use sim::{
-    SmokeParams, ThrowSpec, ThrowType, Trace, eye_height, occlusion, simulate_exact, smoke_fill,
-};
+use sim::{SmokeParams, ThrowSpec, ThrowType, Trace, eye_height, simulate_exact, smoke_fill};
 
 use crate::cmd_extract::load_or_extract_mesh;
 use crate::game_path::ensure_write_allowed;
@@ -361,10 +359,6 @@ pub fn smoke(
     Ok(if volume.cells.is_empty() { 2 } else { 0 })
 }
 
-/// Minimum smoke cells a sightline must cross to count as blocked
-/// (`SightlineCommand.cs:27`: `result.SmokeBlocked(minSmokeCells: 3)`).
-const MIN_SMOKE_CELLS_BLOCKED: u32 = 3;
-
 /// `cs2mod sightline <MAP> --from x,y,z --to x,y,z [--rest x,y,z] [--params ...]`.
 #[allow(clippy::too_many_arguments)]
 pub fn sightline(
@@ -397,14 +391,13 @@ pub fn sightline(
     let pad = p.max_radius * p.contained_stretch + 4.0 * SMOKE_VOXEL_SIZE;
     let extent = pad.max((from - rest).length()).max((to - rest).length()) + SMOKE_VOXEL_SIZE;
     let grid = build_local_voxel_grid(&mesh, &mask, rest, extent)?;
-    let volume = smoke_fill(&grid, rest, &p)?;
-    let result = occlusion(&volume, &grid, from, to);
+    let result = sim::smoke_blocks_sightline(&grid, from, to, rest, &p)?;
     println!("smoke cells crossed: {}", result.smoke_cells_crossed);
     println!("voxel geometry blocked: {}", result.geometry_blocked);
     // `Occlusion.cs:SmokeBlocked`: `SmokeCellsCrossed >= minSmokeCells`, with
     // no dependence on `geometry_blocked` (a sightline through smoke that
     // also grazes solid geometry is still graded purely on smoke coverage).
-    let blocked = result.smoke_cells_crossed >= MIN_SMOKE_CELLS_BLOCKED;
+    let blocked = result.smoke_cells_crossed >= sim::MIN_SMOKE_CELLS_BLOCKED;
     println!(
         "{}",
         if blocked {

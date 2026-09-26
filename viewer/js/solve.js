@@ -20,14 +20,16 @@ export function selectionError(params) {
   return null;
 }
 
-// `target`: `{x,y,z}` or `null` when `targetArea` is used instead (`s6g2_target_area.md`).
-// `targetArea`: `{polygon:[[x,y],...], zMin, zMax}` or `null` - mutually exclusive with `target`
-// (the UI never sets both). `origin`: `{x,y,reach}` (from a right-click) or `null`. `originArea`:
-// `{polygon:[[x,y],...], zMin, zMax}` (from the origin-area tool, `s6g_origin_area.md`) or
-// `null` - mutually exclusive with `origin` (the UI never sets both). `params`: the params
-// panel's current selections. Fields left at the server's own default are omitted, per
-// `s6f2_solve_ui.md` ("параметры, равные умолчанию, в запрос не класть").
-export function buildQuery(map, target, targetArea, origin, originArea, params) {
+// `target`: `{x,y,z}` or `null` when `targetArea`/`sightline` is used instead
+// (`s6g2_target_area.md`/`s6r_sightline_target.md`). `targetArea`: `{polygon:[[x,y],...], zMin,
+// zMax}` or `null`. `sightline`: `{from:{x,y,z}, to:{x,y,z}}` or `null` - eye points. `target`,
+// `targetArea` and `sightline` are mutually exclusive (the UI never sets more than one).
+// `origin`: `{x,y,reach}` (from a right-click) or `null`. `originArea`: `{polygon:[[x,y],...],
+// zMin, zMax}` (from the origin-area tool, `s6g_origin_area.md`) or `null` - mutually exclusive
+// with `origin` (the UI never sets both). `params`: the params panel's current selections. Fields
+// left at the server's own default are omitted, per `s6f2_solve_ui.md` ("параметры, равные
+// умолчанию, в запрос не класть").
+export function buildQuery(map, target, targetArea, sightline, origin, originArea, params) {
   // S6m: always request the precise-aim difficulty model (a parallel task adds `aimPrecision` to
   // the server) - not gated behind any UI control yet, so it's simplest to always send it rather
   // than track a would-be-constant "default" value here.
@@ -42,6 +44,11 @@ export function buildQuery(map, target, targetArea, origin, originArea, params) 
     if (targetArea.zMax != null) {
       body.targetZMax = targetArea.zMax;
     }
+  } else if (sightline) {
+    body.sightline = {
+      from: [sightline.from.x, sightline.from.y, sightline.from.z],
+      to: [sightline.to.x, sightline.to.y, sightline.to.z],
+    };
   }
   if (origin) {
     body.origin = [origin.x, origin.y];

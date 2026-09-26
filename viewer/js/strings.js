@@ -24,6 +24,16 @@ const EMPTY_REASON_PATTERNS = [
     re: /^none of the (\d+) stand spots in range can land a smoke there$/,
     text: (m) => `Ни одна из ${m[1]} точек в радиусе не даёт нужного приземления.`,
   },
+  // `s6r_sightline_target.md` review fix: a sightline's own two "zone came back empty" reasons -
+  // distinct from the point/area message above (a sightline has no tolerance to point at).
+  {
+    re: /^sightline is blocked by geometry$/,
+    text: () => "Между точками обзора стена - противник оттуда туда не видит.",
+  },
+  {
+    re: /^no landing spot's smoke seals this sightline$/,
+    text: () => "Нет места, куда можно положить смок так, чтобы дым закрыл этот обзор. Попробуйте другие точки или откуда бросать.",
+  },
 ];
 
 // Never falls through to the server's own English text - an unrecognised reason (a future server
@@ -104,13 +114,17 @@ export const strings = {
     targetModeLabel: "Цель",
     targetModePoint: "Точка",
     targetModeArea: "Область",
+    targetModeSightline: "Перекрыть обзор",
     stepTarget: "Куда бросить",
     stepOrigin: "Откуда бросать",
     stepThrow: "Граната и бросок",
     targetHintPoint: "Клик по карте",
     targetHintArea: "Обведите область",
+    targetHintSightline: "Поставьте точку, откуда смотрит противник (например, окно), затем — куда он смотрит (например, мид). Найдутся смоки, дым которых закрывает этот обзор.",
     targetRowClear: "Убрать цель",
     targetRowZ: (z) => `z ${z}`,
+    sightlineFromLabel: "Откуда смотрят",
+    sightlineStatus: (from, to) => `Обзор: из ${from} в ${to}`,
     originHintPoint: "Правый клик (2D) или Shift+клик (3D)",
     originRowClear: "Убрать точку броска",
     manualToggle: "Вставить из консоли",
@@ -223,6 +237,7 @@ export const strings = {
     toTarget: (n) => `до цели ${n} ед.`,
     distance: "расстояние",
     insideArea: "в области",
+    blocksSightline: "перекрывает обзор",
     stability: "стабильность",
     humanError: "погрешность",
     bounces: "отскоков",

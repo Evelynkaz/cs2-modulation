@@ -166,9 +166,10 @@ function readHash() {
   const params = new URLSearchParams(raw);
   const map = params.get("map");
   const targetStr = params.get("target");
-  // A link needs either a point `target` or a `targetArea` to be worth auto-running
-  // (`s6g2_target_area.md`) - the two are mutually exclusive, so either is enough on its own.
-  if (!map || (!targetStr && !params.get("targetArea"))) {
+  // A link needs a point `target`, a `targetArea`, or a `sightline` to be worth auto-running
+  // (`s6g2_target_area.md`, `s6r_sightline_target.md`) - the three are mutually exclusive, so any
+  // one of them is enough on its own.
+  if (!map || (!targetStr && !params.get("targetArea") && !params.get("sightline"))) {
     return null;
   }
   const query = { map };
@@ -219,6 +220,15 @@ function bodyFromHash(q) {
     const v = finiteNumber(q.targetZMax);
     if (v !== undefined) {
       body.targetZMax = v;
+    }
+  }
+  // `s6r_sightline_target.md`: a flat "fx,fy,fz,tx,ty,tz" list (the two eye points) - only
+  // meaningful when there is neither a `target` nor a `targetArea` (all three are mutually
+  // exclusive).
+  if (!q.target && !q.targetArea && q.sightline) {
+    const nums = q.sightline.split(",").map(Number);
+    if (nums.length === 6 && nums.every(Number.isFinite)) {
+      body.sightline = { from: nums.slice(0, 3), to: nums.slice(3, 6) };
     }
   }
   if (q.origin) {
@@ -308,8 +318,14 @@ function syncHash(body) {
   if (body.target) {
     parts.push(`target=${body.target.map((v) => v.toFixed(1)).join(",")}`);
   }
+  // `s6r_sightline_target.md`: same flat-list idiom as `targetArea`/`originArea`, for `sightline`
+  // (an object, not an array - the generic loop below only knows how to flatten arrays).
+  if (body.sightline) {
+    const flat = [...body.sightline.from, ...body.sightline.to];
+    parts.push(`sightline=${flat.map((v) => v.toFixed(1)).join(",")}`);
+  }
   for (const [k, v] of Object.entries(body)) {
-    if (k === "map" || k === "target") {
+    if (k === "map" || k === "target" || k === "sightline") {
       continue;
     }
     const text = Array.isArray(v) ? v.join(",") : String(v);
@@ -980,6 +996,7 @@ async function showMapScreen(map, opts = {}) {
     options: [
       { value: "point", label: strings.mapScreen.targetModePoint },
       { value: "area", label: strings.mapScreen.targetModeArea },
+      { value: "sightline", label: strings.mapScreen.targetModeSightline },
     ],
     onChange: (v) => setTargetMode(v),
   });
@@ -1050,9 +1067,12 @@ async function showMapScreen(map, opts = {}) {
 
   // ---- per-screen solve state ----
   const solveState = {
-    targetMode: "point", // "point" | "area" (`s6g2_target_area.md`)
+    targetMode: "point", // "point" | "area" (`s6g2_target_area.md`) | "sightline" (`s6r_sightline_target.md`)
     target: null, // { x, y, z, label }
     targetArea: null, // { polygon: [[x,y],...] } - mutually exclusive with `target`
+    // `s6r_sightline_target.md`: `{ from: {x,y,z,label}, to: {x,y,z,label} }` (eye points, already
+    // +64 above the clicked floor) - mutually exclusive with `target`/`targetArea`.
+    sightline: null,
     origin: null, // { x, y, reach }
     originArea: null, // { polygon: [[x,y],...] } (`s6g_origin_area.md`) - mutually exclusive with `origin`
     params: {
@@ -1104,6 +1124,10 @@ async function showMapScreen(map, opts = {}) {
   // only show the button row while there is more than one cluster.
   let areaLevels = null;
   let targetAreaLevels = null;
+  // `s6r_sightline_target.md`: the first eye point, while waiting for the second click -
+  // `{ x, y, z, label }`, `z` already lifted by +64. `null` once both are placed
+  // (`solveState.sightline`) or before the first click.
+  let sightlineDraft = null;
   // The last result/selection, replayed into a 3D view created after they already happened
   // (`ensureSceneView`) - `panel.js` owns the definitive copies, these just let a freshly built
   // view catch up without re-running the solve.
@@ -1190,18 +1214,111 @@ async function showMapScreen(map, opts = {}) {
     for (const v of views()) v.clearTarget();
   }
 
+  // `s6r_sightline_target.md`: how far above a clicked floor an eye sits, for both ends of the
+  // sightline - "clicked floor z + 64" (the spec's own number, not `solve.js`'s standing-eye
+  // constant, which converts a pasted `setpos` the other way).
+  const SIGHTLINE_EYE_LIFT = 64;
+
+  function clearSightlineState() {
+    solveState.sightline = null;
+    sightlineDraft = null;
+    for (const v of views()) v.clearSightline();
+  }
+
+  // `s6r_sightline_target.md`: one endpoint (already eye-lifted) of the two-click sightline. The
+  // first call becomes "откуда смотрят" (`sightlineDraft`); the second becomes "куда смотрят",
+  // completing `solveState.sightline` and clearing the draft.
+  function applySightlinePoint(eye) {
+    // Review fix: a click here always names a fresh point, so any stacked-level chooser left over
+    // from resolving it is done its job - leaving it up let a second pick in it silently become
+    // "куда" at the same x,y (a 40u vertical lane).
+    pendingLevels = null;
+    if (!sightlineDraft) {
+      // Review fix: a third click (after a sightline was already completed) starts a brand new
+      // draft - drop the finished sightline first, or its status/lane stayed on screen while only
+      // a lone marker was actually drawn, and "Найти раскидки" solved the stale pair.
+      solveState.sightline = null;
+      for (const v of views()) v.clearSightline();
+      sightlineDraft = eye;
+      for (const v of views()) v.setSightline({ from: sightlineDraft, to: null });
+    } else {
+      solveState.sightline = { from: sightlineDraft, to: eye };
+      sightlineDraft = null;
+      for (const v of views()) v.setSightline(solveState.sightline);
+    }
+    renderTargetBox();
+  }
+
+  // Same two paths as `handleMapClick` below (3D hit point vs. a 2D click resolved through
+  // `/api/levels`), routed into `applySightlinePoint` instead of `applyTarget` - see that
+  // function's own comment for why `wz` skips the levels lookup for the height itself.
+  async function handleSightlineClick(wx, wy, wz, normalZ) {
+    if (wz !== undefined) {
+      caption.textContent = "";
+      // Review fix: +64 only lifts a floor/roof click (an up-facing, near-horizontal surface -
+      // `normalZ` close to 1) to a standing eye height - a click on a wall already names a spot at
+      // that exact height (a ledge, a windowsill), so the clicked point itself is the eye there.
+      const eyeZ = normalZ >= 0.7 ? wz + SIGHTLINE_EYE_LIFT : wz;
+      const eye = { x: wx, y: wy, z: eyeZ, label: null };
+      applySightlinePoint(eye);
+      fetchLevels(map, wx, wy).then(({ data }) => {
+        if (sightlineDraft !== eye && solveState.sightline?.from !== eye && solveState.sightline?.to !== eye) {
+          return; // superseded while this was in flight
+        }
+        let label = null;
+        let bestDist = Infinity;
+        for (const lvl of data?.levels ?? []) {
+          const dist = Math.abs(lvl.z - wz);
+          if (dist < bestDist) {
+            bestDist = dist;
+            label = lvl.name ?? null;
+          }
+        }
+        eye.label = bestDist <= 64 ? label : null;
+        renderTargetBox();
+      });
+      return;
+    }
+    const { data, error } = await fetchLevels(map, wx, wy);
+    if (error !== undefined) {
+      caption.className = "stage-caption status-error";
+      caption.textContent = error ?? strings.errors.serverDown;
+      return;
+    }
+    const levels = data.levels ?? [];
+    if (levels.length === 0) {
+      caption.className = "stage-caption status-error";
+      caption.textContent = strings.mapScreen.noFloorHere;
+      return;
+    }
+    caption.className = "stage-caption";
+    caption.textContent = "";
+    if (levels.length === 1) {
+      applySightlinePoint({ x: wx, y: wy, z: levels[0].z + SIGHTLINE_EYE_LIFT, label: levels[0].name ?? null });
+    } else {
+      pendingLevels = { x: wx, y: wy, levels, forSightline: true };
+      renderTargetBox();
+    }
+  }
+
   // `wz`, when given (a 3D click - the ray already hit a real surface), skips using `/api/levels`
   // to resolve an ambiguous z - the hit point IS the target's height, no choice to make
   // (`s6f3b_viewer3d.md`: "точка попадания с высотой = цель"). It's still fetched for its nav place
   // name (coordinator follow-up to `s6k_draw_in_3d.md`): a 3D ray can pass clean through an opening
   // (e.g. a window) and land on a floor the user never meant to see - the closest level's own name,
   // when the click landed within 64u of it, makes that obvious immediately.
-  async function handleMapClick(wx, wy, wz) {
+  // `normalZ`, when given (a 3D click - `scene3d.js`'s own world-space hit-normal Z), is only
+  // read by the sightline mode below; every other mode here (and every 2D click, which never has
+  // one) simply ignores the extra argument.
+  async function handleMapClick(wx, wy, wz, normalZ) {
     // In "область" mode a plain map click is only ever meant to place a target-area vertex
     // (through the area tool's own handler, not this one) - ignore it here instead of quietly
     // setting a point target the user never asked for (`s6g2_target_area.md`).
     if (solveState.targetMode === "area") {
       return;
+    }
+    if (solveState.targetMode === "sightline") {
+      return handleSightlineClick(wx, wy, wz, normalZ);
     }
     if (wz !== undefined) {
       caption.textContent = "";
@@ -1811,32 +1928,40 @@ async function showMapScreen(map, opts = {}) {
 
   // ---- step 1: "Куда бросить" --------------------------------------------------------------------
 
-  // `s6g2_target_area.md`: switches between a point target (as before) and an area target - the
-  // two are mutually exclusive.
+  // `s6g2_target_area.md`/`s6r_sightline_target.md`: switches between a point target (as before),
+  // an area target, and a sightline - all three are mutually exclusive.
   function setTargetMode(mode) {
     if (solveState.targetMode === mode) {
       return;
     }
     solveState.targetMode = mode;
-    if (mode === "area") {
+    pendingLevels = null;
+    if (mode !== "point") {
       clearTarget();
-      pendingLevels = null;
-    } else {
+    }
+    if (mode !== "area") {
       clearTargetAreaState();
       updateTargetAreaButtons();
+    }
+    if (mode !== "sightline") {
+      clearSightlineState();
     }
     renderTargetBox();
   }
 
   function renderTargetBox() {
-    // Keeps the "Точка | Область" segmented in sync with `solveState.targetMode` - without this
-    // it never updated after the initial render (round-2 review finding 9), e.g. a deep link that
-    // opens straight into area mode still showed "Точка" selected.
+    // Keeps the "Точка | Область | Перекрыть обзор" segmented in sync with `solveState.targetMode`
+    // - without this it never updated after the initial render (round-2 review finding 9), e.g. a
+    // deep link that opens straight into area mode still showed "Точка" selected.
     targetModeSeg.setValue(solveState.targetMode);
     targetStepBody.replaceChildren();
 
     if (solveState.targetMode === "area") {
       renderTargetAreaControls();
+      return;
+    }
+    if (solveState.targetMode === "sightline") {
+      renderSightlineControls();
       return;
     }
 
@@ -1853,7 +1978,7 @@ async function showMapScreen(map, opts = {}) {
       targetStepBody.append(el("p", { className: "hint", textContent: strings.mapScreen.targetHintPoint }));
     }
 
-    if (pendingLevels) {
+    if (pendingLevels && !pendingLevels.forSightline) {
       const chooser = el("div", { className: "level-chooser" });
       chooser.append(el("p", { className: "hint", textContent: strings.mapScreen.levelsHeading }));
       for (const lvl of pendingLevels.levels) {
@@ -1891,6 +2016,44 @@ async function showMapScreen(map, opts = {}) {
       applyTarget({ x: parsed.x, y: parsed.y, z: parsed.z, label: null });
     });
     targetStepBody.append(manualToggleBtn, manualRow);
+  }
+
+  // `s6r_sightline_target.md`: "перекрыть обзор" mode's own controls - the hint, the running
+  // status ("Обзор: из <место/z> в <место/z>" once both eyes are placed, or just the first one
+  // while waiting for the second click), a clear button, and (mirroring the point mode) a
+  // stacked-floor chooser for either click.
+  function renderSightlineControls() {
+    targetStepBody.append(el("p", { className: "hint", textContent: strings.mapScreen.targetHintSightline }));
+
+    const placeZ = (p) => (p.label ? `${p.label}/${Math.round(p.z)}` : strings.mapScreen.targetRowZ(Math.round(p.z)));
+    if (solveState.sightline) {
+      const { from, to } = solveState.sightline;
+      const rowText = strings.mapScreen.sightlineStatus(placeZ(from), placeZ(to));
+      const clearBtn = el("button", { type: "button", className: "icon-btn btn-ghost", innerHTML: icon("close", 14), "aria-label": strings.mapScreen.targetRowClear });
+      clearBtn.addEventListener("click", () => {
+        clearSightlineState();
+        renderTargetBox();
+      });
+      targetStepBody.append(el("div", { className: "step-row" }, el("span", { className: "step-row-text", textContent: rowText }), clearBtn));
+    } else if (sightlineDraft) {
+      targetStepBody.append(el("p", { className: "hint", textContent: `${strings.mapScreen.sightlineFromLabel}: ${placeZ(sightlineDraft)}` }));
+    }
+
+    if (pendingLevels && pendingLevels.forSightline) {
+      const chooser = el("div", { className: "level-chooser" });
+      chooser.append(el("p", { className: "hint", textContent: strings.mapScreen.levelsHeading }));
+      for (const lvl of pendingLevels.levels) {
+        const btn = el("button", {
+          type: "button",
+          textContent: `${lvl.name ?? strings.mapScreen.levelUnnamed} (z=${lvl.z.toFixed(0)})`,
+        });
+        btn.addEventListener("click", () => {
+          applySightlinePoint({ x: pendingLevels.x, y: pendingLevels.y, z: lvl.z + SIGHTLINE_EYE_LIFT, label: lvl.name });
+        });
+        chooser.append(btn);
+      }
+      targetStepBody.append(chooser);
+    }
   }
 
   // The target-area tool's own controls (draw/edit/delete, z range, status) - same shape as the
@@ -2133,7 +2296,7 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function startSolve(bodyOverride) {
-    if (!solveState.target && !solveState.targetArea) {
+    if (!solveState.target && !solveState.targetArea && !solveState.sightline) {
       runRefs.idleStatus.className = "status status-error";
       runRefs.idleStatus.textContent = strings.solve.needTarget;
       return;
@@ -2170,7 +2333,7 @@ async function showMapScreen(map, opts = {}) {
       : null;
     const body =
       bodyOverride ??
-      buildQuery(map, solveState.target, targetAreaForQuery, solveState.origin, originAreaForQuery, solveState.params);
+      buildQuery(map, solveState.target, targetAreaForQuery, solveState.sightline, solveState.origin, originAreaForQuery, solveState.params);
     syncHash(body);
     // Snapshot now, not read back from `solveState.params.broken` in `onResult` - the panel stays
     // interactive while the solve runs, so those checkboxes could have changed by the time it ends.
@@ -2256,6 +2419,13 @@ async function showMapScreen(map, opts = {}) {
       if (body.targetZMax != null) {
         solveState.params.targetAreaZMax = body.targetZMax;
       }
+    } else if (body.sightline) {
+      solveState.targetMode = "sightline";
+      solveState.sightline = {
+        from: { x: body.sightline.from[0], y: body.sightline.from[1], z: body.sightline.from[2], label: null },
+        to: { x: body.sightline.to[0], y: body.sightline.to[1], z: body.sightline.to[2], label: null },
+      };
+      for (const v of views()) v.setSightline(solveState.sightline);
     }
     if (body.origin) {
       solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
@@ -2307,7 +2477,7 @@ async function showMapScreen(map, opts = {}) {
     }
     sceneView = createSceneView(threeContainer, map, mapSummary, state.theme);
     currentViews.push(sceneView);
-    sceneView.onClick((wx, wy, wz) => handleMapClick(wx, wy, wz));
+    sceneView.onClick((wx, wy, wz, normalZ) => handleMapClick(wx, wy, wz, normalZ));
     sceneView.onRightClick((wx, wy, wz) => handleOriginClick(wx, wy, wz));
     sceneView.onAreaChange("origin", (payload) => handleAreaChange("origin", sceneView, payload));
     sceneView.onAreaChange("target", (payload) => handleAreaChange("target", sceneView, payload));
@@ -2336,6 +2506,9 @@ async function showMapScreen(map, opts = {}) {
     // Catch up on state this view missed by not existing yet.
     if (solveState.target) {
       sceneView.setTarget(solveState.target);
+    }
+    if (solveState.sightline || sightlineDraft) {
+      sceneView.setSightline(solveState.sightline ?? { from: sightlineDraft, to: null });
     }
     if (solveState.origin) {
       sceneView.setOrigin(solveState.origin);

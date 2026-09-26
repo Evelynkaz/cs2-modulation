@@ -16,7 +16,10 @@ use geom::math::{Aabb, V3};
 use geom::mesh::{CollisionAttribute, CollisionMesh};
 use geom::voxel::VoxelGrid;
 use rayon::prelude::*;
-use sim::{ThrowConstants, ThrowSpec, ThrowType, eye_height, forward_from_angles, simulate_voxel};
+use sim::{
+    MIN_SMOKE_CELLS_BLOCKED, SmokeParams, ThrowConstants, ThrowSpec, ThrowType, eye_height,
+    forward_from_angles, simulate_voxel, smoke_blocks_sightline,
+};
 
 use crate::lineup::Lineup;
 use crate::standspots::float_lerp;
@@ -69,6 +72,23 @@ const AREA_BUCKET_CANDIDATES: usize = 256;
 /// is left untouched rather than analyzed, so the pass's own cost stays bounded regardless of how
 /// many candidates a solve verifies.
 const ROBUST_MAX_LINEUPS: usize = 600;
+
+/// `s6r_sightline_target.md`: the smoke model `Target::Sightline` fills against, both for
+/// `zone::solve`'s candidate cells and for the exact per-candidate accept check
+/// (`smoke_blocks_sightline`). `SmokeParams::FULL_REACH` (144u, `contained_stretch` 1.75) - "the
+/// bloom at the grenade's full documented reach" (`SmokeParams.cs`), not `Coverage`'s further-
+/// shrunk overlay promise (128u), because whether a real smoke blocks a real sightline is a
+/// physical question, not a display one.
+///
+/// Review-approved deviation: the reference's own sightline CLI commands (`LineupsCommand.cs`/
+/// `SolveCommand.cs`) default to `UncalibratedDefault` (165u) like every other older CLI path
+/// there, not `FullReach`. Kept as `FullReach` anyway - `SmokeParams.cs:31-35` calls `GameRadius`
+/// (144u, `FullReach`'s own radius) "the one sourced number in this file" (CS:GO's documented
+/// 288-unit-diameter smoke, still true in CS2), while `UncalibratedDefault` (165u) "says in its
+/// own name that nobody has checked it ... [and] is deliberately left alone" rather than a number
+/// anyone actually stands behind. A "does this real smoke block this real sightline" verdict
+/// should use the sourced radius, not the admittedly-unverified one.
+const SIGHTLINE_SMOKE_PARAMS: SmokeParams = SmokeParams::FULL_REACH;
 
 const ALL_TYPES: [ThrowType; 5] = [
     ThrowType::Stand,
@@ -147,9 +167,10 @@ impl TargetArea {
 }
 
 /// The solve's target: an exact point with a landing tolerance (as before `s6g2_target_area.md`),
-/// or an area the grenade just needs to come to rest anywhere inside (new). Kept as an enum
-/// rather than another bag of `Option` fields on `SolveQuery` because stage 7 adds a third kind
-/// (a target point in mid-air, for flashes/HE) - see this type's own call sites in
+/// an area the grenade just needs to come to rest anywhere inside (`s6g2_target_area.md`), or a
+/// sightline the smoke must block (`s6r_sightline_target.md`, eye points - not feet). Kept as an
+/// enum rather than another bag of `Option` fields on `SolveQuery` because stage 7 adds a fourth
+/// kind (a target point in mid-air, for flashes/HE) - see this type's own call sites in
 /// `solve_for_target` for what each variant means at every point the old single `V3` target was
 /// read (region bounds, origin-click fallback, zone, aim/verify, ranking, exhaustive search).
 pub enum Target {
@@ -159,6 +180,12 @@ pub enum Target {
         tolerance: f32,
     },
     Area(TargetArea),
+    /// `s6r_sightline_target.md`: `from`/`to` are eye points (the reference's `SightlineSpec`'s
+    /// `EyeA`/`EyeB`), not feet - the caller (CLI/server) adds the +64 eye lift before this point.
+    Sightline {
+        from: V3,
+        to: V3,
+    },
 }
 
 fn polygon_bounds_xy(polygon: &[[f32; 2]]) -> ([f32; 2], [f32; 2]) {
@@ -331,6 +358,61 @@ fn area_target_zone(grid: &VoxelGrid, area: &TargetArea) -> Vec<(usize, i32)> {
     zone
 }
 
+/// The landing zone for `Target::Sightline` (`s6r_sightline_target.md`): `zone::solve`'s own
+/// smoke-sealed rest cells (`LandingZoneSolver.cs:47-89`, already ported at `zone.rs`), converted
+/// to the same `(cell index, crossings)` shape every other target's zone uses -
+/// `LineupsCommand.cs:82-87`'s own `zoneCrossings[grid.Index(x, y, z)] = cell.MinCrossings`,
+/// recomputing each cell's index from its center via `CellOf` exactly as the reference does rather
+/// than threading an index through `zone::LandingCell` (which mirrors the reference record
+/// field-for-field, `Center`+`MinCrossings` only). `Err` (every jittered ray of the sightline is
+/// blocked by geometry) becomes an empty zone - handled the same as any other empty zone below.
+/// Also returns the raw `zone::solve` diagnostics (clear/total eye-ray pairs) for
+/// `TargetSolve::sightline_zone`, `None` on the error path, and (review fix) which of
+/// `SightlineZoneEmpty`'s two cases an empty zone is, `None` when the zone has cells.
+fn sightline_target_zone(
+    grid: &VoxelGrid,
+    raycaster: &Bvh,
+    from: V3,
+    to: V3,
+) -> (
+    Vec<(usize, i32)>,
+    Option<SightlineZoneInfo>,
+    Option<SightlineZoneEmpty>,
+) {
+    let sightlines = [zone::SightlineSpec::new(from, to)];
+    match zone::solve(
+        grid,
+        raycaster,
+        &sightlines,
+        &SIGHTLINE_SMOKE_PARAMS,
+        MIN_SMOKE_CELLS_BLOCKED,
+    ) {
+        Ok(result) => {
+            let cells = result
+                .zone
+                .iter()
+                .map(|c| {
+                    let (x, y, z) = grid.cell_of(c.center);
+                    (grid.index(x, y, z), c.min_crossings as i32)
+                })
+                .collect();
+            let empty = result
+                .zone
+                .is_empty()
+                .then_some(SightlineZoneEmpty::NoSealingSpot);
+            let info = SightlineZoneInfo {
+                zone_cells: result.zone.len(),
+                clear_pairs: result.clear_pairs,
+                total_pairs: result.total_pairs,
+            };
+            (cells, Some(info), empty)
+        }
+        Err(zone::ZoneError::EveryRayBlocked) => {
+            (Vec::new(), None, Some(SightlineZoneEmpty::GeometryBlocked))
+        }
+    }
+}
+
 /// The single point downstream aim-reference/exhaustive-search/tie-break code needs for
 /// `Target::Area` (`s6g2_target_area.md`: "представительная точка: центроид клеток зоны,
 /// притянутый к ближайшей клетке зоны"): the zone's raw mean can land outside the zone entirely
@@ -464,6 +546,34 @@ pub struct TargetSolve {
     pub collider: UniformGrid,
     pub player_collider: UniformGrid,
     pub collider_glass_gone: Option<UniformGrid>,
+    /// `s6r_sightline_target.md`: `zone::solve`'s own diagnostics for a `Target::Sightline` query
+    /// (`SolveCommand.cs`'s own "eye rays: X/Y geometry-clear" / "landing zone: N cells" console
+    /// lines) - `None` for every other target kind, and for a sightline whose every jittered ray
+    /// was blocked by geometry.
+    pub sightline_zone: Option<SightlineZoneInfo>,
+}
+
+/// `s6r_sightline_target.md`: `zone::SolveResult`'s own counts, kept on `TargetSolve` for
+/// reporting (`cmd_solver.rs`'s console output) without exposing the zone's cell list itself.
+#[derive(Debug, Clone, Copy)]
+pub struct SightlineZoneInfo {
+    pub zone_cells: usize,
+    pub clear_pairs: usize,
+    pub total_pairs: usize,
+}
+
+/// Review fix: `sightline_target_zone`'s own two distinct "the zone came back empty" cases - a
+/// point/area target's shared "no reachable landing cells... tolerance is too small" message is
+/// wrong for either of these (a sightline has no tolerance), so the caller needs to tell them
+/// apart to report each with its own honest copy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SightlineZoneEmpty {
+    /// `zone::ZoneError::EveryRayBlocked`: every jittered ray of the sightline is blocked by
+    /// geometry - there is no line of sight here for any smoke to block.
+    GeometryBlocked,
+    /// `zone::solve` ran (a real, geometry-clear sightline) but no candidate rest cell's smoke
+    /// seals every one of its clear jittered pairs.
+    NoSealingSpot,
 }
 
 fn xy(v: V3) -> [f32; 2] {
@@ -492,6 +602,7 @@ fn cancelled_solve(
         collider,
         player_collider,
         collider_glass_gone,
+        sightline_zone: None,
     }
 }
 
@@ -960,6 +1071,7 @@ pub fn solve_for_target(
             let (lo, hi) = area.bounds_xy();
             [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]
         }
+        Target::Sightline { from, to } => [(from.x + to.x) / 2.0, (from.y + to.y) / 2.0],
     };
     let origin_click = q.origin_click.unwrap_or(target_anchor_xy);
 
@@ -984,7 +1096,7 @@ pub fn solve_for_target(
     // and there is no single point to nav-ground-snap or settle.
     let mut point_target: V3 = match &q.target {
         Target::Point { pos, .. } => *pos,
-        Target::Area(_) => V3::ZERO,
+        Target::Area(_) | Target::Sightline { .. } => V3::ZERO,
     };
     if let Target::Point { has_z, .. } = &q.target {
         let nav_z = if !has_z {
@@ -1046,6 +1158,10 @@ pub fn solve_for_target(
             [point_target.x, point_target.y],
         ),
         Target::Area(area) => area.bounds_xy(),
+        Target::Sightline { from, to } => (
+            [from.x.min(to.x), from.y.min(to.y)],
+            [from.x.max(to.x), from.y.max(to.y)],
+        ),
     };
     let min = V3::new(
         (target_min_xy[0].min(reach_min_xy[0]) - 500.0).max(mesh_min.x),
@@ -1063,6 +1179,7 @@ pub fn solve_for_target(
     let mut z_cap = match &q.target {
         Target::Point { .. } => point_target.z + 900.0,
         Target::Area(area) => area.z_max.map_or(mesh_max.z + 64.0, |z| z + 900.0),
+        Target::Sightline { from, to } => from.z.max(to.z) + 900.0,
     };
     if let Some(zmax) = q.origin_area.as_ref().and_then(|a| a.z_max) {
         z_cap = z_cap.max(zmax + VOXEL_SIZE);
@@ -1111,24 +1228,39 @@ pub fn solve_for_target(
         point_target = settle_target(&collider, &grid, point_target);
     }
 
-    // The zone: cells a lineup's rest point must land in to count.
-    let zone_crossings = match &q.target {
-        Target::Point { tolerance, .. } => zone::point_target_zone(&grid, point_target, *tolerance),
-        Target::Area(area) => area_target_zone(&grid, area),
+    // The zone: cells a lineup's rest point must land in to count. `Target::Sightline` also needs
+    // an exact-triangle raycaster to tell a real sightline from a ray geometry already blocks
+    // (`zone::solve`'s own `raycaster.blocked` filter, `LandingZoneSolver.cs:54-60`) - built once
+    // here over the same region as everything else, distinct from the later `direct_los` raycaster
+    // below (which needs the fully-verified lineup list, not yet computed at this point).
+    let (zone_crossings, sightline_zone, sightline_zone_empty) = match &q.target {
+        Target::Point { tolerance, .. } => (
+            zone::point_target_zone(&grid, point_target, *tolerance),
+            None,
+            None,
+        ),
+        Target::Area(area) => (area_target_zone(&grid, area), None, None),
+        Target::Sightline { from, to } => {
+            let raycaster =
+                Bvh::build(&map.mesh, &attr_mask, Some(region)).expect("finite mesh vertices");
+            sightline_target_zone(&grid, &raycaster, *from, *to)
+        }
     };
 
     // The single point downstream aim-reference/exhaustive-search/tie-break code still needs
     // (`s6g2_target_area.md`'s "представительная точка"): the settled point for `Target::Point`,
-    // or the area zone's own centroid pulled onto its nearest actual cell for `Target::Area`
-    // (`zone_representative_point`). Falls back to the polygon's own bbox center when the zone
-    // came back empty, purely so the "no reachable landing cells" message below has *a* point to
-    // report - nothing downstream reads it in that case.
-    let target =
-        match &q.target {
-            Target::Point { .. } => point_target,
-            Target::Area(_) => zone_representative_point(&grid, &zone_crossings)
-                .unwrap_or(V3::new(target_anchor_xy[0], target_anchor_xy[1], min.z)),
-        };
+    // or the area/sightline zone's own centroid pulled onto its nearest actual cell
+    // (`zone_representative_point`). Falls back to the anchor point when the zone came back empty,
+    // purely so the "no reachable landing cells" message below has *a* point to report - nothing
+    // downstream reads it in that case.
+    let target = match &q.target {
+        Target::Point { .. } => point_target,
+        Target::Area(_) | Target::Sightline { .. } => zone_representative_point(
+            &grid,
+            &zone_crossings,
+        )
+        .unwrap_or(V3::new(target_anchor_xy[0], target_anchor_xy[1], min.z)),
+    };
 
     let player_mask_val = player_mask(&map.mesh);
     let player_collider = UniformGrid::build(&map.mesh, &player_mask_val, Some(region), 128.0)
@@ -1136,10 +1268,21 @@ pub fn solve_for_target(
     progress(Phase::Origins, 0);
 
     if zone_crossings.is_empty() {
-        let why = format!(
-            "target ({:.0},{:.0},{:.0}) has no reachable landing cells - it resolved inside solid geometry, or the tolerance is too small",
-            target.x, target.y, target.z
-        );
+        // Review fix: a sightline has no tolerance, so the point/area message below (which names
+        // one) is actively wrong for it - `sightline_zone_empty` tells the two ways a sightline's
+        // own zone comes back empty apart, each with its own honest reason.
+        let why = match sightline_zone_empty {
+            Some(SightlineZoneEmpty::GeometryBlocked) => {
+                "sightline is blocked by geometry".to_string()
+            }
+            Some(SightlineZoneEmpty::NoSealingSpot) => {
+                "no landing spot's smoke seals this sightline".to_string()
+            }
+            None => format!(
+                "target ({:.0},{:.0},{:.0}) has no reachable landing cells - it resolved inside solid geometry, or the tolerance is too small",
+                target.x, target.y, target.z
+            ),
+        };
         // `TargetSolver.cs:249` also `Console.Error.WriteLine`s this; left
         // to the caller here instead (`TargetSolve::empty_reason` already
         // carries it) so a CLI/server surfacing it once doesn't print it
@@ -1155,6 +1298,7 @@ pub fn solve_for_target(
             collider,
             player_collider,
             collider_glass_gone,
+            sightline_zone,
         };
     }
 
@@ -1407,7 +1551,7 @@ pub fn solve_for_target(
         // flight_time, ordinal), none of which favor any particular spot inside the area.
         target: match &q.target {
             Target::Point { .. } => Some(target),
-            Target::Area(_) => None,
+            Target::Area(_) | Target::Sightline { .. } => None,
         },
         extra_fronts: if has_origin { &[] } else { &q.spawn_fronts },
         max_refine_seeds: if deep_spot {
@@ -1425,15 +1569,18 @@ pub fn solve_for_target(
         // runner-up in the same bucket would have passed. `Target::Area` keeps up to
         // `AREA_BUCKET_CANDIDATES` ranked candidates per bucket below and verifies them in
         // rounds; `Target::Point` keeps its original single slot.
+        // `Target::Sightline` keeps the same deep bucket too (`s6r_sightline_target.md`): its own
+        // exact accept check (a fresh smoke fill per candidate) is pickier than a polygon test, so
+        // a bucket's first candidate failing it needs real runners-up to fall back to.
         keep_per_bucket: match &q.target {
             Target::Point { .. } => 1,
-            Target::Area(_) => AREA_BUCKET_CANDIDATES,
+            Target::Area(_) | Target::Sightline { .. } => AREA_BUCKET_CANDIDATES,
         },
         // Review G2 round 3, item 2: a per-origin range/window check measured only to the zone's
         // centroid can wrongly prune or narrow away a point that is genuinely reachable via a
         // different part of a spread-out area. `Target::Point`'s own single point *is* its
         // centroid, so leaving this `false` there is exact, not an approximation.
-        widen_to_zone_extent: matches!(q.target, Target::Area(_)),
+        widen_to_zone_extent: matches!(q.target, Target::Area(_) | Target::Sightline { .. }),
         on_pruned: on_pruned_ref,
         coverage: Some(&coverage_map),
         on_origin: hooks.on_origin,
@@ -1446,7 +1593,7 @@ pub fn solve_for_target(
     // have passed.
     let area_buckets: Option<Vec<Vec<Lineup>>> = match &q.target {
         Target::Point { .. } => None,
-        Target::Area(_) => Some(sweep::solve_buckets(
+        Target::Area(_) | Target::Sightline { .. } => Some(sweep::solve_buckets(
             &grid,
             &zone_crossings,
             &types_list,
@@ -1492,7 +1639,7 @@ pub fn solve_for_target(
     // aim/positioning quality and, with an origin click, distance from *that*.
     let (verify_aim_target, verify_tolerance) = match &q.target {
         Target::Point { tolerance, .. } => (Some(target), Some(*tolerance)),
-        Target::Area(_) => (None, None),
+        Target::Area(_) | Target::Sightline { .. } => (None, None),
     };
     // `exhaustive_exact_spot`'s own accept test is a flat XY circle around `target`, no zone
     // lookup at all - exactly the query for `Target::Point`, but for `Target::Area` only ever a
@@ -1512,17 +1659,52 @@ pub fn solve_for_target(
             }
             r + VOXEL_SIZE
         }
+        // Same idea as `Target::Area` above, but over the sightline zone's own cells (it has no
+        // polygon vertices) - the distance from the representative point to the farthest zone
+        // cell, plus a voxel of slack.
+        Target::Sightline { .. } => {
+            let mut r: f32 = 0.0;
+            for &(cell, _) in &zone_crossings {
+                let c = grid.cell_center(cell);
+                let dx = c.x - target.x;
+                let dy = c.y - target.y;
+                r = r.max((dx * dx + dy * dy).sqrt());
+            }
+            r + VOXEL_SIZE
+        }
     };
     // The exact polygon+z predicate `verify_exact` combines with its own cell-based `in_zone`
     // test (`verify.rs`'s `accepts()`) - closes the cell-boundary gap `in_zone` alone leaves (a
     // zone cell qualifies by its *center* being inside the polygon, so a rest point near that
     // cell's far edge could otherwise sit a few units past the drawn boundary).
+    // `s6r_sightline_target.md`: `Target::Sightline`'s own exact final check, closing the same
+    // kind of cell-vs-continuous gap `Target::Area`'s hard-promise re-check closes for its
+    // polygon (above) - `in_zone` alone only confirms the candidate's *cell* passed `zone::solve`'s
+    // own (stricter: 9 jittered rays, every one must clear `min_smoke_cells`) test at that cell's
+    // center; this re-tests the single center-to-center ray at the candidate's own exact,
+    // continuous rest point - which a real throw can settle up to half a voxel away from that
+    // center - by the same rule `cs2mod sightline --rest` uses (`sim::smoke_blocks_sightline`,
+    // reused rather than re-implemented). Review finding: in practice this almost never overturns
+    // what `in_zone` already decided (the zone's own 9-ray test is the harder one to clear), so
+    // its actual job is closing that rare remaining gap, not doing the primary filtering - `grid`
+    // already covers `from`/`to` and every candidate rest point (both are inside `region`), so no
+    // per-candidate grid needs building either way, only a bounded flood-fill and one ray walk.
     let area_predicate: Option<Box<dyn Fn(V3) -> bool + Sync + '_>> = match &q.target {
         Target::Point { .. } => None,
         Target::Area(area) => Some(Box::new(move |p: V3| {
             point_in_area_polygon(&area.polygon, p.x, p.y)
                 && z_in_range(area.z_min, area.z_max, p.z)
         })),
+        Target::Sightline { from, to } => {
+            // A plain reference, captured by the `move` closure below instead of `grid` itself
+            // (an owning `VoxelGrid`) - `grid` is still needed by name after this match (the
+            // verify/sweep calls a few lines down).
+            let grid_ref: &VoxelGrid = &grid;
+            Some(Box::new(move |p: V3| {
+                smoke_blocks_sightline(grid_ref, *from, *to, p, &SIGHTLINE_SMOKE_PARAMS)
+                    .is_ok_and(|r| r.smoke_cells_crossed >= MIN_SMOKE_CELLS_BLOCKED)
+            }))
+        }
     };
     let verify_opts = verify::VerifyOptions {
         min_stability,
@@ -1878,6 +2060,29 @@ pub fn solve_for_target(
         l.direct_los = !raycaster.blocked(eye, landing_eye);
     }
 
+    // `s6r_sightline_target.md`: every survivor here already passed the sightline accept
+    // predicate above (so `blocks_sightline` is always `true`), but the exact smoke-cell crossing
+    // count wasn't kept from that check - one more (cheap: shared `grid`, no rebuild) pass over
+    // the final, already-small survivor list gets it for the JSON `smokeCellsCrossed` field.
+    if let Target::Sightline { from, to } = &q.target {
+        let mark = |l: &mut Lineup| {
+            let crossed =
+                smoke_blocks_sightline(&grid, *from, *to, l.rest_point, &SIGHTLINE_SMOKE_PARAMS)
+                    .map(|r| r.smoke_cells_crossed)
+                    .unwrap_or(0);
+            l.blocks_sightline = Some(crossed >= MIN_SMOKE_CELLS_BLOCKED);
+            l.smoke_cells_crossed = Some(crossed);
+        };
+        for l in verified.iter_mut() {
+            mark(l);
+        }
+        if let Some(rl) = referee_lineups.as_mut() {
+            for l in rl.iter_mut() {
+                mark(l);
+            }
+        }
+    }
+
     progress(Phase::Pins, origins_list.len());
     let mut origin_pins: HashMap<(i32, i32), i32> = HashMap::new();
     for &o in &origins_list {
@@ -1925,6 +2130,7 @@ pub fn solve_for_target(
         collider,
         player_collider,
         collider_glass_gone,
+        sightline_zone,
     }
 }
 

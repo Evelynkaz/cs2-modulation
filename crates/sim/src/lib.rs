@@ -14,7 +14,7 @@ pub mod smoke;
 pub mod throw;
 pub mod trajectory;
 
-pub use occlusion::{OcclusionResult, occlusion};
+pub use occlusion::{MIN_SMOKE_CELLS_BLOCKED, OcclusionResult, occlusion, smoke_blocks_sightline};
 pub use smoke::{SmokeParams, SmokeVolume, smoke_fill};
 pub use throw::{
     BASE_GRAVITY, BROKEN_PANE_REACH, CROUCH_EYE_HEIGHT, FLOOR_NORMAL_Z, GRENADE_HALF,

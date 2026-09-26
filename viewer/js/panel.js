@@ -422,6 +422,11 @@ export function createPanel(container, handlers) {
     if (l.insideTargetArea === true) {
       header.append(el("span", { className: "pill", textContent: strings.panel.insideArea }));
     }
+    // `s6r_sightline_target.md`: badges a lineup whose smoke blocks the query's sightline - only
+    // present at all for a sightline solve (`blocksSightline` is `undefined` otherwise).
+    if (l.blocksSightline === true) {
+      header.append(el("span", { className: "pill", textContent: strings.panel.blocksSightline }));
+    }
 
     const stats = el(
       "div",
@@ -431,8 +436,9 @@ export function createPanel(container, handlers) {
       el("span", { innerHTML: icon("gauge", 14) }, `${Math.round(l.stability * 100)}%`),
     );
     // A point-target distance stat only - an area target has no single "distance to" (its own
-    // "в области" pill above already says what matters) (round-2 review finding 14).
-    if (l.insideTargetArea === undefined && target) {
+    // "в области" pill above already says what matters) (round-2 review finding 14), and neither
+    // does a sightline target (its own "перекрывает обзор" pill says what matters instead).
+    if (l.insideTargetArea === undefined && l.blocksSightline === undefined && target) {
       const dist = Math.round(distance3(l.rest, [target.x, target.y, target.z]));
       stats.append(el("span", { innerHTML: icon("target", 14) }, strings.panel.toTarget(dist)));
     }

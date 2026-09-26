@@ -169,11 +169,21 @@ enum Command {
     Solve {
         /// Map name (e.g. `de_mirage`).
         map: String,
-        /// `x,y` or `x,y,z`; without a `z`, the height is derived from nav data.
-        #[arg(long, allow_hyphen_values = true)]
-        target: String,
+        /// `x,y` or `x,y,z`; without a `z`, the height is derived from nav data. Required unless
+        /// `--sightline` is given.
+        #[arg(
+            long,
+            allow_hyphen_values = true,
+            required_unless_present = "sightline",
+            conflicts_with = "sightline"
+        )]
+        target: Option<String>,
         #[arg(long, default_value_t = 80.0)]
         tolerance: f32,
+        /// `x1,y1,z1:x2,y2,z2`, eye points: find smokes whose cloud blocks the line of sight
+        /// between them (`s6r_sightline_target.md`). Mutually exclusive with `--target`.
+        #[arg(long, allow_hyphen_values = true)]
+        sightline: Option<String>,
         /// Origin click `x,y[,z]`: only lineups near this spot.
         #[arg(long, allow_hyphen_values = true, conflicts_with = "getpos")]
         from: Option<String>,
@@ -552,6 +562,7 @@ fn run() -> anyhow::Result<u8> {
             map,
             target,
             tolerance,
+            sightline,
             from,
             getpos,
             reach,
@@ -571,8 +582,9 @@ fn run() -> anyhow::Result<u8> {
             cache,
         } => cmd_solver::solve(
             &map,
-            &target,
+            target.as_deref(),
             tolerance,
+            sightline.as_deref(),
             from.as_deref(),
             getpos.as_deref(),
             reach,

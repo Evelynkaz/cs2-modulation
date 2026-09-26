@@ -171,6 +171,29 @@ fn parse_vec2_or_3(s: &str) -> anyhow::Result<(V3, bool)> {
     Ok((V3::new(parts[0], parts[1], z), parts.len() > 2))
 }
 
+/// `--sightline x1,y1,z1:x2,y2,z2` (`s6r_sightline_target.md`): a pair of exact `x,y,z` eye
+/// points, no 2D fallback (there is no nav-ground height to derive an eye position from).
+fn parse_sightline_spec(s: &str) -> anyhow::Result<(V3, V3)> {
+    let (a, b) = s
+        .split_once(':')
+        .with_context(|| format!("invalid \"{s}\": expected \"x1,y1,z1:x2,y2,z2\""))?;
+    Ok((parse_vec3_exact(a)?, parse_vec3_exact(b)?))
+}
+
+fn parse_vec3_exact(s: &str) -> anyhow::Result<V3> {
+    let parts: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f32>())
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("invalid \"{s}\": expected \"x,y,z\""))?;
+    anyhow::ensure!(
+        parts.len() == 3,
+        "invalid \"{s}\": expected \"x,y,z\", got {} values",
+        parts.len()
+    );
+    Ok(V3::new(parts[0], parts[1], parts[2]))
+}
+
 fn parse_throw_type(s: &str) -> anyhow::Result<ThrowType> {
     Ok(match s {
         "stand" => ThrowType::Stand,
@@ -214,8 +237,9 @@ fn getpos_origin(gp: &str) -> anyhow::Result<([f32; 2], f32)> {
 #[allow(clippy::too_many_arguments)]
 pub fn solve(
     map: &str,
-    target_spec: &str,
+    target_spec: Option<&str>,
     tolerance: f32,
+    sightline_spec: Option<&str>,
     from_spec: Option<&str>,
     getpos_spec: Option<&str>,
     reach: Option<f32>,
@@ -297,7 +321,26 @@ pub fn solve(
         spawn_fronts.push(ct_spawns[ct_spawns.len() / 2]);
     }
 
-    let (target, has_target_z) = parse_vec2_or_3(target_spec)?;
+    // `s6r_sightline_target.md`: `--sightline` builds `Target::Sightline` instead of the usual
+    // `Target::Point`; mutually exclusive with `--target` (`required_unless_present`/
+    // `conflicts_with` on the clap args already enforce this for real CLI use, but `solve` is
+    // also a plain function, so both ends are checked here too).
+    let target_kind = match (target_spec, sightline_spec) {
+        (Some(_), Some(_)) => bail!("--target and --sightline are mutually exclusive"),
+        (None, None) => bail!("either --target or --sightline is required"),
+        (Some(t), None) => {
+            let (pos, has_z) = parse_vec2_or_3(t)?;
+            Target::Point {
+                pos,
+                has_z,
+                tolerance,
+            }
+        }
+        (None, Some(sl)) => {
+            let (from, to) = parse_sightline_spec(sl)?;
+            Target::Sightline { from, to }
+        }
+    };
 
     let (origin_click, origin_z) = if let Some(gp) = getpos_spec {
         let (click, z) = getpos_origin(gp)?;
@@ -380,11 +423,7 @@ pub fn solve(
         3100.0
     });
     let query = SolveQuery {
-        target: Target::Point {
-            pos: target,
-            has_z: has_target_z,
-            tolerance,
-        },
+        target: target_kind,
         origin_click,
         origin_z,
         origin_reach: reach,
@@ -406,16 +445,23 @@ pub fn solve(
     let constants = resolve_constants(constants_path)?;
     let cancel = AtomicBool::new(false);
 
-    println!(
-        "solving target ({:.0},{:.0}{}) tolerance {tolerance:.0}u ...",
-        target.x,
-        target.y,
-        if has_target_z {
-            format!(",{:.0}", target.z)
-        } else {
-            String::new()
-        }
-    );
+    match &query.target {
+        Target::Point { pos, has_z, .. } => println!(
+            "solving target ({:.0},{:.0}{}) tolerance {tolerance:.0}u ...",
+            pos.x,
+            pos.y,
+            if *has_z {
+                format!(",{:.0}", pos.z)
+            } else {
+                String::new()
+            }
+        ),
+        Target::Sightline { from, to } => println!(
+            "solving sightline ({:.0},{:.0},{:.0}) -> ({:.0},{:.0},{:.0}) ...",
+            from.x, from.y, from.z, to.x, to.y, to.z
+        ),
+        Target::Area(_) => println!("solving target area ..."),
+    }
 
     let started = Instant::now();
     let last: Mutex<(Instant, Option<Phase>)> = Mutex::new((started, None));
@@ -442,6 +488,15 @@ pub fn solve(
         }
     }
 
+    // `s6r_sightline_target.md`'s own check: `SolveCommand.cs`'s "eye rays: X/Y geometry-clear" /
+    // "landing zone: N cells" console lines, ported to whichever count `zone::solve` produced.
+    if let Some(z) = &solve.sightline_zone {
+        println!(
+            "eye rays: {}/{} geometry-clear",
+            z.clear_pairs, z.total_pairs
+        );
+        println!("landing zone: {} cells", z.zone_cells);
+    }
     println!(
         "target resolved to ({:.0},{:.0},{:.0}); {} origins; {} lineups in {:.2}s",
         solve.target.x,
@@ -483,7 +538,7 @@ pub fn solve(
             + (l.rest_point.y - solve.target.y).powi(2))
         .sqrt();
         println!(
-            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} stability_wide {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}  robustness {} robust_aim {} robust_pos {} robust_model {} aim_margin {}  exact: {}",
+            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} stability_wide {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}  robustness {} robust_aim {} robust_pos {} robust_model {} aim_margin {}  exact: {}{}",
             i + 1,
             rl.console,
             rl.describe,
@@ -505,6 +560,10 @@ pub fn solve(
             fmt_opt(l.robust_model),
             fmt_opt(l.aim_margin_deg),
             rl.console_exact.as_deref().unwrap_or("-"),
+            match (l.blocks_sightline, l.smoke_cells_crossed) {
+                (Some(b), Some(c)) => format!("  blocks_sightline {b} smoke_cells_crossed {c}"),
+                _ => String::new(),
+            },
         );
     }
 
@@ -546,5 +605,18 @@ mod tests {
         let (click, z) = getpos_origin("setpos 32 -1696 -168").unwrap();
         assert_eq!(click, [32.0, -1696.0]);
         assert_eq!(z, -168.0);
+    }
+
+    #[test]
+    fn parse_sightline_spec_reads_both_eye_points() {
+        let (from, to) = parse_sightline_spec("-1100,-640,64:-250,-600,64").unwrap();
+        assert_eq!((from.x, from.y, from.z), (-1100.0, -640.0, 64.0));
+        assert_eq!((to.x, to.y, to.z), (-250.0, -600.0, 64.0));
+    }
+
+    #[test]
+    fn parse_sightline_spec_rejects_missing_colon_or_bad_component_count() {
+        assert!(parse_sightline_spec("-1100,-640,64").is_err());
+        assert!(parse_sightline_spec("-1100,-640:-250,-600,64").is_err());
     }
 }

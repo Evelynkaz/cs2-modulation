@@ -895,15 +895,19 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       handleDraftClick(activeDraftKey, clientX, clientY);
       return;
     }
-    const point = raycastAt(clientX, clientY);
-    if (!point) {
+    const hit = raycastFullAt(clientX, clientY);
+    if (!hit) {
       return;
     }
+    const { point, normal } = hit;
     if (shiftKey) {
       onRightClickHandler?.(point.x, point.y, point.z);
       return;
     }
-    onClickHandler?.(point.x, point.y, point.z);
+    // Review fix (`s6r_sightline_target.md`): the world-space hit normal's Z, so a sightline click
+    // on a wall can tell itself apart from one on a floor/roof - every other consumer of `onClick`
+    // (point target, area vertex) simply ignores this extra argument.
+    onClickHandler?.(point.x, point.y, point.z, normal.z);
   });
   // S6k: closes the armed area tool's polygon, same as clicking its first vertex - the two clicks
   // making up this dblclick already each ran `handleDraftClick` via `pointerup` above (mirrors
@@ -1353,6 +1357,65 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     beacon.renderOrder = 999;
     beacon.layers.set(OVERLAY_LAYER); // review fix item 2: `OVERLAY_LAYER`'s own doc comment.
     targetGroup.add(beacon);
+  }
+
+  // `s6r_sightline_target.md`: the sightline being drawn/solved for - a marker at each eye point
+  // plus, once both are placed, a thick translucent lane between them at eye height. On
+  // `OVERLAY_LAYER` (like the target beacon above) so it reads through whatever geometry the
+  // straight line between the eyes would otherwise be hidden behind - the whole point of drawing
+  // it is to show the lane a smoke has to seal.
+  const SIGHTLINE_COLOR = 0x0e7490;
+  const SIGHTLINE_LANE_HALF_WIDTH = 24;
+  let currentSightline = null; // { from: {x,y,z}, to: {x,y,z}|null }
+  const sightlineGroup = new THREE.Group();
+  scene.add(sightlineGroup);
+  function eyeMarker(p) {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(6, 12, 8),
+      new THREE.MeshBasicMaterial({ color: SIGHTLINE_COLOR, depthTest: false }),
+    );
+    marker.position.set(p.x, p.y, p.z);
+    marker.renderOrder = 999;
+    marker.layers.set(OVERLAY_LAYER);
+    return marker;
+  }
+  function drawSightline() {
+    disposeObject3D(sightlineGroup);
+    sightlineGroup.clear();
+    if (!currentSightline) {
+      return;
+    }
+    const { from, to } = currentSightline;
+    sightlineGroup.add(eyeMarker(from));
+    if (!to) {
+      return;
+    }
+    sightlineGroup.add(eyeMarker(to));
+    const a = new THREE.Vector3(from.x, from.y, from.z);
+    const b = new THREE.Vector3(to.x, to.y, to.z);
+    const dir = new THREE.Vector3().subVectors(b, a);
+    if (dir.lengthSq() < 1e-6) {
+      return;
+    }
+    dir.normalize();
+    const side = new THREE.Vector3(0, 0, 1).cross(dir).normalize().multiplyScalar(SIGHTLINE_LANE_HALF_WIDTH);
+    const positions = [
+      a.x - side.x, a.y - side.y, a.z - side.z, a.x + side.x, a.y + side.y, a.z + side.z,
+      b.x + side.x, b.y + side.y, b.z + side.z, a.x - side.x, a.y - side.y, a.z - side.z,
+      b.x + side.x, b.y + side.y, b.z + side.z, b.x - side.x, b.y - side.y, b.z - side.z,
+    ];
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    const lane = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: SIGHTLINE_COLOR, transparent: true, opacity: 0.35, side: THREE.DoubleSide,
+        depthWrite: false, depthTest: false,
+      }),
+    );
+    lane.renderOrder = 999;
+    lane.layers.set(OVERLAY_LAYER);
+    sightlineGroup.add(lane);
   }
 
   // ---- origin/target areas (`s6i_render_job_areas3d.md`): translucent prism "walls" around each
@@ -2145,6 +2208,15 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     clearTarget() {
       currentTarget = null;
       drawTarget();
+    },
+    // `s6r_sightline_target.md`: `sl` is `{ from: {x,y,z}, to: {x,y,z}|null }`.
+    setSightline(sl) {
+      currentSightline = sl;
+      drawSightline();
+    },
+    clearSightline() {
+      currentSightline = null;
+      drawSightline();
     },
     setOrigin(o) {
       updateOrigin(o);

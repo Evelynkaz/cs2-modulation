@@ -21,12 +21,14 @@ const MARK = {
     verifiedFail: "rgba(179,38,30,0.35)", selected: "#b3261e", hover: "#2563eb",
     areaOrigin: "#7c3aed", areaOriginFill: "rgba(124,58,237,0.15)",
     areaTarget: "#c2410c", areaTargetFill: "rgba(194,65,12,0.15)",
+    sightline: "#0e7490",
   },
   dark: {
     target: "#ff6b64", origin: "#5b9dff", checked: "rgba(154,161,173,0.35)", verified: "#4fd17a",
     verifiedFail: "rgba(255,107,100,0.35)", selected: "#ff6b64", hover: "#5b9dff",
     areaOrigin: "#a78bfa", areaOriginFill: "rgba(167,139,250,0.20)",
     areaTarget: "#fb923c", areaTargetFill: "rgba(251,146,60,0.20)",
+    sightline: "#22d3ee",
   },
 };
 
@@ -132,6 +134,9 @@ export function createMapView(canvas, viewerMap, img, theme) {
 
   let target = null; // { x, y, z, label }
   let origin = null; // { x, y, reach }
+  // `s6r_sightline_target.md`: `{ from: {x,y,z}, to: {x,y,z}|null }` - `to` is `null` while only
+  // the first click ("откуда смотрят") has been placed.
+  let sightline = null;
   // The official radar image as an optional base layer (`s6p_map_art.md`) - `{ image, posX, posY,
   // scale }` (world units per official-image px; may differ from `pixelSize`, our own radar's own
   // world-units-per-px). `null` keeps the original (and only, pre-S6p) rendering exactly.
@@ -417,6 +422,24 @@ export function createMapView(canvas, viewerMap, img, theme) {
     if (target) {
       const [sx, sy] = worldToCanvas(target.x, target.y, geom);
       drawCross(sx, sy, m.target);
+    }
+
+    // `s6r_sightline_target.md`: the sightline being drawn/solved for - a line between the two
+    // eye points (once both are placed), with a cross at each end (matching the point-target
+    // marker, so "откуда"/"куда" read the same way a point target does).
+    if (sightline) {
+      const [fx, fy] = worldToCanvas(sightline.from.x, sightline.from.y, geom);
+      drawCross(fx, fy, m.sightline);
+      if (sightline.to) {
+        const [tx, ty] = worldToCanvas(sightline.to.x, sightline.to.y, geom);
+        ctx.strokeStyle = m.sightline;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        drawCross(tx, ty, m.sightline);
+      }
     }
   }
 
@@ -717,6 +740,15 @@ export function createMapView(canvas, viewerMap, img, theme) {
     },
     clearTarget() {
       target = null;
+      requestDraw();
+    },
+    // `s6r_sightline_target.md`: `sl` is `{ from: {x,y,z}, to: {x,y,z}|null }`.
+    setSightline(sl) {
+      sightline = sl;
+      requestDraw();
+    },
+    clearSightline() {
+      sightline = null;
       requestDraw();
     },
     setOrigin(o) {

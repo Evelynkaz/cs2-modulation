@@ -74,7 +74,7 @@ const MIN_AREA_AREA: f64 = 1.0;
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 12;
+const CACHE_VERSION: u32 = 13;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -159,6 +159,14 @@ pub struct LineupJson {
     /// point-target one, so `cs2mod solve --json`'s existing byte-for-byte output is untouched).
     #[serde(rename = "insideTargetArea", skip_serializing_if = "Option::is_none")]
     pub inside_target_area: Option<bool>,
+    /// `s6r_sightline_target.md`: whether this lineup's smoke blocks the query's `sightline` -
+    /// only present for a sightline solve, same `skip_serializing_if` idiom as
+    /// `insideTargetArea` above.
+    #[serde(rename = "blocksSightline", skip_serializing_if = "Option::is_none")]
+    pub blocks_sightline: Option<bool>,
+    /// The smoke-cell crossing count behind `blocksSightline`.
+    #[serde(rename = "smokeCellsCrossed", skip_serializing_if = "Option::is_none")]
+    pub smoke_cells_crossed: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -273,6 +281,8 @@ pub fn json_payload(
                             && a.z_min.is_none_or(|lo| l.rest_point.z >= lo)
                             && a.z_max.is_none_or(|hi| l.rest_point.z <= hi)
                     }),
+                    blocks_sightline: l.blocks_sightline,
+                    smoke_cells_crossed: l.smoke_cells_crossed,
                 }
             })
             .collect(),
@@ -326,10 +336,21 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
         return Some("body must be a JSON object".to_string());
     }
     let (mesh_min, mesh_max) = mesh.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
+    // `s6r_sightline_target.md`: `sightline` replaces `target`/`targetArea` outright, same
+    // mutual-exclusion idiom as `targetArea` below - checked first so a request naming more than
+    // one gets one clear error. Falls straight through to the trailing checks (origin/scope/...)
+    // shared by every target kind.
+    if query.get("sightline").is_some() {
+        if query.get("target").is_some() || query.get("targetArea").is_some() {
+            return Some("sightline is mutually exclusive with target and targetArea".to_string());
+        }
+        if let Some(err) = validate_sightline(query, mesh_min, mesh_max) {
+            return Some(err);
+        }
     // `s6g2_target_area.md`: `targetArea` replaces `target` outright (an area has no single point
     // to validate here) - the two are mutually exclusive, checked before either's own validation
     // runs so a request with both gets one clear error instead of whichever happened to run first.
-    if query.get("targetArea").is_some() {
+    } else if query.get("targetArea").is_some() {
         if query.get("target").is_some() {
             return Some("target and targetArea are mutually exclusive".to_string());
         }
@@ -654,6 +675,44 @@ fn validate_target_area(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -
     None
 }
 
+/// `s6r_sightline_target.md`: `sightline` is `{ from: [x,y,z], to: [x,y,z] }`, eye points (the
+/// caller already added the +64 eye lift) - both finite and inside the map bounds. Mutually
+/// exclusive with `target`/`targetArea`, checked by the caller before this runs.
+fn validate_sightline(query: &Value, mesh_min: [f32; 3], mesh_max: [f32; 3]) -> Option<String> {
+    let sl = query.get("sightline")?;
+    if !sl.is_object() {
+        return Some("sightline must be an object {from, to}".to_string());
+    }
+    for key in ["from", "to"] {
+        let Some(arr) = sl.get(key).and_then(Value::as_array) else {
+            return Some(format!("sightline.{key} must be [x,y,z]"));
+        };
+        if arr.len() != 3 {
+            return Some(format!("sightline.{key} must be [x,y,z]"));
+        }
+        if arr.iter().any(|e| as_f32_finite(e).is_none()) {
+            return Some(format!(
+                "sightline.{key} coordinates must be finite numbers"
+            ));
+        }
+        let (x, y, z) = (
+            as_f32_finite(&arr[0]).unwrap(),
+            as_f32_finite(&arr[1]).unwrap(),
+            as_f32_finite(&arr[2]).unwrap(),
+        );
+        if x < mesh_min[0] - MAP_BOUNDS_MARGIN
+            || x > mesh_max[0] + MAP_BOUNDS_MARGIN
+            || y < mesh_min[1] - MAP_BOUNDS_MARGIN
+            || y > mesh_max[1] + MAP_BOUNDS_MARGIN
+            || z < mesh_min[2] - MAP_BOUNDS_MARGIN
+            || z > mesh_max[2] + MAP_BOUNDS_MARGIN
+        {
+            return Some(format!("sightline.{key} is outside the map bounds"));
+        }
+    }
+    None
+}
+
 /// `LineupApi.cs:439-445` (`BrokenGroups`): csv/array tokens from `{glass, doors}` to the mesh's
 /// own attribute group names, deduped and Ordinal-sorted.
 pub(crate) fn broken_groups_from_query(query: &Value) -> Vec<String> {
@@ -852,6 +911,27 @@ pub fn query_cache_key(
         .and_then(Value::as_f64)
         .map(|v| format!("{v:.1}"))
         .unwrap_or_else(|| "none".to_string());
+    // `s6r_sightline_target.md`: same idiom as `target_area_key` above, for `sightline` - keeps a
+    // sightline query from colliding with the point-target `(tx,ty,tz)` segment above.
+    let sightline_key = query
+        .get("sightline")
+        .map(|sl| {
+            let point = |key: &str| {
+                let p = sl
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                format!(
+                    "{:.1},{:.1},{:.1}",
+                    p.first().and_then(Value::as_f64).unwrap_or(0.0),
+                    p.get(1).and_then(Value::as_f64).unwrap_or(0.0),
+                    p.get(2).and_then(Value::as_f64).unwrap_or(0.0)
+                )
+            };
+            format!("{}|{}", point("from"), point("to"))
+        })
+        .unwrap_or_else(|| "none".to_string());
     let constants_json = serde_json::to_string(constants).unwrap_or_default();
     // `LineupApi.cs:483` buckets `reach`/`tolerance` to whole units and `minStability` to two
     // decimals; we deliberately format `reach`/`tolerance` to one decimal and `minStability` to
@@ -859,7 +939,7 @@ pub fn query_cache_key(
     // live: `tolerance:80` and `tolerance:80.4`) collide on one cache file and answer from the
     // wrong query.
     let seed = format!(
-        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{pin_key}|{precision_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
+        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{pin_key}|{precision_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{sightline_key}|{attrs}|{stand_spots}",
         i32::from(fine)
     );
     let digest = Sha256::digest(seed.as_bytes());
@@ -907,45 +987,61 @@ fn build_solve_query(
     spawn_fronts: Vec<V3>,
     spawn_points: Vec<V3>,
 ) -> (SolveQuery, Option<[f32; 2]>) {
-    // `s6g2_target_area.md`: `targetArea` replaces `target` outright, validated mutually
-    // exclusive with it already (`validate_target_area`/`validate_lineup_query`).
-    let target = match query.get("targetArea").and_then(Value::as_array) {
-        Some(arr) => {
-            let polygon: Vec<[f32; 2]> = arr
-                .iter()
-                .map(|v| {
-                    let p = v.as_array().expect("validated");
-                    [as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap()]
-                })
-                .collect();
-            Target::Area(TargetArea {
-                polygon,
-                z_min: query.get("targetZMin").and_then(as_f32_finite),
-                z_max: query.get("targetZMax").and_then(as_f32_finite),
-            })
+    // `s6r_sightline_target.md`/`s6g2_target_area.md`: `sightline`/`targetArea` replace `target`
+    // outright, validated mutually exclusive with it (and each other) already
+    // (`validate_sightline`/`validate_target_area`/`validate_lineup_query`).
+    let target = if let Some(sl) = query.get("sightline") {
+        let point = |key: &str| {
+            let arr = sl.get(key).and_then(Value::as_array).expect("validated");
+            V3::new(
+                as_f32_finite(&arr[0]).unwrap(),
+                as_f32_finite(&arr[1]).unwrap(),
+                as_f32_finite(&arr[2]).unwrap(),
+            )
+        };
+        Target::Sightline {
+            from: point("from"),
+            to: point("to"),
         }
-        None => {
-            let target_arr = query
-                .get("target")
-                .and_then(Value::as_array)
-                .expect("validated");
-            let tx = as_f32_finite(&target_arr[0]).unwrap();
-            let ty = as_f32_finite(&target_arr[1]).unwrap();
-            let has_z = target_arr.len() > 2;
-            let tz = if has_z {
-                as_f32_finite(&target_arr[2]).unwrap()
-            } else {
-                0.0
-            };
-            let tolerance = query
-                .get("tolerance")
-                .and_then(Value::as_f64)
-                .map(|v| v as f32)
-                .unwrap_or(80.0);
-            Target::Point {
-                pos: V3::new(tx, ty, tz),
-                has_z,
-                tolerance,
+    } else {
+        match query.get("targetArea").and_then(Value::as_array) {
+            Some(arr) => {
+                let polygon: Vec<[f32; 2]> = arr
+                    .iter()
+                    .map(|v| {
+                        let p = v.as_array().expect("validated");
+                        [as_f32_finite(&p[0]).unwrap(), as_f32_finite(&p[1]).unwrap()]
+                    })
+                    .collect();
+                Target::Area(TargetArea {
+                    polygon,
+                    z_min: query.get("targetZMin").and_then(as_f32_finite),
+                    z_max: query.get("targetZMax").and_then(as_f32_finite),
+                })
+            }
+            None => {
+                let target_arr = query
+                    .get("target")
+                    .and_then(Value::as_array)
+                    .expect("validated");
+                let tx = as_f32_finite(&target_arr[0]).unwrap();
+                let ty = as_f32_finite(&target_arr[1]).unwrap();
+                let has_z = target_arr.len() > 2;
+                let tz = if has_z {
+                    as_f32_finite(&target_arr[2]).unwrap()
+                } else {
+                    0.0
+                };
+                let tolerance = query
+                    .get("tolerance")
+                    .and_then(Value::as_f64)
+                    .map(|v| v as f32)
+                    .unwrap_or(80.0);
+                Target::Point {
+                    pos: V3::new(tx, ty, tz),
+                    has_z,
+                    tolerance,
+                }
             }
         }
     };
@@ -1301,7 +1397,7 @@ async fn run_solve_and_stream(
     // `json_payload`'s own use once the solve is done (`s6g2_target_area.md`'s `insideTargetArea`).
     let target_area_for_json: Option<TargetArea> = match &query.target {
         Target::Area(area) => Some(area.clone()),
-        Target::Point { .. } => None,
+        Target::Point { .. } | Target::Sightline { .. } => None,
     };
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<SolveEvent>();
     let total_points = Arc::new(AtomicUsize::new(0));
@@ -1718,5 +1814,141 @@ mod tests {
             "none",
         );
         assert_ne!(normal, precise);
+    }
+
+    // ---- `s6r_sightline_target.md`: `sightline` request validation ------------------------------
+
+    #[test]
+    fn validate_accepts_a_minimal_sightline_query() {
+        let mesh = CollisionMesh::new();
+        let q = json!({
+            "sightline": { "from": [0.0, -100.0, 64.0], "to": [200.0, -60.0, 64.0] }
+        });
+        assert_eq!(validate_lineup_query(&q, &mesh), None);
+    }
+
+    #[test]
+    fn validate_rejects_sightline_with_target() {
+        let mesh = CollisionMesh::new();
+        let q = json!({
+            "target": [0.0, 0.0],
+            "sightline": { "from": [-1100.0, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] }
+        });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("mutually exclusive")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_sightline_with_target_area() {
+        let mesh = CollisionMesh::new();
+        let q = json!({
+            "targetArea": [[-100.0, -100.0], [100.0, -100.0], [0.0, 100.0]],
+            "sightline": { "from": [-1100.0, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] }
+        });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("mutually exclusive")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_sightline_missing_to() {
+        let mesh = CollisionMesh::new();
+        let q = json!({ "sightline": { "from": [0.0, -100.0, 64.0] } });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("sightline.to")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_sightline_non_finite_coordinate() {
+        let mesh = CollisionMesh::new();
+        let q = json!({
+            "sightline": { "from": [f64::NAN, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] }
+        });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("finite numbers")
+        );
+    }
+
+    #[test]
+    fn validate_rejects_sightline_point_outside_map_bounds() {
+        let mut mesh = CollisionMesh::new();
+        mesh.vertices = vec![[-100.0, -100.0, -448.0], [100.0, 100.0, 1024.0]];
+        let q = json!({
+            "sightline": { "from": [-5000.0, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] }
+        });
+        assert!(
+            validate_lineup_query(&q, &mesh)
+                .unwrap()
+                .contains("sightline.from is outside the map bounds")
+        );
+    }
+
+    #[test]
+    fn cache_key_differs_by_sightline_endpoints() {
+        let constants = ThrowConstants::default();
+        let a = query_cache_key(
+            "de_mirage",
+            "abc",
+            &constants,
+            &json!({ "sightline": { "from": [-1100.0, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] } }),
+            "attrs",
+            "none",
+        );
+        let b = query_cache_key(
+            "de_mirage",
+            "abc",
+            &constants,
+            &json!({ "sightline": { "from": [-1100.0, -640.0, 64.0], "to": [-250.0, -500.0, 64.0] } }),
+            "attrs",
+            "none",
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cache_key_differs_between_sightline_and_point_target() {
+        let constants = ThrowConstants::default();
+        let point = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0] }),
+            "attrs",
+            "none",
+        );
+        let sightline = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "sightline": { "from": [0.0, 0.0, 64.0], "to": [100.0, 0.0, 64.0] } }),
+            "attrs",
+            "none",
+        );
+        assert_ne!(point, sightline);
+    }
+
+    #[test]
+    fn build_solve_query_reads_sightline_eye_points() {
+        let q = json!({
+            "sightline": { "from": [-1100.0, -640.0, 64.0], "to": [-250.0, -600.0, 64.0] }
+        });
+        let (solve_query, _) = build_solve_query(&q, Vec::new(), Vec::new());
+        match solve_query.target {
+            Target::Sightline { from, to } => {
+                assert_eq!([from.x, from.y, from.z], [-1100.0, -640.0, 64.0]);
+                assert_eq!([to.x, to.y, to.z], [-250.0, -600.0, 64.0]);
+            }
+            _ => panic!("expected Target::Sightline"),
+        }
     }
 }

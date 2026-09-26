@@ -53,6 +53,12 @@ pub struct Lineup {
     /// nearest rejected cell in the fine grid; `verify::ROBUST_NO_REJECT_MARGIN_DEG` (reported as
     /// "≥" that) when the whole grid came back accepted.
     pub aim_margin_deg: Option<f32>,
+    /// `s6r_sightline_target.md`: for a `Target::Sightline` query, whether this lineup's smoke
+    /// blocks the sightline (always `true` for a verified sightline lineup, by construction of
+    /// its accept predicate). `None` outside a sightline query.
+    pub blocks_sightline: Option<bool>,
+    /// The smoke-cell crossing count behind `blocks_sightline`. `None` outside a sightline query.
+    pub smoke_cells_crossed: Option<u32>,
 }
 
 impl Lineup {
@@ -95,6 +101,8 @@ impl Lineup {
             robust_pos: None,
             robust_model: None,
             aim_margin_deg: None,
+            blocks_sightline: None,
+            smoke_cells_crossed: None,
         }
     }
 }

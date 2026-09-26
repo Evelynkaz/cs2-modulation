@@ -1178,6 +1178,7 @@ dependencies = [
  "futures-core",
  "geom",
  "radar",
+ "s2render",
  "serde",
  "serde_json",
  "sha2",

@@ -228,8 +228,9 @@ impl MapRegistry {
 
     /// `path`'s sha256, from the memo if its `(modified, len)` identity still matches what was
     /// last hashed, else freshly computed (and the memo updated) - so a changed VPK is always
-    /// re-hashed, never silently reported stale-but-cached.
-    fn hashed_vpk(&self, path: &Path) -> std::io::Result<String> {
+    /// re-hashed, never silently reported stale-but-cached. `pub(crate)` so `art.rs` can reuse it
+    /// for pak01's own identity (`s6p_map_art.md` change item 2), not just a map VPK's.
+    pub(crate) fn hashed_vpk(&self, path: &Path) -> std::io::Result<String> {
         let meta = fs::metadata(path)?;
         let modified = meta.modified()?;
         let len = meta.len();

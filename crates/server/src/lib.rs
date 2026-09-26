@@ -1,8 +1,10 @@
 //! HTTP API (axum) and static hosting for the web viewer, with long-running
 //! solve jobs.
 
+pub mod art;
 pub mod config;
 pub mod jobs;
+mod kv1;
 pub mod mesh_payload;
 pub mod physics;
 pub mod registry;

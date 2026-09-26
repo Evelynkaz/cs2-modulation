@@ -63,6 +63,23 @@ export async function fetchLevels(map, x, y) {
   return getJson(`/api/levels?map=${encodeURIComponent(map)}&x=${x}&y=${y}`);
 }
 
+// `s6p_map_art.md`: the official loading-screen screenshot / radar overview PNGs, decoded from
+// the user's own game install. `section` only matters for `kind: "radar"` (an overview's
+// `sections[].radar` value, e.g. "lower"); omit it for the default radar or a screenshot.
+export function mapArtUrl(map, kind, section) {
+  const params = new URLSearchParams({ map, kind });
+  if (section) {
+    params.set("section", section);
+  }
+  return `/api/mapart?${params.toString()}`;
+}
+
+// `GET /api/overview`: the world<->radar-image transform (`posX`/`posY`/`scale`/`imageSize`),
+// per-altitude `sections`, and the loading-screen icon positions in `points`.
+export async function fetchOverview(map) {
+  return getJson(`/api/overview?map=${encodeURIComponent(map)}`);
+}
+
 // `s6f3b_viewer3d.md` F3b-1a: `render*` files served under `/data/maps/<map>/`, same whitelist
 // and ETag/304 machinery as `viewer-map.png`.
 export function renderGlbUrl(map) {

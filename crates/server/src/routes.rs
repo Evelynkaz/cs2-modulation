@@ -22,6 +22,7 @@ use geom::collider::Collider;
 use geom::math::V3;
 
 use crate::AppState;
+use crate::art;
 use crate::config::{self, AppConfig};
 use crate::jobs;
 use crate::physics;
@@ -58,6 +59,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/levels", get(get_levels))
         .route("/api/mesh", get(get_mesh))
         .route("/api/radar", get(get_radar))
+        .route("/api/overview", get(art::get_overview))
+        .route("/api/mapart", get(art::get_mapart))
         .route(
             "/api/lineup",
             post(post_lineup)

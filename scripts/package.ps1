@@ -78,7 +78,34 @@ date: $date
     if (Test-Path $zipPath) {
         Remove-Item $zipPath -Force
     }
-    Compress-Archive -Path (Join-Path $pkgDir "*") -DestinationPath $zipPath
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($pkgDir, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+
+    # ---- verify zip layout: one top-level cs2mod/ folder, forward slashes ------------------------
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    try {
+        $hasExe = $false
+        $hasViewerIndex = $false
+        foreach ($entry in $zip.Entries) {
+            if (-not $entry.FullName.StartsWith("cs2mod/")) {
+                throw "zip entry '$($entry.FullName)' does not start with cs2mod/"
+            }
+            if ($entry.FullName.Contains("\")) {
+                throw "zip entry '$($entry.FullName)' contains a backslash"
+            }
+            if ($entry.FullName -eq "cs2mod/cs2mod.exe") { $hasExe = $true }
+            if ($entry.FullName -eq "cs2mod/viewer/index.html") { $hasViewerIndex = $true }
+        }
+        if (-not $hasExe) {
+            throw "zip is missing cs2mod/cs2mod.exe"
+        }
+        if (-not $hasViewerIndex) {
+            throw "zip is missing cs2mod/viewer/index.html"
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
 
     $sha256 = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash
     Write-Host "package: $zipPath"

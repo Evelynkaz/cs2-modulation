@@ -15,6 +15,7 @@ import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RA
 import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, fetchLevels, hasUsableRender } from "./api.js?v=1";
 import { strings } from "./strings.js?v=1";
 import { createLightingPipeline, hasGameLightingData, FEATHER_LAYER, OVERLAY_LAYER } from "./lighting.js?v=1";
+import { createHdrTarget } from "./lightingPost.js?v=1";
 import { loadStoredLightingMode, storeLightingMode } from "./state.js?v=1";
 import { createMaterialTextureLoader, srgbToLinear } from "./materialTextures.js?v=1";
 
@@ -29,6 +30,25 @@ const MAX_ANISOTROPY_CAP = 8;
 // the browser's own disk cache - kept here instead, revalidated by ETag (`s6f3b_viewer3d.md`
 // "кэш браузера по ETag").
 const RENDER_GLB_CACHE_NAME = "cs2mod-render-glb";
+
+// S6n lineup previews (`s6n_lineup_previews.md`): still-image captures for a lineup card - own
+// camera, own offscreen render target, never the interactive one.
+const PREVIEW_DEFAULT_WIDTH = 480;
+const PREVIEW_DEFAULT_HEIGHT = 270;
+const PREVIEW_INSET_FOV_DEG = 12; // horizontal == vertical here since the inset render is square.
+const PREVIEW_INSET_FRACTION = 0.42; // inset side length, as a fraction of min(width, height).
+const PREVIEW_INSET_MARGIN = 10;
+// Review fix item 7 (readability at 480x270): closer than the spec's original "~260u/~160u" so the
+// player marker isn't a speck - ~170u back/~110u up, looking at chest height instead of the capsule's
+// own vertical middle.
+const PREVIEW_STAND_BACK = 170;
+const PREVIEW_STAND_UP = 110;
+const PREVIEW_STAND_LOOK_FRACTION = 0.7; // of hull height, from the feet - "chest", not mid-capsule.
+const PREVIEW_STAND_ARROW_LEN = 40;
+const PREVIEW_STAND_COLOR = 0xf2a33a; // accent amber - reads as "player" against any wall texture.
+const PREVIEW_LAND_BACK = 240;
+const PREVIEW_LAND_UP = 220;
+const PREVIEW_SMOKE_RADIUS = 144;
 
 const COLLISION_COLORS = {
   world: 0x8fa3c8,
@@ -96,6 +116,171 @@ function disposeObject3D(root) {
       disposeMaterial(mat);
     }
   });
+}
+
+// ---- S6n lineup previews: pure helpers (no scene/renderer state) - the rest of `capturePreview`
+// lives inside `createSceneView`, where it can reach `renderer`/`scene`/`lightingPipeline`. -------
+
+// Source's `AngleVectors` again, aimed at an arbitrary camera instead of the interactive
+// `camera`/`yawDeg`/`pitchDeg` globals - `capturePreview`'s own cameras never touch those.
+function pointCameraAt(cam, pitchDeg, yawDeg) {
+  const { forward, up } = sourceBasis(pitchDeg, yawDeg);
+  cam.up.set(up.x, up.y, up.z);
+  cam.lookAt(cam.position.x + forward.x, cam.position.y + forward.y, cam.position.z + forward.z);
+}
+
+// Player capsule + floor ring + facing arrow - shared between the interactive selected-lineup
+// visuals (`buildLineupVisuals`) and `capturePreview`'s `kind: "stand"` (spec: "same visuals as
+// `stand`"). Review fix item 7: bright/solid accent-amber capsule with a darker backface "rim" shell
+// (a cheap static-outline trick - no post-process edge detection needed) plus a ring on the floor,
+// so the marker reads at a glance at 480x270 instead of disappearing against a wall.
+function addStandMarkers(group, feet, yawDeg, crouched) {
+  const h = hullHeight(crouched);
+  const capsuleGeo = new THREE.CapsuleGeometry(PLAYER_CAPSULE_RADIUS, Math.max(1, h - 2 * PLAYER_CAPSULE_RADIUS), 4, 8);
+  const capsule = new THREE.Mesh(capsuleGeo, new THREE.MeshLambertMaterial({ color: PREVIEW_STAND_COLOR, transparent: true, opacity: 0.9 }));
+  capsule.position.set(feet.x, feet.y, feet.z + h / 2);
+  capsule.rotation.x = Math.PI / 2; // CapsuleGeometry's long axis is Y; stand it up along Z.
+  group.add(capsule);
+
+  const rim = new THREE.Mesh(capsuleGeo, new THREE.MeshBasicMaterial({ color: 0x7a4a12, side: THREE.BackSide }));
+  rim.position.copy(capsule.position);
+  rim.rotation.x = Math.PI / 2;
+  rim.scale.setScalar(1.06);
+  group.add(rim);
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(PLAYER_CAPSULE_RADIUS + 4, PLAYER_CAPSULE_RADIUS + 9, 24),
+    new THREE.MeshBasicMaterial({ color: PREVIEW_STAND_COLOR, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }),
+  );
+  ring.position.set(feet.x, feet.y, feet.z + 1);
+  group.add(ring);
+
+  const { forward } = sourceBasis(0, yawDeg);
+  group.add(buildFlatArrow(new THREE.Vector3(forward.x, forward.y, 0), new THREE.Vector3(feet.x, feet.y, feet.z + 2), PREVIEW_STAND_ARROW_LEN, 0xffffff));
+}
+
+// A solid (not `THREE.ArrowHelper`'s thin `Line`, invisible at capture resolution/distance) shaft +
+// cone pointing along `dir` from `origin` - same local-+Y-to-`dir` alignment `ArrowHelper.
+// setDirection` uses, just built from real triangles so it reads clearly in a still image.
+function buildFlatArrow(dir, origin, length, color) {
+  const headLength = length * 0.35;
+  const shaftLength = Math.max(1, length - headLength);
+  const material = new THREE.MeshBasicMaterial({ color });
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, shaftLength, 8), material);
+  shaft.position.y = shaftLength / 2;
+  const head = new THREE.Mesh(new THREE.ConeGeometry(5, headLength, 10), material);
+  head.position.y = shaftLength + headLength / 2;
+  const group = new THREE.Group();
+  group.add(shaft, head);
+  group.position.copy(origin);
+  if (dir.y > 0.99999) {
+    group.quaternion.set(0, 0, 0, 1);
+  } else if (dir.y < -0.99999) {
+    group.quaternion.set(1, 0, 0, 0);
+  } else {
+    const axis = new THREE.Vector3(dir.z, 0, -dir.x).normalize();
+    group.quaternion.setFromAxisAngle(axis, Math.acos(dir.y));
+  }
+  return group;
+}
+
+// `kind: "land"`'s own markers: a translucent smoke-radius sphere + two perpendicular equator rings
+// (review fix item 7 - a flat disc projects to a near-invisible sliver from a shallow angle; a
+// sphere + rings reads as an actual volume), a clear landing marker with a vertical stem through it
+// (same idea as `drawTarget`'s own beacon, so it's visible even when the haze itself is faint), and
+// (if given) the trajectory.
+function addLandMarkers(group, rest, trajectory) {
+  const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(PREVIEW_SMOKE_RADIUS, 20, 14),
+    new THREE.MeshBasicMaterial({ color: 0xe7ebf2, transparent: true, opacity: 0.22, depthWrite: false }),
+  );
+  sphere.position.copy(rest);
+  group.add(sphere);
+
+  const ringGeo = new THREE.TorusGeometry(PREVIEW_SMOKE_RADIUS, 1.5, 8, 40);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+  const equator = new THREE.Mesh(ringGeo, ringMat);
+  equator.position.copy(rest);
+  group.add(equator);
+  const meridian = new THREE.Mesh(ringGeo, ringMat);
+  meridian.position.copy(rest);
+  meridian.rotation.x = Math.PI / 2;
+  group.add(meridian);
+
+  const marker = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), new THREE.MeshBasicMaterial({ color: 0x1a7f37 }));
+  marker.position.copy(rest);
+  group.add(marker);
+  const stem = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(rest.x, rest.y, rest.z - 6),
+      new THREE.Vector3(rest.x, rest.y, rest.z + PREVIEW_SMOKE_RADIUS + 20),
+    ]),
+    new THREE.LineBasicMaterial({ color: 0x1a7f37, transparent: true, opacity: 0.85, depthTest: false }),
+  );
+  stem.renderOrder = 999;
+  group.add(stem);
+
+  if (Array.isArray(trajectory) && trajectory.length > 1) {
+    const pts = trajectory.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xffb020 })));
+  }
+}
+
+// WebGL reads render-target rows bottom-to-top; `ImageData` wants top-to-bottom - flip while
+// copying instead of a separate pass.
+function pixelsToCanvas(buffer, w, h) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const imageData = ctx.createImageData(w, h);
+  const rowBytes = w * 4;
+  for (let y = 0; y < h; y++) {
+    const srcStart = (h - 1 - y) * rowBytes;
+    imageData.data.set(buffer.subarray(srcStart, srcStart + rowBytes), y * rowBytes);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+// `image/webp` per the capturePreview contract, falling back to `image/png` if the browser's
+// `toBlob` can't encode webp (calls back with `null` instead of throwing).
+function canvasToBlob(canvas) {
+  return new Promise((resolve) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+        canvas.toBlob(resolve, "image/png");
+      },
+      "image/webp",
+      0.92,
+    );
+  });
+}
+
+// CS2-style crosshair: a black outline stroke under a colored one so it reads on any background.
+function drawCrosshair(ctx, cx, cy, size, gap, thickness, color) {
+  const segments = [
+    [cx - size - gap, cy, cx - gap, cy],
+    [cx + gap, cy, cx + size + gap, cy],
+    [cx, cy - size - gap, cx, cy - gap],
+    [cx, cy + gap, cx, cy + size + gap],
+  ];
+  const stroke = (strokeColor, width) => {
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = width;
+    for (const [x1, y1, x2, y2] of segments) {
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  };
+  stroke("rgba(0,0,0,0.85)", thickness + 2);
+  stroke(color, thickness);
 }
 
 // ---- material extras (`s6f3a3_map.md` §4/§6): mod2x via native blend factors, layer blending and
@@ -1578,15 +1763,8 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     const feet = new THREE.Vector3(l.feet[0], l.feet[1], l.feet[2]);
     const eyeZ = feet.z + eyeHeight(crouched);
 
-    // Player marker: a capsule at the throw stance.
-    const h = hullHeight(crouched);
-    const capsule = new THREE.Mesh(
-      new THREE.CapsuleGeometry(PLAYER_CAPSULE_RADIUS, Math.max(1, h - 2 * PLAYER_CAPSULE_RADIUS), 4, 8),
-      new THREE.MeshLambertMaterial({ color: 0x2563eb }),
-    );
-    capsule.position.set(feet.x, feet.y, feet.z + h / 2);
-    capsule.rotation.x = Math.PI / 2; // CapsuleGeometry's long axis is Y; stand it up along Z.
-    lineupGroup.add(capsule);
+    // Player marker + facing arrow (S6n: "same visuals as `stand`" - shared with `capturePreview`).
+    addStandMarkers(lineupGroup, feet, l.yaw, crouched);
 
     // Aim line: eye -> forward direction, out to a fixed reach (illustrative, not the throw arc).
     const { forward } = sourceBasis(l.pitch, l.yaw);
@@ -1695,7 +1873,263 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     fpvExit = null;
   }
 
-  return {
+  // ---- S6n lineup previews (`s6n_lineup_previews.md`): still images for a lineup card - own
+  // camera, own offscreen render target, never touches `camera`/`orbit`/`mode` or the canvas, so it
+  // works mid-flight/orbit and never flashes the interactive view with the preview camera.
+
+  // render.glb loads itself as soon as the view is created (`glbReady`, above) - this just lets a
+  // caller await that instead of polling `capturePreview`'s own null-if-not-loaded return. Review
+  // fix item 5: also waits for game lighting and the collision mesh, so the very first capture a
+  // caller makes right after this resolves isn't silently stuck in "simple" mode (and then cached
+  // forever by the UI) just because `lightingReady`/`collisionReady` hadn't settled yet.
+  async function ensureLoaded() {
+    const [gltf] = await Promise.all([glbReady, lightingReady.catch(() => null), collisionReady]);
+    return gltf !== null;
+  }
+
+  // Review fix item 7: scores each of 8 candidate directions around `lookAt` (at `dist`/`upOffset`
+  // from it) instead of just taking the first with a clear single ray - `sampleTargets` (e.g. a
+  // capsule's top/mid/base) are each raycast from the candidate position against the collision
+  // `pickProxy` (`MeshBVH`'s accelerated raycast, same as every other pick in this file); a
+  // direction is scored by how many of them are visible, then by how much open space is behind the
+  // candidate camera position itself (`openness`, a ray cast from `lookAt` outward through the
+  // camera spot) - a camera jammed into the very wall/corner the player is pressed against scores
+  // low even when its single center ray to `lookAt` happens to clear that wall's edge, so this
+  // prefers the side that actually shows that wall behind the player instead of hiding behind it.
+  // Falls back to the first candidate if the collision mesh hasn't loaded yet, or every direction is
+  // fully blocked.
+  function pickBestCameraPos(lookAt, dist, upOffset, preferredAngle, sampleTargets = [lookAt]) {
+    let best = null;
+    let bestScore = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      const angle = preferredAngle + (i / 8) * Math.PI * 2;
+      const pos = new THREE.Vector3(lookAt.x + Math.cos(angle) * dist, lookAt.y + Math.sin(angle) * dist, lookAt.z + upOffset);
+      if (!collision) {
+        return pos;
+      }
+      if (!best) {
+        best = pos; // always have a fallback, even if every direction below scores -1 (fully blocked)
+      }
+      let visible = 0;
+      for (const target of sampleTargets) {
+        const toTarget = target.clone().sub(pos);
+        const rayLen = toTarget.length();
+        const ray = new THREE.Raycaster(pos, toTarget.normalize(), 0, Math.max(0, rayLen - 4));
+        ray.firstHitOnly = true;
+        if (ray.intersectObject(collision.pickProxy, false).length === 0) {
+          visible++;
+        }
+      }
+      if (visible === 0) {
+        continue;
+      }
+      const outward = pos.clone().sub(lookAt).normalize();
+      const openRay = new THREE.Raycaster(lookAt, outward, 0, dist);
+      openRay.firstHitOnly = true;
+      const openHits = openRay.intersectObject(collision.pickProxy, false);
+      const openness = openHits.length > 0 ? openHits[0].distance : dist;
+      const score = visible * 10000 + openness;
+      if (score > bestScore) {
+        bestScore = score;
+        best = pos;
+      }
+    }
+    return best;
+  }
+
+  // Renders `scene` from `previewCamera` into a fresh offscreen `WebGLRenderTarget` at `w`x`h`,
+  // through whichever lighting pipeline the interactive view currently uses - "game" mode gets its
+  // own scratch HDR buffer sized for this capture (the shared `hdrTarget` is sized for the
+  // interactive canvas, not this resolution). Caller disposes the returned target. Synchronous and
+  // self-contained (review fix items 2/3): saves/restores the renderer's own current target and
+  // `autoClear` around its own render, so two `capturePreview` calls racing via `Promise.all` (or a
+  // second call starting before an earlier one's final `await canvasToBlob` resolves) never see or
+  // clobber each other's target - `renderOffscreen`/`capturePreview`'s synchronous section never
+  // yields, so no other code can run between "bind a target" and "restore the previous one".
+  function renderOffscreen(previewCamera, w, h) {
+    // Review fix item 4: `lookAt`/`.quaternion` changes don't touch `matrixWorld` - it's normally
+    // refreshed lazily by `WebGLRenderer.render()` itself, but `lightingSky.js`'s sky pass reads
+    // `camera.matrixWorld` directly and runs BEFORE `renderer.render(scene, camera)` in
+    // `renderFrame` below, so it would otherwise sample the sky with a stale (pre-`lookAt`)
+    // rotation on every capture.
+    previewCamera.updateMatrixWorld();
+    // Rebase-onto-main fix: feather-flagged effects meshes (Mirage's mid dust haze,
+    // `FEATHER_LAYER`) and "always on top" helpers (`OVERLAY_LAYER`) live OFF layer 0 entirely -
+    // copying the interactive `camera`'s own mask (layer 0 + both) is what keeps them visible.
+    // `lighting.js`'s `renderFrame` overrides the mask itself per-pass for the opaque/feather/
+    // overlay three-pass split below, but "simple" mode renders in a single plain `renderer.render`
+    // call with no such override, so a preview camera stuck on the `THREE.Camera` default (layer 0
+    // only) would silently drop feather-flagged dust cards from simple-mode previews.
+    previewCamera.layers.mask = camera.layers.mask;
+    // Review fix item 1: `lightingPost.js`'s post pass already writes out fragment-shader-encoded
+    // sRGB bytes (a hand-written `RawShaderMaterial`, no `colorspace_fragment` chunk) - tagging its
+    // output target `SRGBColorSpace` made the GPU encode those already-encoded bytes a second time
+    // (washed out). "Simple" mode's stock `MeshStandardMaterial`/`MeshLambertMaterial` shaders DO
+    // rely on the target's own `SRGBColorSpace` to do that encode, so only "game" mode's target
+    // switches to `NoColorSpace`.
+    const game = !!(lightingPipeline && effectiveLightingMode() === "game");
+    const target = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.UnsignedByteType,
+      format: THREE.RGBAFormat,
+      colorSpace: game ? THREE.NoColorSpace : THREE.SRGBColorSpace,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: true,
+      stencilBuffer: false,
+    });
+    const prevTarget = renderer.getRenderTarget();
+    const prevAutoClear = renderer.autoClear;
+    if (game) {
+      const hdr = createHdrTarget(renderer, w, h);
+      // No `timeSeconds`: omitting it leaves `uTime` at whatever the live interactive loop last set
+      // it to (`s6n_lineup_previews.md`'s own "cache nothing, disturb nothing" - a capture doesn't
+      // need to advance csgo_effects's mask panning animation).
+      lightingPipeline.renderFrame(scene, previewCamera, { outputTarget: target, overrideHdrTarget: hdr });
+      hdr.dispose();
+    } else {
+      renderer.setRenderTarget(target);
+      renderer.autoClear = true;
+      renderer.render(scene, previewCamera);
+    }
+    renderer.setRenderTarget(prevTarget);
+    renderer.autoClear = prevAutoClear;
+    return target;
+  }
+
+  function readPixels(target, w, h) {
+    const buffer = new Uint8Array(w * h * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, w, h, buffer);
+    return buffer;
+  }
+
+  async function capturePreview({ kind, feet: feetArr, pitch, yaw, type, rest: restArr, trajectory, width, height, inset }) {
+    if (!renderGltf) {
+      return null;
+    }
+    if (kind !== "aim" && kind !== "stand" && kind !== "land") {
+      return null;
+    }
+    const w = width || PREVIEW_DEFAULT_WIDTH;
+    const h = height || PREVIEW_DEFAULT_HEIGHT;
+    const t0 = performance.now();
+    const crouched = isCrouchType(type);
+    const feet = feetArr ? new THREE.Vector3(feetArr[0], feetArr[1], feetArr[2]) : null;
+    const rest = restArr ? new THREE.Vector3(restArr[0], restArr[1], restArr[2]) : null;
+    if ((kind === "aim" || kind === "stand") && !feet) {
+      return null;
+    }
+    if (kind === "land" && !rest) {
+      return null;
+    }
+
+    const previewCamera = new THREE.PerspectiveCamera(VERTICAL_FOV_DEG, w / h, camera.near, camera.far);
+    const tempGroup = new THREE.Group();
+    scene.add(tempGroup);
+    // Review fix item 6: never let the interactive view's own overlays (the selected lineup, the
+    // collision overlay when shown, the hover ring, area prisms/drafts, the target/origin markers)
+    // leak into a capture - hidden for the synchronous render section below, restored exactly as
+    // found in `finally`.
+    const hidden = [lineupGroup, collision?.overlay, hoverRing, areaGroups.origin, areaGroups.target, originGroup, draftGroups.origin, draftGroups.target, targetGroup].filter(
+      Boolean,
+    );
+    const hiddenWas = hidden.map((o) => o.visible);
+    let mainTarget = null;
+    let insetTarget = null;
+    let canvas = null;
+    // Review fix items 2/3: everything renderer/scene-touching below is synchronous (no `await`) -
+    // cleanup runs in `finally`, still synchronously, before the one and only `await` in this whole
+    // function (the final `canvasToBlob`, after `finally`) - so a second `capturePreview` call
+    // racing via `Promise.all` always finds a clean baseline (nothing hidden, nothing added, the
+    // renderer's own target/autoClear back to what they were) whenever ITS OWN synchronous section
+    // runs, instead of tripping over this call's still-live temp group or bound render target.
+    try {
+      hidden.forEach((o) => {
+        o.visible = false;
+      });
+      if (kind === "aim") {
+        previewCamera.position.set(feet.x, feet.y, feet.z + eyeHeight(crouched));
+        pointCameraAt(previewCamera, pitch, yaw);
+        mainTarget = renderOffscreen(previewCamera, w, h);
+        canvas = pixelsToCanvas(readPixels(mainTarget, w, h), w, h);
+        const ctx = canvas.getContext("2d");
+        drawCrosshair(ctx, w / 2, h / 2, 9, 3, 2, "#39ff6a");
+        if (inset !== false) {
+          const insetSize = Math.round(Math.min(w, h) * PREVIEW_INSET_FRACTION);
+          const insetCamera = new THREE.PerspectiveCamera(PREVIEW_INSET_FOV_DEG, 1, camera.near, camera.far);
+          insetCamera.position.copy(previewCamera.position);
+          pointCameraAt(insetCamera, pitch, yaw);
+          insetTarget = renderOffscreen(insetCamera, insetSize, insetSize);
+          const insetCanvas = pixelsToCanvas(readPixels(insetTarget, insetSize, insetSize), insetSize, insetSize);
+          const dx = w - insetSize - PREVIEW_INSET_MARGIN;
+          const dy = PREVIEW_INSET_MARGIN;
+          const r = insetSize / 2;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(dx + r, dy + r, r, 0, Math.PI * 2);
+          ctx.closePath();
+          ctx.clip();
+          ctx.drawImage(insetCanvas, dx, dy);
+          ctx.restore();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "rgba(255,255,255,0.9)";
+          ctx.beginPath();
+          ctx.arc(dx + r, dy + r, r, 0, Math.PI * 2);
+          ctx.stroke();
+          drawCrosshair(ctx, dx + r, dy + r, 6, 2, 1, "#39ff6a");
+        }
+      } else if (kind === "stand") {
+        addStandMarkers(tempGroup, feet, yaw, crouched);
+        const h2 = hullHeight(crouched);
+        const lookAt = new THREE.Vector3(feet.x, feet.y, feet.z + h2 * PREVIEW_STAND_LOOK_FRACTION);
+        // Prefer directly behind the player's own facing (spec: "behind ... looking at it") -
+        // `pickBestCameraPos` scores all 8 directions from there and picks the best, not just the
+        // first with a clear single ray.
+        const standAngle = (yaw * Math.PI) / 180 + Math.PI;
+        const sampleTargets = [
+          new THREE.Vector3(feet.x, feet.y, feet.z + h2 * 0.9),
+          new THREE.Vector3(feet.x, feet.y, feet.z + h2 * 0.5),
+          new THREE.Vector3(feet.x, feet.y, feet.z + h2 * 0.15),
+        ];
+        previewCamera.position.copy(pickBestCameraPos(lookAt, PREVIEW_STAND_BACK, PREVIEW_STAND_UP, standAngle, sampleTargets));
+        previewCamera.up.set(0, 0, 1);
+        previewCamera.lookAt(lookAt);
+        mainTarget = renderOffscreen(previewCamera, w, h);
+        canvas = pixelsToCanvas(readPixels(mainTarget, w, h), w, h);
+      } else if (kind === "land") {
+        addLandMarkers(tempGroup, rest, trajectory);
+        // Default to looking back along the incoming flight path when a trajectory is given (a
+        // more legible angle than an arbitrary fixed direction); `pickBestCameraPos` still scores
+        // all 8 directions from there.
+        let preferredAngle = -(Math.PI * 3) / 4;
+        if (Array.isArray(trajectory) && trajectory.length > 1) {
+          const [ax, ay] = trajectory[trajectory.length - 2];
+          const [bx, by] = trajectory[trajectory.length - 1];
+          const dx = bx - ax;
+          const dy = by - ay;
+          if (dx !== 0 || dy !== 0) {
+            preferredAngle = Math.atan2(dy, dx);
+          }
+        }
+        previewCamera.position.copy(pickBestCameraPos(rest, PREVIEW_LAND_BACK, PREVIEW_LAND_UP, preferredAngle));
+        previewCamera.up.set(0, 0, 1);
+        previewCamera.lookAt(rest);
+        mainTarget = renderOffscreen(previewCamera, w, h);
+        canvas = pixelsToCanvas(readPixels(mainTarget, w, h), w, h);
+      }
+    } finally {
+      scene.remove(tempGroup);
+      disposeObject3D(tempGroup);
+      mainTarget?.dispose();
+      insetTarget?.dispose();
+      hidden.forEach((o, i) => {
+        o.visible = hiddenWas[i];
+      });
+    }
+    console.debug(`[cs2mod] capturePreview ${kind} ${(performance.now() - t0).toFixed(1)}ms`);
+    return canvas ? await canvasToBlob(canvas) : null;
+  }
+
+  const view = {
     onClick(cb) {
       onClickHandler = cb;
     },
@@ -1830,6 +2264,15 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     getSelectedLineup() {
       return lineups.find((x) => x.id === selectedId) ?? null;
     },
+    // S6n lineup previews (`s6n_lineup_previews.md`): resolves to a Blob (image/webp, fallback
+    // image/png) or null when render.glb isn't loaded yet - call `ensureLoaded()` first to wait
+    // for it instead of polling.
+    capturePreview(opts) {
+      return capturePreview(opts);
+    },
+    ensureLoaded() {
+      return ensureLoaded();
+    },
     enterFirstPerson(l, onExit) {
       return enterFirstPerson(l, onExit);
     },
@@ -1903,4 +2346,16 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       renderer.domElement.remove();
     },
   };
+
+  // Debug/measurement hook (S6n lineup previews, `s6n_lineup_previews.md`): exposes this scene view
+  // to the browser-automation harness, only when the page opted into it via `?debug=1` - never runs
+  // otherwise, so it can't be reached from a normal page load.
+  if (new URLSearchParams(location.search).get("debug") === "1") {
+    window.__cs2modScene = view;
+    // Not part of the `capturePreview` contract - just lets the harness read
+    // `renderer.info.memory` for its own before/after GPU-memory check.
+    window.__cs2modRenderer = renderer;
+  }
+
+  return view;
 }

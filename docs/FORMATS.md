@@ -637,7 +637,13 @@ player_solid[i]  = !(interactAs.any_ci("npcclip") && !interactAs.any_ci("playerc
   парсится только если начинается с `<!-- kv3 ` и длина ≥ 140 (`Model.cs:581-585`;
   референс наследует это через VRF, повторяем ради совпадения классификации стекла).
 - Пропускать: `func_brush` с `retake` в targetname или `/retake_` в пути
-  модели; энтити с `startdisabled` = `1`/`true`.
+  модели; энтити с `startdisabled` = `1`/`true`; `func_brush` с `solidity`
+  = `1` (Hammer FGD: `Solidity` 0 = Toggle, 1 = Never Solid, 2 = Always
+  Solid — реф. `MapExtractor.cs:997` этого не проверяет, баг подтверждён
+  GOTV-демкой на de_mirage, см. `s6s_never_solid_brushes.md`); `prop_dynamic`
+  с `solid` = `0` (`SOLID_NONE` в `solid_t` движка Source). Оба свойства
+  реальные компилированные лампы энтити хранят то как int, то как строку —
+  политика принимает оба вида.
 - Для сравнения: трассировщик рендерера VRF (`VRF-R/Rubikon.cs`) использует
   другую, включающую модель тегов — **не** наша модель; правила выше
   откалиброваны референсом по реальным броскам.

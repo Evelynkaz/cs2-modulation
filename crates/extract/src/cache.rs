@@ -525,7 +525,12 @@ mod tests {
     #[test]
     fn cache_dir_name_matches_sha_and_version() {
         let dir = cache_key_dir(Path::new("/cache"), "de_mirage", "abcdef012345");
-        assert_eq!(dir, Path::new("/cache/maps/de_mirage/abcdef012345-x1"));
+        assert_eq!(
+            dir,
+            Path::new(&format!(
+                "/cache/maps/de_mirage/abcdef012345-x{EXTRACTOR_VERSION}"
+            ))
+        );
     }
 
     /// Writes a directory `is_complete` accepts (a readable, current-version manifest listing no

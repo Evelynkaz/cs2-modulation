@@ -25,7 +25,12 @@ use crate::report::{
 
 /// Bumped whenever the extraction policy or output shape changes in a way that should
 /// invalidate old caches.
-pub const EXTRACTOR_VERSION: u32 = 1;
+///
+/// `2` (S6s): never-solid `func_brush` (`solidity == 1`) and non-solid `prop_dynamic`
+/// (`solid == 0`) are no longer merged as solid geometry -- see `policy::never_solid_func_brush`
+/// / `policy::not_solid_prop_dynamic`. Re-extraction changes world geometry, so cached stand
+/// spots (built against the player collider and the old mesh) must be recomputed too.
+pub const EXTRACTOR_VERSION: u32 = 2;
 
 /// Extraction knobs. Currently empty; kept as a struct (rather than `()`) so options can be
 /// added later without breaking [`extract_map`]'s signature.
@@ -577,6 +582,10 @@ fn merge_solid_entity(
         report.record_skip(classname, targetname, model, "startdisabled");
         return;
     }
+    if classname == "func_brush" && policy::never_solid_func_brush(entity) {
+        report.record_skip(classname, targetname, model, "never solid");
+        return;
+    }
 
     let model_phys = lookup.load_model_phys(strip_c(model));
     if model_phys.not_found {
@@ -598,6 +607,10 @@ fn merge_solid_entity(
         let kv_root = model_phys.keyvalues.as_ref().map(|d| &d.root);
         if !policy::breakable_model(kv_root) {
             report.record_skip(classname, targetname, model, "prop_dynamic not breakable");
+            return;
+        }
+        if policy::not_solid_prop_dynamic(entity) {
+            report.record_skip(classname, targetname, model, "prop_dynamic not solid");
             return;
         }
         passable = policy::passable_glass(kv_root, model);

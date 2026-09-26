@@ -1,0 +1,58 @@
+{
+  "map": "de_mirage",
+  "source": "GOTV demo okno2.dem (S6s ground truth, D:\\porject\\modulator-work\\scratch\\demo); two sessions gave identical detonation points to 0.01u",
+  "throws": [
+    {
+      "id": "A",
+      "setpos": [1422.954834, 36.468750, -103.968750],
+      "setang": [-22.665312, -166.395660, 0.0],
+      "position_is_eye": true,
+      "falls_to_floor": true,
+      "known_feet_z": -167.97,
+      "throw_type": "jump",
+      "strength": 1.0,
+      "game_rest": [-1182.719, -594.132, -165.969]
+    },
+    {
+      "id": "B",
+      "setpos": [1358.50, 144.42, -163.90],
+      "setang": [-32.800, -163.200, 0.0],
+      "position_is_eye": false,
+      "falls_to_floor": false,
+      "throw_type": "jump",
+      "strength": 1.0,
+      "game_rest": [-1006.634, -617.568, -285.969]
+    },
+    {
+      "id": "C",
+      "setpos": [1358.50, 144.42, -163.90],
+      "setang": [-32.800, -163.200, 0.0],
+      "position_is_eye": false,
+      "falls_to_floor": false,
+      "feet_z_override": -168.0,
+      "throw_type": "stand",
+      "strength": 1.0,
+      "game_rest": [1426.908, -62.575, -165.969]
+    },
+    {
+      "id": "D",
+      "setpos": [1300.0, -100.0, -100.0],
+      "setang": [-45.0, -170.0, 0.0],
+      "position_is_eye": false,
+      "falls_to_floor": true,
+      "throw_type": "jump",
+      "strength": 1.0,
+      "game_rest": [-785.399, -330.889, -165.881]
+    },
+    {
+      "id": "E",
+      "setpos": [1300.0, -100.0, -100.0],
+      "setang": [-45.0, -170.0, 0.0],
+      "position_is_eye": false,
+      "falls_to_floor": true,
+      "throw_type": "jump",
+      "strength": 1.0,
+      "game_rest": [-785.399, -330.889, -165.881]
+    }
+  ]
+}

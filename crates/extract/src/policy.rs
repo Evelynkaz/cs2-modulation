@@ -2,7 +2,7 @@
 //! glass, and how a solid class maps to a collision-attribute name. Each function documents its
 //! source in `cs2-smoke-solver/src/Extraction/MapExtractor.cs`.
 
-use s2fmt::entities::Entity;
+use s2fmt::entities::{Entity, EntityValue};
 use s2fmt::kv3::Value;
 
 /// Brush/prop classes whose compiled models are solid to physics objects at round start
@@ -30,6 +30,38 @@ pub fn is_retake_only(targetname: &str, model: &str) -> bool {
 /// this exact set of accepted spellings).
 pub fn starts_disabled(entity: &Entity) -> bool {
     entity.get_bool("startdisabled").unwrap_or(false)
+}
+
+/// Reads an integer-ish property as an `i64`, accepting an `Int`, a `UInt` that fits, or a
+/// numeric string -- the same encoding accepted by [`starts_disabled`] for booleans, needed
+/// because real compiled entity lumps disagree on how they store small integer keyvalues (e.g.
+/// `de_mirage` stores `func_brush`'s `solidity` as an int; several other maps store it as a
+/// string).
+fn property_int(entity: &Entity, key: &str) -> Option<i64> {
+    match entity.get(key)? {
+        EntityValue::Int(i) => Some(*i),
+        EntityValue::UInt(u) => i64::try_from(*u).ok(),
+        EntityValue::String(s) => s.parse().ok(),
+        EntityValue::Other(v) => v.as_i64().or_else(|| v.as_str()?.parse().ok()),
+        _ => None,
+    }
+}
+
+/// True if a `func_brush`'s `solidity` is `1`: Hammer's FGD `Solidity` enum is `0` = Toggle
+/// (solid unless start-disabled, already handled by [`starts_disabled`]), `1` = Never Solid,
+/// `2` = Always Solid. A never-solid `func_brush` merged as solid was confirmed, against a GOTV
+/// demo on de_mirage, to be the cause of two of five simulated smoke rests missing the game's by
+/// hundreds of units (see the ground-truth regression test).
+pub fn never_solid_func_brush(entity: &Entity) -> bool {
+    property_int(entity, "solidity") == Some(1)
+}
+
+/// True if a `prop_dynamic`'s `solid` is `0`, i.e. `SOLID_NONE` in the Source engine's
+/// `solid_t` enum (`0` None, `1` BSP, `2` BBox, `3` OBB, `4` OBB yaw, `5` Custom, `6` VPhysics,
+/// `7` Bounds): the model has no collision at all. Seen on ~106 of 689 `prop_dynamic` entities
+/// across the 23 cached maps (most of the rest are `6`, VPhysics).
+pub fn not_solid_prop_dynamic(entity: &Entity) -> bool {
+    property_int(entity, "solid") == Some(0)
 }
 
 /// True if the model's KV3 keyvalues have a top-level `break_list` key and no
@@ -125,6 +157,53 @@ mod tests {
         e.properties
             .push(("startdisabled".into(), EntityValue::String("0".into())));
         assert!(!starts_disabled(&e));
+    }
+
+    #[test]
+    fn never_solid_func_brush_accepts_int_or_string() {
+        let mut e = Entity::default();
+        e.properties.push(("solidity".into(), EntityValue::Int(1)));
+        assert!(never_solid_func_brush(&e));
+
+        let mut e = Entity::default();
+        e.properties
+            .push(("solidity".into(), EntityValue::String("1".into())));
+        assert!(never_solid_func_brush(&e));
+
+        let mut e = Entity::default();
+        e.properties.push(("solidity".into(), EntityValue::Int(0)));
+        assert!(!never_solid_func_brush(&e));
+
+        let mut e = Entity::default();
+        e.properties
+            .push(("solidity".into(), EntityValue::String("0".into())));
+        assert!(!never_solid_func_brush(&e));
+
+        let mut e = Entity::default();
+        e.properties.push(("solidity".into(), EntityValue::Int(2)));
+        assert!(!never_solid_func_brush(&e));
+
+        let e = Entity::default();
+        assert!(!never_solid_func_brush(&e));
+    }
+
+    #[test]
+    fn not_solid_prop_dynamic_accepts_int_or_string() {
+        let mut e = Entity::default();
+        e.properties.push(("solid".into(), EntityValue::Int(0)));
+        assert!(not_solid_prop_dynamic(&e));
+
+        let mut e = Entity::default();
+        e.properties
+            .push(("solid".into(), EntityValue::String("0".into())));
+        assert!(not_solid_prop_dynamic(&e));
+
+        let mut e = Entity::default();
+        e.properties.push(("solid".into(), EntityValue::Int(6)));
+        assert!(!not_solid_prop_dynamic(&e));
+
+        let e = Entity::default();
+        assert!(!not_solid_prop_dynamic(&e));
     }
 
     #[test]

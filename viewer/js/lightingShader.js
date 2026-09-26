@@ -151,6 +151,12 @@ uniform float uEnvRoughnessBrightness1;
 uniform float uEnvNormalContrast1;
 uniform vec3 uEnvAoLevels1;
 uniform float uEnvMetalness1Enabled;
+// verify_c7df fix item 1: layer 1's own UV transform (csgo_environment.vert.slang:165-171), the
+// same RotateVector2D formula layer 2 already gets below -- (scale.x, scale.y, offset.x, offset.y)
+// plus a rotation in degrees (e.g. Train's hrts2_blend_metalpanelling03-painted sets 90 on BOTH
+// layers, which used to rotate layer 2 only and leave the two 90 degrees apart).
+uniform vec4 uEnvUv1;
+uniform float uEnvUvRot1;
 #endif
 // review fix item 1 (s6f3a7_env_materials.md review): per-layer colour correction --
 // csgo_environment.frag.slang:781-787,804-810. uCCnColorAdjust/uCCnAdjust are
@@ -286,8 +292,16 @@ void main() {
 // metalness2) reads through this, not the mesh's raw vUv.
 // review fix item 10 (load time): uEnvHeight1/2 sampled exactly once each here and reused below
 // (tint-mask lookup, blend weight, metalness) -- previously sampled up to 3x per fragment.
+// verify_c7df fix item 1: layer 1's own UV (identity when this isn't csgo_environment(_blend) at
+// all) -- every layer-1 sample (height1/albedo/normal) reads through uvL1, not the mesh's raw vUv.
+  vec2 uvL1 = vUv;
 #ifdef HAS_ENV_HEIGHT1
-  vec4 envHeight1Sample = texture2D( uEnvHeight1, vUv );
+  {
+    vec2 p = uEnvUv1.xy * ( vUv - 0.5 );
+    float r = radians( uEnvUvRot1 );
+    uvL1 = vec2( cos( r ) * p.x - sin( r ) * p.y, sin( r ) * p.x + cos( r ) * p.y ) + 0.5 + uEnvUv1.zw;
+  }
+  vec4 envHeight1Sample = texture2D( uEnvHeight1, uvL1 );
 #endif
 #ifdef HAS_ENV_LAYER2
   vec2 vUv2;
@@ -301,7 +315,7 @@ void main() {
 
 #ifdef HAS_ALBEDO_MAP
   {
-    vec4 s = texture2D( uAlbedoMap, vUv );
+    vec4 s = texture2D( uAlbedoMap, uvL1 );
 #ifdef ALBEDO_MANUAL_SRGB
     s.rgb = srgbToLinear( s.rgb );
 #endif
@@ -457,7 +471,7 @@ void main() {
   vec3 N = Ngeom;
 #ifdef HAS_NORMAL_MAP
   {
-    vec4 t = texture2D( uNormalMap, vUv );
+    vec4 t = texture2D( uNormalMap, uvL1 );
 #ifdef HAS_LAYER2_NORMAL_MAP
     // s6f3a7_env_materials.md change item 5, complex.frag.slang:455-456: "more correct to
     // blend normals after decoding, but it's not actually how S2 does it" -- the two layers' raw
@@ -498,6 +512,13 @@ void main() {
 #endif
     nSample.y = -nSample.y; // VRF utils.slang:261 - GLTFLoader's normalScale.y=-1 used to do this; done explicitly now.
 #ifdef HAS_ENV_HEIGHT1
+    // verify_c7df fix item 1: this normal was sampled at the rotated uvL1, so its own tangent-
+    // space X/Y are rotated too -- counter-rotate by -uEnvUvRot1 before mixing/using it, same idea
+    // as layer 2's own negated-rotation fixup below.
+    {
+      float r1 = radians( -uEnvUvRot1 );
+      nSample.xy = vec2( cos( r1 ) * nSample.x - sin( r1 ) * nSample.y, sin( r1 ) * nSample.x + cos( r1 ) * nSample.y );
+    }
     // review fix item 7: csgo_environment.frag.slang:486-505 LayerNormal's own contrast remap --
     // Up=(0,0,1) is invariant under the Y-flip above, so applying it before/after is equivalent.
     nSample = normalize( mix( vec3( 0.0, 0.0, 1.0 ), nSample, uEnvNormalContrast1 ) );
@@ -787,6 +808,9 @@ export function buildWorldMaterial(recipe) {
     uniforms.uEnvNormalContrast1 = { value: recipe.env1.normalContrast ?? 1 };
     uniforms.uEnvAoLevels1 = { value: recipe.env1.aoLevels };
     uniforms.uEnvMetalness1Enabled = { value: recipe.env1.metalnessEnabled ? 1 : 0 };
+    // verify_c7df fix item 1.
+    uniforms.uEnvUv1 = { value: new THREE.Vector4(recipe.env1.uvScale[0], recipe.env1.uvScale[1], recipe.env1.uvOffset[0], recipe.env1.uvOffset[1]) };
+    uniforms.uEnvUvRot1 = { value: recipe.env1.uvRotation ?? 0 };
     if (recipe.env1.colorAdjust) {
       uniforms.uCC1ColorAdjust = { value: recipe.env1.colorAdjust };
       uniforms.uCC1Adjust = { value: recipe.env1.adjust };

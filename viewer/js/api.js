@@ -74,8 +74,10 @@ export function renderGlbUrl(map) {
 // `normalTexture` fields instead of `render.json`'s `textures[]`, so an older export would render
 // completely untextured rather than erroring. `/api/maps`' own `renderVersion` (`null` when there's
 // no render.glb at all, or render.json doesn't parse) is checked against this before ever treating
-// a map as "has a usable 3D export".
-export const MIN_RENDER_FORMAT_VERSION = 3;
+// a map as "has a usable 3D export". `4` (bumped from `3`, review_f3a8 fix item 4): a `render.json`
+// at version 3 has no `skybox`/`cables` data and no layer-1 `uvRotation1`, so it's reported as
+// needing a rebuild too.
+export const MIN_RENDER_FORMAT_VERSION = 4;
 
 /** True only when `mapSummary` (an `/api/maps` entry) has a `render.glb` *and* its `render.json`
  * is at least `MIN_RENDER_FORMAT_VERSION` - the single gate both `main.js` (the 2D/3D toggle) and

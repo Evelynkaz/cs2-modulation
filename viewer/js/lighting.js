@@ -22,6 +22,7 @@ import {
 } from "./lightingTextures.js?v=1";
 import { buildWorldMaterial } from "./lightingShader.js?v=1";
 import { createSkyPass, inverseRotation } from "./lightingSky.js?v=1";
+import { createSkyboxPass } from "./lightingSkybox.js?v=1";
 import { createHdrTarget, createPostPass } from "./lightingPost.js?v=1";
 import { renderAssetUrl } from "./api.js?v=1";
 import { decodeHemiOctConstant, srgbToLinear, buildConstantTexture } from "./materialTextures.js?v=1";
@@ -352,6 +353,11 @@ async function buildRecipe(mesh, lightingType, renderJson, shared, texLoader) {
       colorCorrectionMode: env1Extras.colorCorrectionMode1 ?? 0,
       tintMaskContrast: env1Extras.tintMaskContrast1 ?? 1,
       tintMaskBrightness: env1Extras.tintMaskBrightness1 ?? 1,
+      // verify_c7df fix item 1: layer 1's own UV transform (`csgo_environment.vert.slang:165-171`),
+      // applied to every layer-1 sample the same way layer 2's already is.
+      uvScale: env1Extras.uvScale1 ?? [1, 1],
+      uvOffset: env1Extras.uvOffset1 ?? [0, 0],
+      uvRotation: env1Extras.uvRotation1 ?? 0,
     };
   }
   let envLayer2 = null;
@@ -473,7 +479,10 @@ function applyOverlayOrder(root) {
  * `mesh.userData.gameMaterial` (`mesh.userData.simpleMaterial` is filled in by `scene3d.js` before
  * calling this, from whatever `MeshStandardMaterial` F3b-1's own pass already built).
  */
-async function buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader) {
+/** Exported for `lightingSkybox.js`'s own reuse (§5, `s6f3b2_lighting_shader.md`): the 3D skybox's
+ * `render_sky.glb` needs the exact same per-(material,lightingType) game-material build, just fed
+ * its own `render.json` (`renderJson.skybox.report`) and its own `shared` uniform bag. */
+export async function buildGameMaterials(gltf, renderJson, shared, materialPool, texLoader) {
   const cache = new Map(); // `${materialIndex}:${lightingType}` -> THREE.ShaderMaterial
   const meshes = [];
   gltf.scene.traverse((o) => {
@@ -523,6 +532,15 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
     res.lutDim,
   );
 
+  // `s6f3b2_lighting_shader.md` §5: `null` when this map has no 3D skybox yet, or its own load
+  // failed - never fatal to the rest of the pipeline ("нет данных -- пропустить без ошибок").
+  let skyboxPass = null;
+  try {
+    skyboxPass = await createSkyboxPass(renderer, map, renderJson, shared, res.support);
+  } catch (e) {
+    console.error("[cs2mod] 3D skybox failed to load, skipping it:", e);
+  }
+
   let hdrTarget = createHdrTarget(renderer, 1, 1);
   const materialPool = new Map(); // distinct customProgramCacheKey values actually handed out.
   const gameMaterials = new Map(); // all THREE.ShaderMaterial instances, for dispose().
@@ -552,15 +570,15 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
     },
 
     programCount() {
-      return materialPool.size;
+      return materialPool.size + (skyboxPass?.programCount() ?? 0);
     },
 
     materialTextureBytes() {
-      return texLoader?.bytesLoaded() ?? 0;
+      return (texLoader?.bytesLoaded() ?? 0) + (skyboxPass?.materialTextureBytes() ?? 0);
     },
 
     materialTextureCount() {
-      return texLoader?.textureCount() ?? 0;
+      return (texLoader?.textureCount() ?? 0) + (skyboxPass?.materialTextureCount() ?? 0);
     },
 
     resize(width, height) {
@@ -589,6 +607,14 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
       renderer.autoClear = true;
       skyPass.render(renderer, camera);
       renderer.autoClear = false;
+      // §5: the 3D skybox draws next (its own depth, against the 2D sky's depth=1 background),
+      // then depth is cleared before the main scene - so main geometry always wins the depth test
+      // against the skybox regardless of the two cameras' unrelated depth ranges (F3b-2 §5's own
+      // "рендер скайбокса -> очистка глубины -> основная сцена").
+      if (skyboxPass) {
+        skyboxPass.render(renderer, camera);
+        renderer.clearDepth();
+      }
       renderer.render(scene, camera);
       scene.background = prevBackground;
 
@@ -605,6 +631,7 @@ export async function createLightingPipeline(renderer, map, renderJson, texLoade
       res.fogCube?.dispose(); // only set when it's a texture distinct from `res.skyCube`.
       res.lut.dispose();
       skyPass.dispose();
+      skyboxPass?.dispose();
       postPass.dispose();
       hdrTarget.dispose();
       for (const m of gameMaterials.values()) m.dispose();

@@ -43,6 +43,8 @@ pub enum ExportError {
     NoEntityLumps,
     #[error("failed to write glb: {0}")]
     Glb(#[from] crate::gltf::GlbTooLarge),
+    #[error("cancelled")]
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +150,13 @@ struct Report {
     /// `env_combined_light_probe_volume` entities that looked like a probe volume but were
     /// missing a required field.
     probe_volumes_skipped: u32,
+    /// §9: `path_particle_rope_clientside` tube counts, kept separate from `triangles`/
+    /// `per_material_triangles`/`probe_triangles` above -- those track reference-exporter parity,
+    /// and the reference never emits cables at all.
+    cables_built: u32,
+    cables_dropped: u32,
+    cable_triangles: u64,
+    cable_vertices: u64,
 }
 
 /// `(mesh_key, flat draw-call index, overlay, material index)` -- `get_or_build_mesh`'s glTF-mesh
@@ -524,10 +533,14 @@ impl<'a> Ctx<'a> {
             env1_json.insert("normalContrast1".into(), json!(env1.normal_contrast));
             env1_json.insert("aoLevels1".into(), json!(env1.ao_levels));
             env1_json.insert("metalnessEnabled1".into(), json!(env1.metalness_enabled));
-            // review fix item 2: layer 1's own UV transform (exported for completeness; not
-            // applied to layer-1 sampling today, see `EnvHeightParams::uv_scale`'s own doc).
+            // review fix item 2: layer 1's own UV transform, applied to layer-1 sampling the same
+            // way layer 2's already is (`csgo_environment.vert.slang:165-171`; verify_c7df fix
+            // item 1 -- the viewer used to rotate layer 2 only, so a material rotating both layers
+            // by the same angle, e.g. Train's `hrts2_blend_metalpanelling03-painted`, rendered them
+            // 90 degrees apart).
             env1_json.insert("uvScale1".into(), json!(env1.uv_scale));
             env1_json.insert("uvOffset1".into(), json!(env1.uv_offset));
+            env1_json.insert("uvRotation1".into(), json!(env1.uv_rotation));
             // review fix item 1: layer 1's own colour-correction matrices.
             let cc1 = self.layer_color_matrices(resolved.base_color_texture.as_deref(), env1);
             env1_json.insert("colorAdjust1".into(), json!(cc1.color_adjust));
@@ -1136,6 +1149,19 @@ fn bake_and_place_probe_instance(
     );
 }
 
+/// A named scene-root group node, `children` omitted entirely when empty: glTF 2.0's own schema
+/// requires a node's `children` array, if present, to have at least one entry -- an empty
+/// `"children": []` (harmless everywhere this exporter runs, but flagged `EMPTY_ENTITY`/
+/// `NODE_EMPTY` by the Khronos validator) shows up on the `cables`/`entities` groups of a 3D
+/// skybox VPK, which very often has neither.
+fn group_node_json(name: &str, children: Vec<u32>) -> Value {
+    if children.is_empty() {
+        json!({ "name": name })
+    } else {
+        json!({ "name": name, "children": children })
+    }
+}
+
 fn flatten_draw_calls(mesh: &Mesh) -> Vec<&DrawCall> {
     mesh.scene_objects
         .iter()
@@ -1689,11 +1715,15 @@ fn entity_color01(e: &Entity, key: &str) -> Option<[f32; 3]> {
     Some([v[0] / 255.0, v[1] / 255.0, v[2] / 255.0])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn place_entities(
     ctx: &mut Ctx,
     lump: &EntityLump,
     children: &mut Vec<u32>,
     sun: &mut Option<EntityLight>,
+    skybox_reference: &mut Option<crate::skybox::SkyboxReferenceInfo>,
+    sky_camera: &mut Option<crate::skybox::SkyCameraInfo>,
+    cable_children: &mut Vec<u32>,
     lightmap_uv_scale: [f32; 2],
 ) {
     for entity in &lump.entities {
@@ -1701,6 +1731,25 @@ fn place_entities(
         if classname.is_empty() {
             continue;
         }
+
+        // §8/§9 (`s6f3a4_lighting.md`): none of these three carry a `model`, so they must be
+        // handled before the `has_model` early-return below.
+        if skybox_reference.is_none()
+            && let Some(r) = crate::skybox::parse_skybox_reference(entity)
+        {
+            *skybox_reference = Some(r);
+        }
+        if sky_camera.is_none()
+            && let Some(c) = crate::skybox::parse_sky_camera(entity)
+        {
+            *sky_camera = Some(c);
+        }
+        if classname == "path_particle_rope_clientside" {
+            place_cable(ctx, cable_children, entity);
+            bump_class(&mut ctx.report, classname, false);
+            continue;
+        }
+
         let model = entity.get_str("model").unwrap_or("");
         let has_model = !model.is_empty();
 
@@ -1824,6 +1873,86 @@ fn place_entities(
     }
 }
 
+/// Builds and places one `path_particle_rope_clientside` entity's tube (§9, `cables` module):
+/// parses `pathnodes` into a Bezier tube, bakes a per-vertex `_LPV` (the probe volume is bound
+/// once, at the tube's own midpoint, then sampled per vertex position/normal like any other
+/// probe-lit primitive), and pushes a standalone node (never shared -- every cable is its own
+/// geometry) into `children`. A parse/material/geometry failure is reported and simply drops this
+/// one cable, not the whole export.
+fn place_cable(ctx: &mut Ctx, children: &mut Vec<u32>, entity: &Entity) {
+    let name = entity.targetname();
+    let Some(cable) = crate::cables::parse_cable(entity) else {
+        ctx.report.cables_dropped += 1;
+        ctx.report.missing_resources.push(format!(
+            "path_particle_rope_clientside {:?}: pathnodes missing or unreadable",
+            name.unwrap_or("")
+        ));
+        return;
+    };
+    let Some(material_index) =
+        ctx.get_gltf_material(crate::cables::CABLE_MATERIAL_PATH, cable.tint)
+    else {
+        ctx.report.cables_dropped += 1;
+        return;
+    };
+    let Some(built) = crate::cables::build_tube(&cable) else {
+        ctx.report.cables_dropped += 1;
+        return;
+    };
+
+    let volume = probes::bind_volume(&ctx.probe_volumes, 0, built.midpoint);
+    let shadow_channel = ctx.baked_shadow_channel;
+    let mut lpv = Vec::with_capacity(built.positions.len());
+    for i in 0..built.positions.len() {
+        let sample = volume.and_then(|v| {
+            ctx.probe_atlas
+                .as_ref()
+                .and_then(|a| a.sample(v, built.positions[i], built.normals[i], shadow_channel))
+        });
+        match sample {
+            Some((irr, vis)) => lpv.push([irr[0], irr[1], irr[2], vis]),
+            None => {
+                ctx.report.probe_sample_failures += 1;
+                lpv.push([0.0, 0.0, 0.0, 0.0]);
+            }
+        }
+    }
+
+    let (position, quantize) = ctx.builder.add_positions(&built.positions);
+    let normal = ctx.builder.add_normals_quantized(&built.normals);
+    let uv0 = ctx.builder.add_uv0(&built.uvs);
+    let lpv_accessor = ctx.builder.add_lpv_u16(&lpv, LPV_SCALE);
+    let indices = ctx.builder.add_indices(&built.indices);
+
+    let primitive = json!({
+        "attributes": {
+            "POSITION": position,
+            "NORMAL": normal,
+            "TEXCOORD_0": uv0,
+            "_LPV": lpv_accessor,
+        },
+        "indices": indices,
+        "material": material_index,
+        "extras": { "lighting": "probe" },
+    });
+    let mesh_idx = ctx.builder.add_mesh(json!({ "primitives": [primitive] }));
+
+    let mut node = serde_json::Map::new();
+    if let Some(n) = name {
+        node.insert("name".into(), json!(n));
+    }
+    node.insert("mesh".into(), json!(mesh_idx));
+    if quantize != world::IDENTITY_TRANSFORM {
+        node.insert("matrix".into(), json!(gltf::node_matrix(&quantize)));
+    }
+    let idx = ctx.builder.add_node(Value::Object(node));
+    children.push(idx);
+
+    ctx.report.cables_built += 1;
+    ctx.report.cable_triangles += (built.indices.len() / 3) as u64;
+    ctx.report.cable_vertices += built.positions.len() as u64;
+}
+
 /// `m_entityLumps`/`m_childLumps` entries are `.vents` resource paths (`world.rs`'s
 /// `world_node_path` applies the same lower-case/forward-slash transform for `.vwnod`); this is
 /// that transform, `_c`-suffixed, shared by the listed lumps and the child-lump walk below.
@@ -1914,8 +2043,36 @@ fn find_baked_shadow_channel(lumps: &[EntityLump]) -> Option<i64> {
 }
 
 /// Exports `map` (already resolved to `sources`) to a `.glb` byte buffer and a `render.json`
-/// report value.
+/// report value. A thin wrapper over [`export_map_with`] for every caller that doesn't need
+/// cancellation/progress (every existing test, and any one-shot CLI-style use).
 pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportResult, ExportError> {
+    export_map_with(sources, options, &AtomicBool::new(false), &mut |_stage| {})
+}
+
+/// A checkpoint [`export_map_with`] reports through its `on_stage` callback, coarse enough to
+/// come from a handful of call sites rather than threading progress through every nested
+/// placement/material call: `Geometry` (world-node scene-object/aggregate placement, `done`/
+/// `total` in items, updated every 64) is the one stage with real per-item progress; `Entities`
+/// and `Lighting` are point-in-time markers (entered once, no sub-progress); `Skybox` covers the
+/// whole nested 3D-skybox export (`export_and_write`'s own `export_skybox`), reported as a single
+/// marker rather than forwarding its own internal stages.
+#[derive(Debug, Clone, Copy)]
+pub enum ExportStage {
+    Geometry { done: usize, total: usize },
+    Entities,
+    Lighting,
+    Skybox,
+    Writing { done: usize, total: usize },
+}
+
+/// [`export_map`], but checking `cancel` (returning [`ExportError::Cancelled`] as soon as it's
+/// set) and reporting [`ExportStage`] progress through `on_stage` as it goes.
+pub fn export_map_with(
+    sources: &Sources,
+    options: &ExportOptions,
+    cancel: &AtomicBool,
+    on_stage: &mut dyn FnMut(ExportStage),
+) -> Result<ExportResult, ExportError> {
     let (_world_path, world_resource) = sources.resource_ending_with("world.vwrld_c")?;
     let world_doc = world::decode_world(
         &world_resource
@@ -1973,7 +2130,10 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
     ctx.report.missing_resources.extend(pre_missing);
     ctx.report.probe_volumes_skipped = probe_volumes_skipped;
 
-    let mut world_children: Vec<u32> = Vec::new();
+    // Decoded up front, before any placement: `total_items` below (for `ExportStage::Geometry`)
+    // needs every node's own scene-object/aggregate count, and decoding is cheap KV3 parsing --
+    // the expensive part (loading materials/models/textures) only happens in the placement pass.
+    let mut nodes: Vec<WorldNodeRaw> = Vec::new();
     for prefix in &world_doc.world_node_prefixes {
         let node_path = world::world_node_path(prefix);
         let node_resource = match sources.resource(&node_path) {
@@ -1994,10 +2154,19 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
                 continue;
             }
         };
-        let node: WorldNodeRaw = match world::decode_world_node(&root) {
-            Ok(n) => n,
+        match world::decode_world_node(&root) {
+            Ok(n) => nodes.push(n),
             Err(_) => continue,
-        };
+        }
+    }
+
+    let total_items: usize = nodes
+        .iter()
+        .map(|n| n.scene_objects.len() + n.aggregates.len())
+        .sum();
+    let mut done_items = 0usize;
+    let mut world_children: Vec<u32> = Vec::new();
+    for node in &nodes {
         for so in &node.scene_objects {
             ctx.report.scene_objects_total += 1;
             let before = ctx.report.triangles;
@@ -2010,6 +2179,16 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
             if ctx.report.triangles > before {
                 ctx.report.scene_objects_placed += 1;
             }
+            done_items += 1;
+            if done_items.is_multiple_of(64) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(ExportError::Cancelled);
+                }
+                on_stage(ExportStage::Geometry {
+                    done: done_items,
+                    total: total_items,
+                });
+            }
         }
         for agg in &node.aggregates {
             ctx.report.aggregates_total += 1;
@@ -2020,27 +2199,56 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
                 agg,
                 world_doc.lightmap_uv_scale,
             );
+            done_items += 1;
+            if done_items.is_multiple_of(64) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(ExportError::Cancelled);
+                }
+                on_stage(ExportStage::Geometry {
+                    done: done_items,
+                    total: total_items,
+                });
+            }
         }
     }
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ExportError::Cancelled);
+    }
+    on_stage(ExportStage::Geometry {
+        done: done_items,
+        total: total_items,
+    });
 
+    on_stage(ExportStage::Entities);
     let mut entity_children: Vec<u32> = Vec::new();
+    let mut cable_children: Vec<u32> = Vec::new();
     let mut sun: Option<EntityLight> = None;
+    let mut skybox_reference: Option<crate::skybox::SkyboxReferenceInfo> = None;
+    let mut sky_camera: Option<crate::skybox::SkyCameraInfo> = None;
     for lump in &lumps {
         place_entities(
             &mut ctx,
             lump,
             &mut entity_children,
             &mut sun,
+            &mut skybox_reference,
+            &mut sky_camera,
+            &mut cable_children,
             world_doc.lightmap_uv_scale,
         );
     }
 
     let world_group = ctx
         .builder
-        .add_node(json!({ "name": "world", "children": world_children }));
+        .add_node(group_node_json("world", world_children));
     let entities_group = ctx
         .builder
-        .add_node(json!({ "name": "entities", "children": entity_children }));
+        .add_node(group_node_json("entities", entity_children));
+    // §9: always present (empty on a map with no cables, or on a 3D skybox VPK, which has none) so
+    // the viewer can find this group by a fixed name without checking whether it exists first.
+    let cables_group = ctx
+        .builder
+        .add_node(group_node_json("cables", cable_children));
 
     let extensions_used = if ctx.report.unlit_used {
         vec!["KHR_materials_unlit".to_string()]
@@ -2089,6 +2297,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         })
     });
 
+    on_stage(ExportStage::Lighting);
     // §1: raw lightmap blocks + their always-generated fallback PNGs.
     let mut extra_files: Vec<(String, Vec<u8>)> = Vec::new();
     let (lightmap_files, lightmap_missing) = lightmaps::export_files(
@@ -2185,7 +2394,7 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
     entity_table.sort_by(|a, b| a["classname"].as_str().cmp(&b["classname"].as_str()));
 
     let report = json!({
-        "formatVersion": 3,
+        "formatVersion": 4,
         "textureBudget": {
             "maxSide": options.max_texture,
             "byType": {
@@ -2265,10 +2474,31 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         "sky": env.sky_json,
         "fog": env.fog_json,
         "postProcessing": env.post_json,
+        "skyboxReference": skybox_reference.as_ref().map(|r| json!({
+            "targetMap": r.target_map,
+            "origin": r.origin,
+            "angles": r.angles,
+            "scales": r.scales,
+            "meaning": "the skybox_reference entity (present only on a map with a 3D skybox); targetMap is a .vmap resource path to a SEPARATE VPK (skybox::map_key_from_target strips it to a GameInstall::map_vpk key), exported independently -- see the top-level skybox key, if present, for its own render_sky.glb; origin/angles/scales are this entity's own placement transform (angles/scales are identity on every map surveyed, but origin is not always zero -- e.g. ar_shoots (0.733,575.999,0), ar_baggage (-16,-1,27.575), de_overpass (0,0,4) -- see the skybox key's own cameraFormula for how the viewer composes it)",
+        })),
+        "skyCamera": sky_camera.as_ref().map(|c| json!({
+            "scale": c.scale,
+            "origin": c.origin,
+            "angles": c.angles,
+            "meaning": "the sky_camera entity, present only inside a 3D skybox VPK's OWN entity lump (never the main map's) -- null here means this export is not a 3D skybox (or the skybox map is malformed); see the OUTER map's own skyboxReference/skybox keys",
+        })),
+        "cables": {
+            "materialPath": crate::cables::CABLE_MATERIAL_PATH,
+            "built": ctx.report.cables_built,
+            "dropped": ctx.report.cables_dropped,
+            "triangles": ctx.report.cable_triangles,
+            "vertices": ctx.report.cable_vertices,
+            "meaning": "path_particle_rope_clientside entities (s6f3a4_lighting.md change item 9, REPORT.md §7): straight-Bezier 4-sided tubes in this file's own 'cables' scene-root node, own accessors per cable (never shared/instanced), probe-lit (_LPV baked per vertex, probe volume bound once at the cable's own midpoint). NOT folded into counts.triangles/perMaterialTriangles/counts.probeTriangles above -- those track parity with the reference exporter, which never emits cables at all.",
+        },
     });
 
     let glb = ctx.builder.finish(
-        vec![world_group, entities_group],
+        vec![world_group, entities_group, cables_group],
         extensions_used,
         json!({}),
     )?;
@@ -2281,17 +2511,6 @@ pub fn export_map(sources: &Sources, options: &ExportOptions) -> Result<ExportRe
         report,
         extra_files,
     })
-}
-
-/// A cheap, coarse checkpoint [`export_and_write`] reports through its `on_stage` callback -
-/// `export_map` has no finer internal phases short of a large rework of this file
-/// (`s6i_render_job_areas3d.md`: "иначе — стадии и честное «идёт экспорт»"), so callers get an
-/// honest two-stage split instead: building the export in memory, then writing it to disk (the one
-/// part that genuinely has per-file progress).
-#[derive(Debug, Clone, Copy)]
-pub enum ExportStage {
-    Exporting,
-    Writing { done: usize, total: usize },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2338,19 +2557,59 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ExportWriteError> {
     Ok(())
 }
 
-/// [`export_map`] plus atomically writing every file it returns into `dir`: first
-/// `result.extra_files`, then `render.glb`, and `render.json` last, since its presence is what
-/// marks the export usable - the sequence `cs2mod export-glb` ran by hand before this
-/// existed; factored out so the server's render job (`jobs.rs::run_render`) doesn't duplicate it
-/// (`s6i_render_job_areas3d.md` change item 1: "вынеси общую функцию... в s2render"). `cancel` is
-/// checked before the export starts and between each file write - `export_map` itself has no
-/// cancellation hook (threading one through every nested placement/material call would be a much
-/// larger change than this job warrants), so a cancel arriving mid-export still finishes that
-/// (possibly multi-minute) call before taking effect, exactly like `jobs.rs::run_extract`'s own
-/// coarse cancellation.
+/// `serde_json::Value` (a `json!([x,y,z])` array of numbers) back to `[f32; 3]`, `[0,0,0]` if it
+/// isn't one (only ever called on this same process's own `render.json`, whose `skyboxReference`
+/// fields always round-trip -- the fallback just keeps a malformed input from panicking).
+fn json_vec3(v: &Value) -> [f32; 3] {
+    serde_json::from_value(v.clone()).unwrap_or([0.0, 0.0, 0.0])
+}
+
+/// Opens the 3D skybox's own VPK (`csgo_dir/maps/<key>.vpk`, the same layout
+/// `extract::game::GameInstall::map_vpk` uses, duplicated here as a one-line join rather than
+/// taking a dependency on the `extract` crate for it) and exports it through the same
+/// [`export_map_with`] pipeline as the main map (`s6f3a4_lighting.md` change item 8), then folds
+/// the result into a `skybox` block via [`crate::skybox::merge_skybox_export`]. Every failure (VPK
+/// not found, export failed/cancelled, or the skybox's own entity lump has no `sky_camera`)
+/// surfaces as the same `String` -- the caller treats all three the same way: skip the 3D skybox,
+/// keep the main export.
+fn export_skybox(
+    csgo_dir: &Path,
+    options: &ExportOptions,
+    reference: &crate::skybox::SkyboxReferenceInfo,
+    cancel: &AtomicBool,
+) -> Result<crate::skybox::SkyboxMerge, String> {
+    let sky_map_key = crate::skybox::map_key_from_target(&reference.target_map);
+    let sky_vpk = csgo_dir.join("maps").join(format!("{sky_map_key}.vpk"));
+    // review_f3a8 fix item 5: a handful of maps (only `ar_pool_day` found so far) have their 3D
+    // skybox packed inside the map's own VPK instead of a separate one -- `Sources::open` needs an
+    // actual `.vpk` file, which doesn't exist there at all, so this is reported with a specific,
+    // actionable message rather than the generic "not found" `SourceError` text.
+    if !sky_vpk.is_file() {
+        return Err(format!(
+            "3D skybox packed inside the map VPK (maps/{sky_map_key}.vpk) is not supported yet"
+        ));
+    }
+    let sky_sources = Sources::open(&sky_vpk, csgo_dir)
+        .map_err(|e| format!("failed to open sources for {sky_map_key}: {e}"))?;
+    let sky_result = export_map_with(&sky_sources, options, cancel, &mut |_| {})
+        .map_err(|e| format!("failed to export {sky_map_key}: {e}"))?;
+    crate::skybox::merge_skybox_export(reference, sky_result).map_err(|e| e.to_string())
+}
+
+/// [`export_map_with`] plus atomically writing every file it returns (including, when this map's
+/// own `skybox_reference` entity resolves, the 3D skybox's `render_sky.glb` and its own lightmap
+/// files -- folded into `result.extra_files` before any writing starts, so both this function's
+/// callers get the 3D skybox automatically) into `dir`: first `result.extra_files`, then
+/// `render.glb`, and `render.json` last, since its presence is what marks the export usable - the
+/// sequence `cs2mod export-glb` ran by hand before this existed; factored out so the server's
+/// render job (`jobs.rs::run_render`) doesn't duplicate it (`s6i_render_job_areas3d.md` change
+/// item 1: "вынеси общую функцию... в s2render"). `cancel` is checked inside `export_map_with`
+/// itself now (every 64 geometry items, and once before the entities/lighting/skybox stages), not
+/// just between these coarser steps, so it takes effect well before a large map's export finishes.
 pub fn export_and_write(
     sources: &Sources,
     options: &ExportOptions,
+    csgo_dir: &Path,
     dir: &Path,
     cancel: &AtomicBool,
     mut on_stage: impl FnMut(ExportStage),
@@ -2358,10 +2617,37 @@ pub fn export_and_write(
     if cancel.load(Ordering::Relaxed) {
         return Err(ExportWriteError::Cancelled);
     }
-    on_stage(ExportStage::Exporting);
-    let result = export_map(sources, options)?;
+    let mut result = export_map_with(sources, options, cancel, &mut on_stage)?;
     if cancel.load(Ordering::Relaxed) {
         return Err(ExportWriteError::Cancelled);
+    }
+
+    if let Some(target_map) = result.report["skyboxReference"]["targetMap"]
+        .as_str()
+        .map(str::to_string)
+    {
+        on_stage(ExportStage::Skybox);
+        let reference = crate::skybox::SkyboxReferenceInfo {
+            target_map: target_map.clone(),
+            origin: json_vec3(&result.report["skyboxReference"]["origin"]),
+            angles: json_vec3(&result.report["skyboxReference"]["angles"]),
+            scales: json_vec3(&result.report["skyboxReference"]["scales"]),
+        };
+        match export_skybox(csgo_dir, options, &reference, cancel) {
+            Ok(merge) => {
+                result.report["skybox"] = merge.json;
+                result.extra_files.push((merge.glb_file_name, merge.glb));
+                result.extra_files.extend(merge.extra_files);
+            }
+            Err(e) => {
+                if let Some(arr) = result.report["dropped"]["missingResources"].as_array_mut() {
+                    arr.push(json!(format!("skybox {target_map}: {e}")));
+                }
+            }
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportWriteError::Cancelled);
+        }
     }
 
     let total = 2 + result.extra_files.len();

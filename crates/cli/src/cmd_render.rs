@@ -58,9 +58,13 @@ pub fn export_glb(
         max_texture,
         lightmap_quality_high,
     };
+    // `export_and_write` (s2render) also exports and writes the 3D skybox, if this map's own
+    // `skybox_reference` entity resolves one (`s6f3a4_lighting.md` change item 8) -- no separate
+    // step needed here.
     let result = export_and_write(
         &sources,
         &options,
+        &install.csgo_dir,
         &dir,
         &AtomicBool::new(false),
         |_stage| {},

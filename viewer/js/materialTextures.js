@@ -73,7 +73,7 @@ function wantsManualSrgb(entry, support) {
   return entry.colorSpace === "srgb" && entry.format === "BC1" && !support.s3tcSrgb;
 }
 
-async function fetchArrayBufferCached(url) {
+async function fetchArrayBufferCached(url, signal) {
   let cache = null;
   let cached = null;
   try {
@@ -85,7 +85,7 @@ async function fetchArrayBufferCached(url) {
   const headers = {};
   const cachedEtag = cached?.headers.get("ETag");
   if (cachedEtag) headers["If-None-Match"] = cachedEtag;
-  const res = await fetch(url, { cache: "no-store", headers });
+  const res = await fetch(url, { cache: "no-store", headers, signal });
   if (res.status === 304 && cached) {
     return cached.arrayBuffer();
   }
@@ -212,6 +212,10 @@ export function createMaterialTextureLoader(
   // Set by dispose(): queued jobs that have not started yet resolve to `null` (a missing texture
   // to every caller) instead of downloading and uploading for a view that is already gone.
   let disposed = false;
+  // verify_c7df fix item 2: a job already dequeued (past `disposed`'s own check in `schedule`)
+  // used to keep fetching/uploading for up to ~40ms after `dispose()` - aborts every in-flight
+  // `fetch()` immediately instead of only gating the ones still waiting in `queue`.
+  const abortController = new AbortController();
 
   function pump() {
     while (active < concurrency && queue.length > 0) {
@@ -240,7 +244,10 @@ export function createMaterialTextureLoader(
       throw new Error(`texture ${entry.path}: format ${entry.format} not supported by this browser/GPU`);
     }
     return schedule(async () => {
-      const buffer = await fetchArrayBufferCached(renderAssetUrl(map, entry.file));
+      const buffer = await fetchArrayBufferCached(renderAssetUrl(map, entry.file), abortController.signal);
+      // verify_c7df fix item 2: `dispose()` may have run while this fetch was in flight - the
+      // buffer arrived, but there is no renderer/GPU left worth uploading it to.
+      if (disposed) return null;
       bytesLoaded += buffer.byteLength;
       onProgress?.(bytesLoaded);
       const manualSrgb = wantsManualSrgb(entry, support);
@@ -275,8 +282,9 @@ export function createMaterialTextureLoader(
     },
     dispose() {
       disposed = true;
+      abortController.abort();
       for (const p of cache.values()) {
-        p.then((t) => t.dispose()).catch(() => {});
+        p.then((t) => t?.dispose()).catch(() => {});
       }
       cache.clear();
     },

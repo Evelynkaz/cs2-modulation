@@ -301,10 +301,10 @@ pub struct EnvHeightParams {
     pub tint_mask_brightness: f32,
     /// `g_vTexCoordScale{N}`/`g_vTexCoordOffset{N}` (review fix item 2): the vertex shader's
     /// `RotateVector2D(uv, rotation, scale, offset, center)` around a fixed `center=(0.5,0.5)`
-    /// with `rotation` always `0` on every material surveyed (`csgo_environment.vert.slang:
-    /// 166-171,175-180`) -- exported for both layers; only layer 2's is actually applied to
-    /// sampling today (layer 1 already samples at the mesh's own UV0, which every material
-    /// surveyed leaves at `scale=(1,1)`/`offset=(0,0)` anyway).
+    /// (`csgo_environment.vert.slang:166-171,175-180`) -- exported for both layers and applied to
+    /// both layers' own sampling (verify_c7df fix item 1: layer 1 used to sample at the mesh's own
+    /// UV0 unrotated, which was wrong for the materials below whose `scale`/`offset` aren't the
+    /// no-op default).
     pub uv_scale: [f32; 2],
     pub uv_offset: [f32; 2],
     /// `g_fTextureNormalContrast{N}` (review fix item 7): `normalize(mix(Up, decodedNormal,
@@ -312,7 +312,8 @@ pub struct EnvHeightParams {
     pub normal_contrast: f32,
     /// `g_flTexCoordRotation{N}` in degrees (default 0). Not always 0: 90 on Ancient
     /// `hr_ancient_blend_wall_02_trims_grey-moss-wet-b` layer 2 and on both layers of Train
-    /// `hrts2_blend_metalpanelling03-painted`. The viewer applies it to layer 2 only.
+    /// `hrts2_blend_metalpanelling03-painted` -- the viewer now applies it to both layers
+    /// (verify_c7df fix item 1).
     pub uv_rotation: f32,
 }
 

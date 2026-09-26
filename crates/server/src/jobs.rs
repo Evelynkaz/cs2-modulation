@@ -595,10 +595,11 @@ async fn run_viewerdata(state: &Arc<AppState>, job: &Arc<Job>) -> JobOutcome {
 /// `run_standspots`/`run_viewerdata` do (`get_entry_blocking` reports "unknown map" otherwise -
 /// the job API's own "Подготовить" chain always runs `extract` first), but still needs the *live*
 /// game install to read the map's own `.vpk` (materials/textures/lightmaps the extraction step
-/// never captures). Progress is reported per file during the write phase only - `export_map`
-/// itself has no separable geometry/texture/lighting phases short of a large rework
-/// (`s6i_render_job_areas3d.md`: "иначе — стадии и честное «идёт экспорт»"), and `run_job`'s own
-/// preamble line already announced "render 0/1" as that honest in-progress marker.
+/// never captures). Every `ExportStage` (geometry, entities, lighting, the 3D skybox, then
+/// per-file writing) is forwarded as its own progress line, and `export_map_with`'s own
+/// cancellation check (every 64 geometry items, plus once before entities/lighting/skybox/each
+/// write) means a `DELETE` now takes effect within a few seconds even on a large map, not only
+/// between `export_map`'s old all-or-nothing call and the write phase.
 async fn run_render(state: &Arc<AppState>, job: &Arc<Job>) -> JobOutcome {
     let entry = match get_entry_blocking(state, &job.map).await {
         Ok(e) => e,
@@ -627,13 +628,23 @@ async fn run_render(state: &Arc<AppState>, job: &Arc<Job>) -> JobOutcome {
             s2render::export::export_and_write(
                 &sources,
                 &s2render::export::ExportOptions::default(),
+                &install.csgo_dir,
                 &dir,
                 &cancel,
                 |stage| {
-                    if let s2render::export::ExportStage::Writing { done, total } = stage {
-                        job_for_progress
-                            .push_line(&json!({ "stage": "render", "done": done, "total": total }));
-                    }
+                    use s2render::export::ExportStage;
+                    let line = match stage {
+                        ExportStage::Geometry { done, total } => {
+                            json!({ "stage": "render", "phase": "geometry", "done": done, "total": total })
+                        }
+                        ExportStage::Entities => json!({ "stage": "render", "phase": "entities" }),
+                        ExportStage::Lighting => json!({ "stage": "render", "phase": "lighting" }),
+                        ExportStage::Skybox => json!({ "stage": "render", "phase": "skybox" }),
+                        ExportStage::Writing { done, total } => {
+                            json!({ "stage": "render", "phase": "writing", "done": done, "total": total })
+                        }
+                    };
+                    job_for_progress.push_line(&line);
                 },
             )
             .map_err(|e| e.to_string())

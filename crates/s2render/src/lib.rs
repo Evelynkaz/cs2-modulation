@@ -8,6 +8,7 @@
 
 pub mod attributes;
 pub mod buffer;
+pub mod cables;
 pub mod color_correct;
 pub mod entity;
 pub mod environment;
@@ -22,6 +23,7 @@ pub mod model;
 pub mod native_texture;
 pub mod probes;
 mod reader;
+pub mod skybox;
 pub mod source;
 pub mod world;
 

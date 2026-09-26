@@ -47,6 +47,7 @@ export const strings = {
     stageRender: "3D-модель",
     stageQueued: "в очереди",
     stageDone: "готово",
+    renderPhases: { geometry: "геометрия", entities: "объекты", lighting: "освещение", skybox: "3D-небо", writing: "запись" },
     loading: "Загрузка карт...",
     pillOk: "✓",
     pillMissing: "—",

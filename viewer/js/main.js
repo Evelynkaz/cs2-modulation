@@ -435,7 +435,14 @@ function paintLabel(record) {
   }
   const elapsed = ((Date.now() - record.startedAt) / 1000).toFixed(1);
   const msg = record.lastMsg;
-  const progressText = msg?.total ? `${msg.done ?? 0}/${msg.total}` : strings.maps.stageQueued;
+  // A render job's own phase lines (`{stage:"render",phase:"entities"|"lighting"|"skybox"}`) carry
+  // no `total` - previously fell through to "в очереди" ("queued") mid-job, even though the job was
+  // running (review_f3a8 fix item 3).
+  const progressText = msg?.total
+    ? `${msg.done ?? 0}/${msg.total}`
+    : msg?.phase
+      ? (strings.maps.renderPhases[msg.phase] ?? msg.phase)
+      : strings.maps.stageQueued;
   record.sink.label.textContent = `${stageLabel(record.currentKind)} - ${progressText} (${elapsed} c)`;
 }
 

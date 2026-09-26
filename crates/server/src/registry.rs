@@ -174,8 +174,11 @@ impl MapEntry {
     }
 }
 
-/// Mirrors `viewer/js/api.js`'s own `MIN_RENDER_FORMAT_VERSION` constant.
-const MIN_RENDER_FORMAT_VERSION: u32 = 3;
+/// Mirrors `viewer/js/api.js`'s own `MIN_RENDER_FORMAT_VERSION` constant. `4` (bumped from `3`,
+/// review_f3a8 fix item 4): a `render.json` older than that has no `skybox`/`cables`/layer-1
+/// `uvRotation1` data, so it's reported as needing a rebuild ("Подготовить 3D" offers one) rather
+/// than treated as already usable.
+const MIN_RENDER_FORMAT_VERSION: u32 = 4;
 
 /// `GET /api/maps`' shape.
 #[derive(Debug, Clone, Serialize)]

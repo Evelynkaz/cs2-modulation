@@ -7,9 +7,13 @@
 //! `cargo test -p s2render --release --test export_mirage_real_game -- --ignored --nocapture`
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use extract::game::GameInstall;
-use s2render::export::{ExportOptions, export_map};
+use s2render::export::{
+    ExportError, ExportOptions, ExportStage, ExportWriteError, export_and_write, export_map,
+    export_map_with,
+};
 use s2render::source::Sources;
 
 fn game_dir() -> PathBuf {
@@ -183,5 +187,79 @@ fn de_mirage_export_matches_reference_numbers() {
     assert_eq!(
         overlay_order_nodes, 4,
         "one overlay object at order 1, three at order 2"
+    );
+}
+
+/// A cancel that arrives during the `Geometry` stage stops `export_map_with` (returns
+/// `ExportError::Cancelled`, not a completed export) well before Mirage's ~3,600-item world walk
+/// finishes -- de_mirage's own geometry stage reports progress every 64 items, so setting `cancel`
+/// from inside the very first `Geometry` callback and asserting an error return here is really
+/// checking "did the *next* checkpoint (item 128) actually stop it", i.e. cancellation takes
+/// effect within a couple of `ExportStage::Geometry` reports, not only once the whole (multi-
+/// second) export finishes.
+#[test]
+#[ignore = "needs CS2_GAME_DIR"]
+fn cancel_during_geometry_stage_stops_export_map_with() {
+    let install = GameInstall::new(game_dir()).expect("valid CS2 install");
+    let sources = Sources::open(&install.map_vpk("de_mirage"), &install.csgo_dir)
+        .expect("open de_mirage sources");
+
+    let cancel = AtomicBool::new(false);
+    let mut geometry_reports = 0u32;
+    let mut on_stage = |stage: ExportStage| {
+        if let ExportStage::Geometry { done, total } = stage {
+            geometry_reports += 1;
+            assert!(done <= total, "done {done} must never exceed total {total}");
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+
+    match export_map_with(&sources, &ExportOptions::default(), &cancel, &mut on_stage) {
+        Err(ExportError::Cancelled) => {}
+        Err(other) => panic!("expected Cancelled, got error: {other}"),
+        Ok(_) => panic!("expected Cancelled, got a completed export"),
+    }
+    assert!(
+        geometry_reports >= 1,
+        "expected at least one Geometry progress report before cancelling"
+    );
+}
+
+/// Same cancellation, through the full [`export_and_write`] pipeline this time: the write phase
+/// must never start, so `render.json` -- the "export complete" marker -- never appears in `dir`.
+#[test]
+#[ignore = "needs CS2_GAME_DIR"]
+fn cancel_during_geometry_stage_writes_no_render_json() {
+    let install = GameInstall::new(game_dir()).expect("valid CS2 install");
+    let sources = Sources::open(&install.map_vpk("de_mirage"), &install.csgo_dir)
+        .expect("open de_mirage sources");
+    let dir = temp_dir("cancel-geometry-write");
+
+    let cancel = AtomicBool::new(false);
+    let mut on_stage = |stage: ExportStage| {
+        if let ExportStage::Geometry { .. } = stage {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+
+    match export_and_write(
+        &sources,
+        &ExportOptions::default(),
+        &install.csgo_dir,
+        &dir,
+        &cancel,
+        &mut on_stage,
+    ) {
+        Err(ExportWriteError::Export(ExportError::Cancelled)) => {}
+        Err(other) => panic!("expected Cancelled, got error: {other}"),
+        Ok(_) => panic!("expected Cancelled, got a completed export"),
+    }
+    assert!(
+        !dir.join("render.json").is_file(),
+        "render.json must not exist after a cancel during the geometry stage"
+    );
+    assert!(
+        !dir.join("render.glb").is_file(),
+        "render.glb must not exist either -- writing starts only after the export itself finishes"
     );
 }

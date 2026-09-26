@@ -74,7 +74,7 @@ const MIN_AREA_AREA: f64 = 1.0;
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 11;
+const CACHE_VERSION: u32 = 12;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -131,6 +131,29 @@ pub struct LineupJson {
     #[serde(rename = "aimRef")]
     pub aim_ref: AimRefJson,
     pub console: String,
+    /// `s6q_robust_aim.md`: the exact console string - `setpos`/`setang` at 2/3 decimals, built
+    /// from this lineup's own final verified feet/pitch/yaw, never re-rounded elsewhere. `None`
+    /// (omitted, not `null`) when the feet were never actually checked against a real hull overlap
+    /// at teleport time and do not clear `verify::hull_clear` right now - the viewer's own
+    /// `consoleExact ?? console` fallback then copies the (unchecked but at least referenced)
+    /// `console` string instead.
+    #[serde(rename = "consoleExact", skip_serializing_if = "Option::is_none")]
+    pub console_exact: Option<String>,
+    /// `s6q_robust_aim.md`: precise mode's own post-verify robustness fraction/sub-fractions/aim
+    /// margin - `None` (omitted, not `null`) outside precise mode, so a normal-mode response stays
+    /// byte-for-byte unchanged and the viewer's own difficulty rule can fall back on their absence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub robustness: Option<f32>,
+    #[serde(rename = "robustAim", skip_serializing_if = "Option::is_none")]
+    pub robust_aim: Option<f32>,
+    #[serde(rename = "robustPos", skip_serializing_if = "Option::is_none")]
+    pub robust_pos: Option<f32>,
+    /// `s6q_robust_aim.md`'s real-game addendum: `robustness`'s own launch-model-uncertainty
+    /// sub-fraction (throw speed and launch-position perturbations).
+    #[serde(rename = "robustModel", skip_serializing_if = "Option::is_none")]
+    pub robust_model: Option<f32>,
+    #[serde(rename = "aimMarginDeg", skip_serializing_if = "Option::is_none")]
+    pub aim_margin_deg: Option<f32>,
     /// `s6g2_target_area.md`: whether this lineup's rest point falls inside the query's
     /// `targetArea` - only present for an area-target solve (omitted, not `null`, for a
     /// point-target one, so `cs2mod solve --json`'s existing byte-for-byte output is untouched).
@@ -239,6 +262,12 @@ pub fn json_payload(
                         margin_deg: rl.aim_ref.margin_deg(),
                     },
                     console: rl.console.clone(),
+                    console_exact: rl.console_exact.clone(),
+                    robustness: l.robustness,
+                    robust_aim: l.robust_aim,
+                    robust_pos: l.robust_pos,
+                    robust_model: l.robust_model,
+                    aim_margin_deg: l.aim_margin_deg,
                     inside_target_area: target_area.map(|a| {
                         target::point_in_area_polygon(&a.polygon, l.rest_point.x, l.rest_point.y)
                             && a.z_min.is_none_or(|lo| l.rest_point.z >= lo)

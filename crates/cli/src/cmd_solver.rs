@@ -470,6 +470,12 @@ pub fn solve(
         }
     }
 
+    // `s6q_robust_aim.md`: "-" for a field precise mode never computed (also every field, outside
+    // precise mode), a fixed 2-decimal value otherwise.
+    let fmt_opt = |v: Option<f32>| match v {
+        Some(x) => format!("{x:.2}"),
+        None => "-".to_string(),
+    };
     let ranked_list = rank::ranked(&solve, origin_click);
     for (i, rl) in ranked_list.iter().take(top).enumerate() {
         let l = &rl.lineup;
@@ -477,7 +483,7 @@ pub fn solve(
             + (l.rest_point.y - solve.target.y).powi(2))
         .sqrt();
         println!(
-            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} stability_wide {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}",
+            "{:>3}. {}  [{}]  rest ({:.0},{:.0},{:.0}) dist {:.0}u  bounces {} flight {:.2}s  stability {:.2} stability_wide {:.2} scatter {:.0}u  human_error {:.0}u  pin {}  exposed {}  robustness {} robust_aim {} robust_pos {} robust_model {} aim_margin {}  exact: {}",
             i + 1,
             rl.console,
             rl.describe,
@@ -493,6 +499,12 @@ pub fn solve(
             rl.human_error,
             rl.pin,
             l.direct_los,
+            fmt_opt(l.robustness),
+            fmt_opt(l.robust_aim),
+            fmt_opt(l.robust_pos),
+            fmt_opt(l.robust_model),
+            fmt_opt(l.aim_margin_deg),
+            rl.console_exact.as_deref().unwrap_or("-"),
         );
     }
 

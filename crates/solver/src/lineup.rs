@@ -37,14 +37,31 @@ pub struct Lineup {
     /// `None` when it does not touch glass, or when it never settles
     /// without it.
     pub rest_if_broken: Option<V3>,
+    /// `s6q_robust_aim.md`: precise mode's post-verify robustness - `min(robust_aim, robust_pos,
+    /// robust_model)`, not an average (see `verify::robust_center`); `None` outside precise mode
+    /// (never computed) or for a lineup past the analysis cap.
+    pub robustness: Option<f32>,
+    /// `s6q_robust_aim.md`: `robustness`'s own aim-disk sub-fraction.
+    pub robust_aim: Option<f32>,
+    /// `s6q_robust_aim.md`: `robustness`'s own feet-jitter sub-fraction.
+    pub robust_pos: Option<f32>,
+    /// `s6q_robust_aim.md`'s real-game addendum: `robustness`'s own launch-model-uncertainty
+    /// sub-fraction (throw speed and launch-position perturbations, see
+    /// `verify::robust_model_fraction`).
+    pub robust_model: Option<f32>,
+    /// `s6q_robust_aim.md`: the re-centered aim's clearance (degrees, pitch-weighted) to the
+    /// nearest rejected cell in the fine grid; `verify::ROBUST_NO_REJECT_MARGIN_DEG` (reported as
+    /// "≥" that) when the whole grid came back accepted.
+    pub aim_margin_deg: Option<f32>,
 }
 
 impl Lineup {
     /// A `Lineup` with every reference-default field (`Stability: 0f,
     /// Strength: 1f, RunYawOffsetDeg: 0f, RestScatter: 0f, DirectLos: false,
     /// GlassBreaks: 0, RestIfBroken: null`), plus `StabilityWide: 0f`
-    /// (`s6l_aim_precision.md`, not in the reference), except the ones every
-    /// caller must supply.
+    /// (`s6l_aim_precision.md`, not in the reference) and `robustness`/
+    /// `robust_aim`/`robust_pos`/`aim_margin_deg: None` (`s6q_robust_aim.md`, likewise not in the
+    /// reference), except the ones every caller must supply.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         feet: V3,
@@ -73,6 +90,11 @@ impl Lineup {
             direct_los: false,
             glass_breaks: 0,
             rest_if_broken: None,
+            robustness: None,
+            robust_aim: None,
+            robust_pos: None,
+            robust_model: None,
+            aim_margin_deg: None,
         }
     }
 }

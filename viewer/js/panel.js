@@ -41,10 +41,23 @@ export const CLICK_LABELS = {
 const DIFFICULTY_LABEL = { easy: strings.panel.difficultyEasy, medium: strings.panel.difficultyMedium, hard: strings.panel.difficultyHard };
 const DIFFICULTY_BADGE = { easy: "badge-easy", medium: "badge-medium", hard: "badge-hard" };
 
-// Difficulty rule (`s6m_consumer_redesign.md`): uses `stabilityWide` when the server provides it
-// (another task is adding the field), else falls back to `stability`. "Лёгкая" (green) = wide >=
-// 0.8 and bounces <= 6; "Средняя" (amber) = wide >= 0.4 or stability >= 0.8; else "Сложная" (red).
+// Difficulty rule (`s6q_robust_aim.md`, real-game addendum): when the server ran precise mode's own
+// robust-aim centering (`l.robustness` present), use it directly - "Лёгкая" (green) = robustness >=
+// 0.8 AND aimMarginDeg >= 0.2 AND robustModel >= 0.9 (launch-model uncertainty - a lineup whose
+// path only works for an exact, noise-free throw is not actually easy); "Средняя" (amber) =
+// robustness >= 0.6; else "Сложная" (red). Falls back to the old `stabilityWide`/`stability` rule
+// (`s6m_consumer_redesign.md`) when `robustness` is absent (normal mode, or a lineup past the
+// analysis cap).
 function difficultyOf(l) {
+  if (l.robustness != null) {
+    if (l.robustness >= 0.8 && (l.aimMarginDeg ?? 0) >= 0.2 && (l.robustModel ?? 0) >= 0.9) {
+      return "easy";
+    }
+    if (l.robustness >= 0.6) {
+      return "medium";
+    }
+    return "hard";
+  }
   const wide = l.stabilityWide ?? l.stability;
   if (wide >= 0.8 && l.Bounces <= 6) {
     return "easy";
@@ -107,6 +120,14 @@ function warningsOf(l) {
 // Russian decimal comma, one decimal place (round-2 design critique 9 - "7,0 с", not "7.00 с").
 function ru1(n) {
   return n.toFixed(1).replace(".", ",");
+}
+
+// `s6q_robust_aim.md`: the exact console string, display-only - every decimal point in it is a
+// number's own (`consoleExact`'s 2/3-decimal fields; there is no other "." in the string), so
+// swapping every "." for "," reads as Russian numbers while the copy buttons still hand out the
+// original, dot-decimal string untouched.
+function ruConsole(s) {
+  return s.replace(/\./g, ",");
 }
 
 function distance3(a, b) {
@@ -438,6 +459,7 @@ export function createPanel(container, handlers) {
       el("p", { textContent: `${strings.panel.detailsRest}: ${l.rest[0].toFixed(0)}, ${l.rest[1].toFixed(0)}, ${l.rest[2].toFixed(0)}` }),
       el("p", { textContent: `${strings.panel.detailsAim}: ${aimRefText(l.aimRef)}` }),
       el("p", { textContent: strings.panel.detailsHumanError(Math.round(l.humanError)) }),
+      el("p", { textContent: `${strings.panel.detailsExact}: ${ruConsole(l.consoleExact ?? l.console)}` }),
     );
     for (const warning of warningsOf(l)) {
       detailsBlock.append(el("p", { className: "warn", innerHTML: icon("warning", 14) }, warning));
@@ -448,13 +470,16 @@ export function createPanel(container, handlers) {
     const copyInput = el("input", { type: "text", className: "copy-fallback", readOnly: true, hidden: true });
     const copyBtn = el("button", { type: "button", className: "primary", textContent: strings.panel.copyButton });
     copyBtn.addEventListener("click", () => {
+      // `s6q_robust_aim.md`: the exact console string, falling back to `console` for an older
+      // cached result that predates the field.
+      const text = l.consoleExact ?? l.console;
       if (navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(l.console).then(
+        navigator.clipboard.writeText(text).then(
           () => showToast(strings.panel.copied),
-          () => showToast(fallbackCopy(copyInput, l.console) ? strings.panel.copied : strings.panel.copyFallback),
+          () => showToast(fallbackCopy(copyInput, text) ? strings.panel.copied : strings.panel.copyFallback),
         );
       } else {
-        showToast(fallbackCopy(copyInput, l.console) ? strings.panel.copied : strings.panel.copyFallback);
+        showToast(fallbackCopy(copyInput, text) ? strings.panel.copied : strings.panel.copyFallback);
       }
     });
     const fpvBtn = el("button", { type: "button", className: "icon-btn btn-secondary", innerHTML: icon("eye", 16), "aria-label": strings.fpv.button, title: strings.fpv.button });

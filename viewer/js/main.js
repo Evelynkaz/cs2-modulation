@@ -2688,7 +2688,9 @@ async function showMapScreen(map, opts = {}) {
       fpvOverlay.hidden = true;
       document.removeEventListener("keydown", onFpvKeydown);
     });
-    renderFpvOverlay(info);
+    // `s6q_robust_aim.md`: the first-person copy uses the exact console string too, falling back
+    // to `console` for an older cached result that predates the field.
+    renderFpvOverlay({ ...info, console: l.consoleExact ?? l.console });
     fpvOverlay.hidden = false;
     document.addEventListener("keydown", onFpvKeydown);
   }

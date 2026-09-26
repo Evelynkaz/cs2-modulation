@@ -54,6 +54,14 @@ pub fn state_dependent(l: &Lineup) -> bool {
             .is_some_and(|rb| (rb - l.rest_point).length() <= 8.0)
 }
 
+/// `s6q_robust_aim.md`: precise mode's own robustness, bucketed to 0.1 (so two lineups within the
+/// same tenth still fall through to the existing keys instead of splitting hairs on `robustness`
+/// alone). `robustness` is `None` outside precise mode (never computed) or past the analysis cap -
+/// `unwrap_or(0.0)` buckets those to 0, i.e. behind every measured lineup, not ahead of any of them.
+fn robustness_bucket(l: &Lineup) -> i32 {
+    (l.robustness.unwrap_or(0.0) / 0.1) as i32
+}
+
 /// `LineupApi.cs:705-729`'s composite sort key, in the reference's own
 /// order: state-independence, then reproducibility band, then concealment,
 /// then (with a click) closeness/pin/movement or (without) pin, then the
@@ -68,6 +76,13 @@ fn cmp_lineups(
     pin_b: i32,
     origin_click: Option<[f32; 2]>,
 ) -> Ordering {
+    // `s6q_robust_aim.md`: ranks before every existing key in precise mode; `robustness` stays
+    // `None` on both sides outside precise mode (never computed), where `unwrap_or(0.0)` always
+    // ties and this falls straight through - normal mode's own ranking stays byte-identical.
+    let rb = robustness_bucket(b).cmp(&robustness_bucket(a));
+    if rb != Ordering::Equal {
+        return rb;
+    }
     let sd = (state_dependent(a) as i32).cmp(&(state_dependent(b) as i32));
     if sd != Ordering::Equal {
         return sd;
@@ -150,6 +165,14 @@ pub struct RankedLineup {
     pub human_error: f32,
     pub aim_ref: AimReferenceInfo,
     pub console: String,
+    /// `s6q_robust_aim.md`: the exact console string, built from this lineup's own final verified
+    /// feet/pitch/yaw at 2/3 decimals rather than `console`'s integer/0.1° rounding - `console`
+    /// itself stays unchanged (reference parity). `None` when `l.feet` was never actually checked
+    /// for a real hull overlap at teleport time (normal mode, or a lineup past precise mode's own
+    /// 600-lineup analysis cap) and does not clear `verify::hull_clear` right now - emitting an
+    /// unchecked, possibly-unsafe `setpos` would repeat the exact real-game failure
+    /// `s6q_robust_aim.md`'s safe-teleport pass exists to catch.
+    pub console_exact: Option<String>,
     pub describe: String,
     pub click: &'static str,
 }
@@ -192,6 +215,9 @@ pub fn ranked(solve: &TargetSolve, origin_click: Option<[f32; 2]>) -> Vec<Ranked
     idx.into_iter()
         .map(|i| {
             let l = solve.lineups[i];
+            let console_exact =
+                crate::verify::hull_clear(&solve.player_collider, l.feet, l.throw_type)
+                    .then(|| setpos_command_exact(l.feet, l.pitch_deg, l.yaw_deg));
             RankedLineup {
                 id: identity::id_of(&l),
                 pin: pins[i],
@@ -199,6 +225,7 @@ pub fn ranked(solve: &TargetSolve, origin_click: Option<[f32; 2]>) -> Vec<Ranked
                 human_error: errors[i],
                 aim_ref: aim_refs[i],
                 console: setpos_command(l.feet, l.pitch_deg, l.yaw_deg),
+                console_exact,
                 describe: describe(l.throw_type, l.strength, l.run_yaw_offset_deg),
                 click: click_name(l.strength),
                 lineup: l,
@@ -267,6 +294,27 @@ pub fn setpos_command(feet: V3, pitch_deg: f32, yaw_deg: f32) -> String {
         feet.x,
         feet.y,
         feet.z + 1.0,
+        pitch_deg,
+        yaw_deg
+    )
+}
+
+/// `s6q_robust_aim.md`'s real-game addendum: a `setpos`'s z lands the entity's raw origin with no
+/// pushout at all (unlike `setpos_command`'s own `feet.z + 1.0`, sized for a player who then walks
+/// off - a full unit up is itself well clear of the floor, so it was never about safety) - a
+/// SAFE teleport only needs to clear the floor by a hair before gravity drops the player onto it,
+/// so this uses `verify::TELEPORT_LIFT` instead (the same constant `verify::hull_clear` tests the
+/// real hull's landing height against, so the two can never drift apart). 2 decimals for position
+/// and 3 for angles instead of `setpos_command`'s integer/0.1° rounding, and no space after the `;`,
+/// built once from a lineup's own final verified feet/pitch/yaw (already nudged off any real hull
+/// overlap by `verify::robust_center`'s own safe-teleport pass in precise mode) so a caller (the
+/// viewer's copy button) never re-rounds or re-checks it again.
+pub fn setpos_command_exact(feet: V3, pitch_deg: f32, yaw_deg: f32) -> String {
+    format!(
+        "setpos {:.2} {:.2} {:.2};setang {:.3} {:.3} 0",
+        feet.x,
+        feet.y,
+        feet.z + crate::verify::TELEPORT_LIFT,
         pitch_deg,
         yaw_deg
     )
@@ -346,5 +394,14 @@ mod tests {
     fn setpos_command_lifts_feet_by_one() {
         let s = setpos_command(V3::new(1.0, 2.0, 3.0), -10.0, 90.0);
         assert_eq!(s, "setpos 1 2 4; setang -10.0 90.0 0");
+    }
+
+    /// `s6q_robust_aim.md`: 2 decimals for position, 3 for angles, no space after `;`, same
+    /// `feet.z + 1.0` nudge as `setpos_command` - the Evidence's own numbers
+    /// (feet (1359.4956, 144.42407, -164.0), pitch -32.8, yaw -163.14099).
+    #[test]
+    fn setpos_command_exact_formats_to_2_and_3_decimals_with_no_space_after_semicolon() {
+        let s = setpos_command_exact(V3::new(1359.4956, 144.42407, -164.0), -32.8, -163.14099);
+        assert_eq!(s, "setpos 1359.50 144.42 -163.90;setang -32.800 -163.141 0");
     }
 }

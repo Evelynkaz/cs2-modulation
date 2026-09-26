@@ -64,6 +64,12 @@ const PRECISE_AIM_REACH: i32 = 4;
 /// sweep costs about the same as depth 32 did (143 s -> 146 s).
 const AREA_BUCKET_CANDIDATES: usize = 256;
 
+/// `s6q_robust_aim.md`: caps how many of `verify_exact`'s own best-ranked precise-mode survivors
+/// get the expensive (~169+25 exact sims each) robust-aim-centering pass - anything past this rank
+/// is left untouched rather than analyzed, so the pass's own cost stays bounded regardless of how
+/// many candidates a solve verifies.
+const ROBUST_MAX_LINEUPS: usize = 600;
+
 const ALL_TYPES: [ThrowType; 5] = [
     ThrowType::Stand,
     ThrowType::Crouch,
@@ -1773,6 +1779,61 @@ pub fn solve_for_target(
                     );
                 }
             }
+        }
+    }
+
+    // `s6q_robust_aim.md`: precise mode's own post-verify pass - re-centers each of the best
+    // `ROBUST_MAX_LINEUPS` survivors' aim on the middle of its own fine-grid working band, then
+    // drops anything whose combined robustness comes back under `verify::ROBUST_MIN`. Anything past
+    // the cap is left untouched - its own `robustness` stays `None`, which `rank::cmp_lineups`'s
+    // robustness-bucket key already ranks behind every measured lineup - since the expensive
+    // per-lineup grid is too costly to run over an unbounded result set. Runs before the
+    // `Target::Area` strict re-check and the sightline pass below so both see the re-centered rest
+    // point, not the pre-centering one.
+    if q.precise_aim {
+        let robust_zone = zone::zone_lookup(&zone_crossings);
+        let cap = ROBUST_MAX_LINEUPS.min(verified.len());
+        let (to_center, tail) = verified.split_at(cap);
+        let mut centered: Vec<Lineup> = to_center
+            .par_iter()
+            .filter_map(|l| {
+                if cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
+                let out = verify::robust_center(
+                    &grid,
+                    &collider,
+                    &player_collider,
+                    k,
+                    &robust_zone,
+                    verify_aim_target,
+                    verify_tolerance,
+                    area_predicate.as_deref(),
+                    collider_glass_gone.as_ref(),
+                    l,
+                )?;
+                (out.robustness.unwrap_or(0.0) >= verify::ROBUST_MIN).then_some(out)
+            })
+            .collect();
+        // Diagnostic only (stderr, never the JSON payload): how many of the analyzed lineups the
+        // robustness/safe-teleport filter above actually dropped - silently discarding lineups is
+        // exactly the kind of thing worth being able to see happen.
+        eprintln!(
+            "s6q robust-aim: {} of {} analyzed lineups survived (dropped {})",
+            centered.len(),
+            to_center.len(),
+            to_center.len() - centered.len()
+        );
+        centered.extend_from_slice(tail);
+        verified = centered;
+        if cancel.load(Ordering::Relaxed) {
+            return cancelled_solve(
+                target,
+                origins_list.len(),
+                collider,
+                player_collider,
+                collider_glass_gone,
+            );
         }
     }
 

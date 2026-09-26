@@ -235,6 +235,9 @@ pub(crate) fn parse_finite(s: Option<&str>) -> Option<f32> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfigResponse {
+    /// `cs2mod --version`'s own string (`env!("CARGO_PKG_VERSION")`, same workspace version) - the
+    /// viewer shows this as the ОБТ badge.
+    version: &'static str,
     configured: bool,
     game_dir: Option<String>,
     game_dir_adjusted: bool,
@@ -269,6 +272,7 @@ fn config_response(state: &AppState, cfg: &AppConfig) -> Response {
         .is_some_and(|d| d != live_cache_root);
     let port = state.port_override.unwrap_or(cfg.port);
     Json(ConfigResponse {
+        version: env!("CARGO_PKG_VERSION"),
         configured,
         game_dir: effective_game_dir.as_ref().map(|p| p.display().to_string()),
         game_dir_adjusted,

@@ -2,7 +2,7 @@
 // gallery (S6n's `sceneView.capturePreview`), hover/select wiring back to the map, and the copy-
 // `console`-string action.
 
-import { strings } from "./strings.js?v=4";
+import { strings } from "./strings.js?v=5";
 import { segmented, chip, showToast, emptyState } from "./ui.js?v=2";
 import { icon } from "./icons.js?v=1";
 
@@ -154,7 +154,8 @@ function fallbackCopy(input, text) {
 // `container`: where the panel renders. `handlers`: `onSelect(id|null)`, `onHoverEnter(id)`,
 // `onHoverLeave()`, `onFirstPerson(l)`, `onShow3d()` (switches the map to 3D - used by the
 // preview placeholder's button), `requestPreview(l, kind)` (-> `Promise<Blob|null>`, feature-
-// detects `sceneView.capturePreview` itself - see `main.js`).
+// detects `sceneView.capturePreview` itself - see `main.js`), `reportIssueUrl(l)` (-> the GitHub
+// bug report URL prefilled with this lineup's exact command).
 export function createPanel(container, handlers) {
   let lineups = [];
   let target = null;
@@ -469,6 +470,12 @@ export function createPanel(container, handlers) {
     );
     for (const warning of warningsOf(l)) {
       detailsBlock.append(el("p", { className: "warn", innerHTML: icon("warning", 14) }, warning));
+    }
+    const issueUrl = handlers.reportIssueUrl?.(l);
+    if (issueUrl) {
+      detailsBlock.append(
+        el("a", { className: "lineup-report-link", href: issueUrl, target: "_blank", rel: "noopener noreferrer", textContent: strings.panel.reportIssue }),
+      );
     }
     const expandedBlock = el("div", { className: "lineup-expanded", hidden: true }, steps, galleryWrap, detailsBlock);
 

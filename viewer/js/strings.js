@@ -54,6 +54,11 @@ function translateEmptyReason(reason) {
 export const strings = {
   appTitle: "cs2-modulation",
 
+  beta: {
+    badge: (v) => `ОБТ ${v}`,
+    reportButton: "Сообщить о проблеме",
+  },
+
   setup: {
     heading: "Первый запуск",
     intro: "Программа читает только файлы на диске и ничего не делает с запущенной игрой.",
@@ -267,6 +272,7 @@ export const strings = {
     detailsAim: "Ориентир прицела",
     detailsHumanError: (n) => `Разброс при неточном прицеле ≈ ${n} ед.`,
     detailsExact: "Точная команда",
+    reportIssue: "Не сработало в игре? Сообщить",
     aimSky: "в небо - чёткого ориентира нет, наводьтесь как в «Вид игрока»",
     aimEdge: "на край объекта, видимый в прицеле",
     aimReticle: "на объект прямо под прицелом",

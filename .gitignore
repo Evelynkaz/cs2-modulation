@@ -2,6 +2,7 @@
 /target/
 /data/
 /cache/
+/dist/
 *.vpk
 *.nav
 *.*_c

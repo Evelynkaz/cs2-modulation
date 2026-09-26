@@ -140,6 +140,28 @@ button, input, select {
   letter-spacing: 0.01em;
 }
 
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.report-issue-btn .report-issue-label {
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .report-issue-btn {
+    padding: 8px;
+  }
+
+  .report-issue-btn .report-issue-label {
+    display: none;
+  }
+}
+
 main#app {
   height: calc(100vh - 56px);
   overflow: hidden;
@@ -530,6 +552,12 @@ input[type="radio"] {
 
 .badge-neutral {
   color: var(--text-2);
+}
+
+.badge-beta {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
 }
 
 /* ---- progress bar ----------------------------------------------------------------------------- */
@@ -1317,6 +1345,16 @@ canvas#radar-canvas:active {
   display: flex;
   align-items: flex-start;
   gap: 6px;
+}
+
+.lineup-report-link {
+  color: var(--accent);
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.lineup-report-link:hover {
+  text-decoration: underline;
 }
 
 /* ---- preview gallery ------------------------------------------------------------------------- */

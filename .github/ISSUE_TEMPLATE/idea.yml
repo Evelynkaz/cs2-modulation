@@ -1,0 +1,28 @@
+name: "Идея / пожелание"
+description: "Предложение новой функции или улучшения"
+title: "Идея: "
+labels: ["enhancement", "beta"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему это решает
+      description: "Что сейчас неудобно или невозможно сделать"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предложение
+      description: "Как вы это себе представляете"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Дополнительный контекст
+      description: "Карта, тип гранаты, скриншоты - что угодно, что поможет понять идею"
+    validations:
+      required: false

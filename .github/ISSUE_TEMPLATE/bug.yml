@@ -1,0 +1,87 @@
+name: "Раскидка не сработала / ошибка"
+description: "Раскидка не залетела в игре, или программа сломалась/повела себя не так"
+title: "Раскидка не сработала"
+labels: ["bug", "beta"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что сообщаете о проблеме - это открытый бета-тест, и такие отчёты помогают
+        быстрее находить причины. Если раскидка не залетела - самый быстрый способ найти причину
+        - приложить GOTV-демку (см. поле ниже).
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия программы
+      description: "Показывается в бейдже «ОБТ ...» в шапке или через cs2mod --version"
+      placeholder: "0.6.0-beta.1"
+    validations:
+      required: true
+
+  - type: input
+    id: map
+    attributes:
+      label: Карта
+      placeholder: de_mirage
+    validations:
+      required: true
+
+  - type: textarea
+    id: lineup
+    attributes:
+      label: Раскидка
+      description: "Команда setpos/setang из кнопки «Скопировать» на карточке раскидки"
+      placeholder: "setpos x y z;setang pitch yaw 0"
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: Что произошло
+      description: "Что вы сделали и куда в итоге упала граната в игре"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидалось
+      description: "Куда должна была упасть граната по раскидке из программы"
+    validations:
+      required: true
+
+  - type: textarea
+    id: demo
+    attributes:
+      label: GOTV-демка
+      description: |
+        Демка почти всегда позволяет найти причину за пару минут. Как записать:
+        1. В консоли ДО команды `map ...`: `tv_enable 1; tv_delay 0`
+        2. `map de_mirage` (или нужная карта)
+        3. `tv_record имя_демки`
+        4. Сделайте бросок как обычно
+        5. `tv_stoprecord`
+        6. Файл `имя_демки.dem` появится в `game\csgo`. Заархивируйте его в .zip и приложите
+           (или ссылку на файлообменник, если .zip слишком большой для вложения GitHub).
+      placeholder: "Ссылка на .zip с демкой, либо «демки нет»"
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Скриншоты
+      description: "Скриншот прицела/точки стояния в игре и/или карточки раскидки в программе"
+    validations:
+      required: false
+
+  - type: input
+    id: os_browser
+    attributes:
+      label: ОС и браузер
+      placeholder: "Windows 11, Chrome 128"
+    validations:
+      required: false

@@ -1,5 +1,15 @@
 # cs2-modulation
 
+## Открытый бета-тест
+
+Скачать последний билд: [Releases](https://github.com/Evelynkaz/cs2-modulation/releases)
+(последний pre-release). Нужны Windows 10/11 (64-бит) и установленная CS2 — программа
+только читает файлы игры с диска, ничего не устанавливает и не отправляет в сеть. Раскидка
+не сработала или программа сломалась — сообщите через
+[Issues](https://github.com/Evelynkaz/cs2-modulation/issues/new/choose) (в самой программе
+есть кнопка «Сообщить о проблеме», которая открывает готовую форму). Архив не содержит
+файлов игры.
+
 Калькулятор раскидок (lineups) для CS2 на Rust: по точке на карте находит
 все броски smoke/flash/HE/molotov/incendiary/decoy, выдаёт
 `setpos …; setang …`, тип броска (stand, walk, run, crouch, jump, run-jump),

@@ -217,6 +217,7 @@ async fn config_starts_unconfigured_and_maps_empty_on_empty_cache() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["configured"], json!(false));
     assert_eq!(body["maps"], json!([]));
+    assert_eq!(body["version"], json!(env!("CARGO_PKG_VERSION")));
 
     let (status, body) = get(&router, "/api/maps").await;
     assert_eq!(status, StatusCode::OK);

@@ -3,7 +3,7 @@
 // live here.
 
 import { state, applyTheme, resolveInitialTheme, storeTheme } from "./state.js?v=1";
-import { strings } from "./strings.js?v=4";
+import { strings } from "./strings.js?v=5";
 import {
   fetchConfig,
   putConfig,
@@ -22,7 +22,7 @@ import { renderSetup } from "./setup.js?v=2";
 import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
 import { createMapView, renderThumbnail } from "./map2d.js?v=4";
 import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=3";
-import { createPanel, TYPE_LABELS, CLICK_LABELS } from "./panel.js?v=4";
+import { createPanel, TYPE_LABELS, CLICK_LABELS } from "./panel.js?v=5";
 import { createSceneView } from "./scene3d.js?v=1";
 import { segmented, chip, collapsible } from "./ui.js?v=2";
 import { icon, THROW_TYPE_ICON } from "./icons.js?v=1";
@@ -48,6 +48,8 @@ const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
 const globalTopbar = document.getElementById("topbar");
 const globalThemeBtn = document.getElementById("theme-toggle");
+const globalBetaBadge = document.getElementById("beta-badge");
+const globalReportBtn = document.getElementById("report-issue-btn");
 let radarView = null; // { recolor(): void } for the current map screen's 2D canvas, if any.
 // AMBER-7: the map view owns a ResizeObserver, a devicePixelRatio listener and a recolored
 // canvas - each `showMapScreen` must destroy the previous one instead of leaking it. F3b-1b: a
@@ -105,6 +107,53 @@ function wireThemeToggle() {
   globalThemeBtn.addEventListener("click", () => toggleThemeAnd());
 }
 
+// «ОБТ 0.6.0-beta.1»: shown next to the app title once `/api/config` answers with a `version`
+// - hidden (not "ОБТ undefined") for an older server that predates the field.
+function syncBetaBadge(badgeEl) {
+  const version = state.config?.version;
+  if (version) {
+    badgeEl.textContent = strings.beta.badge(version);
+    badgeEl.hidden = false;
+  } else {
+    badgeEl.hidden = true;
+  }
+}
+
+const ISSUE_TRACKER_URL = "https://github.com/Evelynkaz/cs2-modulation/issues/new";
+
+// Prefills the GitHub bug report form's own fields (by id: `version`, `map`, `lineup`) via query
+// params. `lineup`, when given, is a lineup card's own `l` (its `consoleExact`/`console` plus
+// `type` go into the `lineup` field together, since the form has no separate field for the type).
+function reportIssueUrl(lineup) {
+  const params = new URLSearchParams({ template: "bug.yml" });
+  const version = state.config?.version;
+  if (version) {
+    params.set("version", version);
+  }
+  const map = state.currentMap;
+  if (map) {
+    params.set("map", map);
+  }
+  params.set("title", map ? `Раскидка не сработала — ${map}` : "Раскидка не сработала");
+  if (lineup) {
+    const exact = lineup.consoleExact ?? lineup.console;
+    if (exact) {
+      params.set("lineup", `${exact} (тип: ${TYPE_LABELS[lineup.type] ?? lineup.type})`);
+    }
+  }
+  return `${ISSUE_TRACKER_URL}?${params.toString()}`;
+}
+
+// Fills in the icon, label, title and click handler shared by the global topbar's button and the
+// map screen's own copy - same reasoning as `syncThemeButton`/`toggleThemeAnd` above.
+function wireReportIssueButton(btn) {
+  btn.innerHTML = icon("warning", 16);
+  btn.append(el("span", { className: "report-issue-label", textContent: strings.beta.reportButton }));
+  btn.title = strings.beta.reportButton;
+  btn.setAttribute("aria-label", strings.beta.reportButton);
+  btn.addEventListener("click", () => window.open(reportIssueUrl(), "_blank", "noopener"));
+}
+
 function renderServerDown(root, retry) {
   setAppScroll(true);
   root.replaceChildren(
@@ -141,6 +190,7 @@ function openSetup(config) {
 async function boot() {
   applyTheme(resolveInitialTheme());
   wireThemeToggle();
+  wireReportIssueButton(globalReportBtn);
   await routeFromConfig();
   // `s6f2_solve_ui.md`: a link with `#map=...&target=...` opens straight to that map and starts
   // the same solve, instead of stopping at the map list.
@@ -342,6 +392,7 @@ async function routeFromConfig() {
     return;
   }
   state.config = data;
+  syncBetaBadge(globalBetaBadge);
   if (!data.configured) {
     openSetup(data);
     return;
@@ -928,6 +979,10 @@ async function showMapScreen(map, opts = {}) {
   const backBtn = el("button", { type: "button", className: "btn-ghost", textContent: strings.mapScreen.backToList });
   backBtn.addEventListener("click", showMapsScreen);
   const mapTitleEl = el("h1", { className: "map-title", textContent: prettifyMapName(map), title: map });
+  const mapBetaBadge = el("span", { className: "pill badge-beta", hidden: true });
+  syncBetaBadge(mapBetaBadge);
+  const mapReportBtn = el("button", { type: "button", className: "btn-ghost report-issue-btn" });
+  wireReportIssueButton(mapReportBtn);
   const viewModeSeg = segmented({
     name: "view-mode",
     ariaLabel: "2D/3D",
@@ -944,9 +999,9 @@ async function showMapScreen(map, opts = {}) {
   const mapHeader = el(
     "header",
     { className: "topbar map-topbar" },
-    el("div", { className: "topbar-left" }, backBtn, mapTitleEl),
+    el("div", { className: "topbar-left" }, backBtn, mapTitleEl, mapBetaBadge),
     viewModeSeg,
-    el("div", { className: "topbar-right" }, localThemeBtn),
+    el("div", { className: "topbar-right" }, mapReportBtn, localThemeBtn),
   );
 
   // ---- centre stage: radar / 3D, with the 3D toolbar overlaid top-left ----
@@ -1186,6 +1241,7 @@ async function showMapScreen(map, opts = {}) {
     onFirstPerson: (l) => handleFirstPerson(l),
     onShow3d: () => switchViewMode("3d"),
     requestPreview: (l, kind) => requestPreview(l, kind),
+    reportIssueUrl: (l) => reportIssueUrl(l),
   });
   // `panel`'s own preview Blob URLs otherwise outlive this screen (`destroyCurrentMapView` never
   // touched it) - `clear()` already revokes them, so a `destroy` that just calls it is enough

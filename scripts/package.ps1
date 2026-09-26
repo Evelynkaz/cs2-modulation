@@ -78,8 +78,20 @@ date: $date
     if (Test-Path $zipPath) {
         Remove-Item $zipPath -Force
     }
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($pkgDir, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $true)
+    $baseName = Split-Path -Leaf $pkgDir            # "cs2mod"
+    $parent = (Resolve-Path (Split-Path -Parent $pkgDir)).Path.TrimEnd('\') + '\'
+    $zipStream = [System.IO.File]::Open($zipPath, [System.IO.FileMode]::CreateNew)
+    try {
+        $archive = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            Get-ChildItem -Path $pkgDir -Recurse -File | ForEach-Object {
+                $rel = $_.FullName.Substring($parent.Length).Replace('\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $rel, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        } finally { $archive.Dispose() }
+    } finally { $zipStream.Dispose() }
 
     # ---- verify zip layout: one top-level cs2mod/ folder, forward slashes ------------------------
     $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)

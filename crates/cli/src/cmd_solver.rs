@@ -225,6 +225,7 @@ pub fn solve(
     clicks_spec: Option<&str>,
     broken_spec: Option<&str>,
     spawns_spec: Option<&str>,
+    pin_spec: Option<&str>,
     referee: bool,
     top: usize,
     json_out: Option<&Path>,
@@ -355,6 +356,12 @@ pub fn solve(
             spawns_spec.unwrap()
         );
     }
+    let origin_pin_min: u8 = match pin_spec {
+        Some("corner") => 2,
+        Some("wall") => 1,
+        Some(other) => bail!("unknown --pin {other:?} (expected corner|wall)"),
+        None => 0,
+    };
 
     // `MeshSetup.cs:18,53-75` (`SingleTargetDefaultAttrs`).
     let attribute_filter = Some(names_mask(&mesh, &SINGLE_TARGET_DEFAULT_ATTRS));
@@ -392,6 +399,7 @@ pub fn solve(
         spawns_only,
         exact_origin: exact,
         referee,
+        origin_pin_min,
     };
     let constants = resolve_constants(constants_path)?;
     let cancel = AtomicBool::new(false);

@@ -3,7 +3,7 @@
 // live here.
 
 import { state, applyTheme, resolveInitialTheme, storeTheme } from "./state.js?v=1";
-import { strings } from "./strings.js?v=1";
+import { strings } from "./strings.js?v=2";
 import {
   fetchConfig,
   putConfig,
@@ -18,8 +18,8 @@ import {
 import { renderSetup } from "./setup.js?v=1";
 import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
 import { createMapView } from "./map2d.js?v=1";
-import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=1";
-import { createPanel, TYPE_LABELS } from "./panel.js?v=1";
+import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=2";
+import { createPanel, TYPE_LABELS } from "./panel.js?v=2";
 import { createSceneView } from "./scene3d.js?v=1";
 
 function el(tag, props, ...children) {
@@ -243,6 +243,9 @@ function bodyFromHash(q) {
   }
   if (q.broken) {
     body.broken = q.broken.split(",");
+  }
+  if (q.originPin) {
+    body.originPin = q.originPin;
   }
   return body;
 }
@@ -903,7 +906,7 @@ async function showMapScreen(map, opts = {}) {
     originArea: null, // { polygon: [[x,y],...] } (`s6g_origin_area.md`) - mutually exclusive with `origin`
     params: {
       scope: "all", originReach: 300, tolerance: 80, minStability: 0.4, fineScan: false,
-      types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [],
+      types: [...ALL_TYPES], strengths: [...ALL_STRENGTHS], broken: [], originPin: null,
       areaZMin: null, areaZMax: null, targetAreaZMin: null, targetAreaZMax: null,
     },
     running: false,
@@ -1378,6 +1381,26 @@ async function showMapScreen(map, opts = {}) {
     originStatusBox = el("p", { className: "hint" });
     paramsContent.append(originStatusBox);
     updateOriginStatus();
+
+    // `s6j_pin_filter.md`: restrict the search to wall/corner-pinned stand spots.
+    const originPinSelect = el("select", { id: "origin-pin-select" });
+    originPinSelect.append(
+      el("option", { value: "", textContent: strings.solveParams.originPinAny }),
+      el("option", { value: "wall", textContent: strings.solveParams.originPinWallOrCorner }),
+      el("option", { value: "corner", textContent: strings.solveParams.originPinCornerOnly }),
+    );
+    originPinSelect.value = solveState.params.originPin ?? "";
+    originPinSelect.addEventListener("change", () => {
+      solveState.params.originPin = originPinSelect.value || null;
+    });
+    paramsContent.append(
+      el(
+        "div",
+        { className: "field-row" },
+        el("label", { htmlFor: "origin-pin-select", textContent: strings.solveParams.originPinLabel }),
+        originPinSelect,
+      ),
+    );
 
     // `s6g_origin_area.md`: draw/edit a polygon on the map restricting where a throw may
     // originate from, instead of the point+radius above.
@@ -1862,6 +1885,9 @@ async function showMapScreen(map, opts = {}) {
     }
     if (body.broken) {
       solveState.params.broken = body.broken;
+    }
+    if (body.originPin) {
+      solveState.params.originPin = body.originPin;
     }
   }
 

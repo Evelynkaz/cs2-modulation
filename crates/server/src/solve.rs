@@ -74,7 +74,7 @@ const MIN_AREA_AREA: f64 = 1.0;
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 9;
+const CACHE_VERSION: u32 = 10;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -357,6 +357,16 @@ pub fn validate_lineup_query(query: &Value, mesh: &geom::mesh::CollisionMesh) ->
         }
         if lower.as_deref() == Some("exact") && query.get("origin").is_none() {
             return Some("scope \"exact\" needs an origin".to_string());
+        }
+    }
+    // `s6j_pin_filter.md`: restricts the search/result to wall/corner-pinned stand spots.
+    if let Some(pin) = query.get("originPin")
+        && !pin.is_null()
+    {
+        let lower = pin.as_str().map(|s| s.to_ascii_lowercase());
+        match lower.as_deref() {
+            Some("corner") | Some("wall") => {}
+            _ => return Some("originPin must be \"corner\" or \"wall\"".to_string()),
         }
     }
     if let Some(reach) = query.get("originReach")
@@ -723,6 +733,13 @@ pub fn query_cache_key(
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "all".to_string());
+    // `s6j_pin_filter.md`: `originPin` picks a different origin set, same idiom as `scope_key`.
+    let pin_key = query
+        .get("originPin")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| s == "corner" || s == "wall")
+        .unwrap_or_else(|| "none".to_string());
     // `s6g_origin_area.md`: the polygon's own vertices (in order - a self-intersecting ring is a
     // different region than its reordered self, per the even-odd rule) at fixed precision, plus
     // its optional Z range; "none" when no `originArea` was given, same idiom as `origin` above.
@@ -790,7 +807,7 @@ pub fn query_cache_key(
     // live: `tolerance:80` and `tolerance:80.4`) collide on one cache file and answer from the
     // wrong query.
     let seed = format!(
-        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
+        "v{CACHE_VERSION}|{map}|{mesh_version}|{constants_json}|{tx},{ty},{tz}|{origin}|{reach:.1}|{tol:.1}|{stab:.3}|{}|{types_key}|{strengths_key}|{broken_key}|{scope_key}|{pin_key}|{origin_area_key}|{zmin_key}|{zmax_key}|{target_area_key}|{target_zmin_key}|{target_zmax_key}|{attrs}|{stand_spots}",
         i32::from(fine)
     );
     let digest = Sha256::digest(seed.as_bytes());
@@ -951,6 +968,12 @@ fn build_solve_query(
                 z_max: query.get("zMax").and_then(as_f32_finite),
             }
         });
+    // `s6j_pin_filter.md`: validated to "corner"/"wall"/absent-or-null already.
+    let origin_pin_min: u8 = match query.get("originPin").and_then(Value::as_str) {
+        Some(s) if s.eq_ignore_ascii_case("corner") => 2,
+        Some(s) if s.eq_ignore_ascii_case("wall") => 1,
+        _ => 0,
+    };
 
     let q = SolveQuery {
         target,
@@ -969,6 +992,7 @@ fn build_solve_query(
         spawns_only: scope == "spawns",
         exact_origin: scope == "exact",
         referee: false,
+        origin_pin_min,
     };
     (q, origin_click)
 }
@@ -1582,5 +1606,37 @@ mod tests {
         let a = query_cache_key("de_test", "abc", &constants, &q, "attrs", "none");
         let b = query_cache_key("de_test", "abc", &constants, &q, "attrs", "512@24.00");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn cache_key_differs_by_origin_pin() {
+        let constants = ThrowConstants::default();
+        let none = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0] }),
+            "attrs",
+            "none",
+        );
+        let wall = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0], "originPin": "wall" }),
+            "attrs",
+            "none",
+        );
+        let corner = query_cache_key(
+            "de_test",
+            "abc",
+            &constants,
+            &json!({ "target": [0.0, 0.0], "originPin": "corner" }),
+            "attrs",
+            "none",
+        );
+        assert_ne!(none, wall);
+        assert_ne!(none, corner);
+        assert_ne!(wall, corner);
     }
 }

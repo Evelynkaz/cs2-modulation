@@ -75,6 +75,9 @@ export function buildQuery(map, target, targetArea, origin, originArea, params) 
   if (params.broken && params.broken.length > 0) {
     body.broken = params.broken;
   }
+  if (params.originPin) {
+    body.originPin = params.originPin;
+  }
   return body;
 }
 

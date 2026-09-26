@@ -1,7 +1,7 @@
 // The lineup list: filters (stable/hidden/type), one row per lineup with its numbers, hover/select
 // wiring back to the map, and the copy-`console`-string button.
 
-import { strings } from "./strings.js?v=1";
+import { strings } from "./strings.js?v=2";
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -55,7 +55,7 @@ export function createPanel(container, handlers) {
   let lineups = [];
   let target = null;
   let selectedId = null;
-  const filters = { stableOnly: false, hiddenOnly: false, type: "all" };
+  const filters = { stableOnly: false, hiddenOnly: false, type: "all", position: "all" };
 
   function passesFilters(l) {
     if (filters.stableOnly && l.stability < 1) {
@@ -65,6 +65,12 @@ export function createPanel(container, handlers) {
       return false;
     }
     if (filters.type !== "all" && l.type !== filters.type) {
+      return false;
+    }
+    if (filters.position === "corner" && l.pin !== "corner") {
+      return false;
+    }
+    if (filters.position === "wall" && l.pin !== "corner" && l.pin !== "wall") {
       return false;
     }
     return true;
@@ -208,6 +214,17 @@ export function createPanel(container, handlers) {
       filters.hiddenOnly = hiddenCb.checked;
       render();
     });
+    const positionSelect = el("select", { id: "filter-position", "aria-label": strings.panel.positionFilterLabel });
+    positionSelect.append(
+      el("option", { value: "all", textContent: strings.panel.positionAll }),
+      el("option", { value: "wall", textContent: strings.panel.positionWallOrCorner }),
+      el("option", { value: "corner", textContent: strings.panel.positionCornerOnly }),
+    );
+    positionSelect.value = filters.position;
+    positionSelect.addEventListener("change", () => {
+      filters.position = positionSelect.value;
+      render();
+    });
     const typeSelect = el("select", { id: "filter-type", "aria-label": strings.panel.typeFilterLabel });
     typeSelect.append(el("option", { value: "all", textContent: strings.panel.typeAll }));
     for (const t of typeOptions()) {
@@ -223,6 +240,7 @@ export function createPanel(container, handlers) {
       "div",
       { className: "panel-filters" },
       el("label", { htmlFor: "filter-stable" }, stableCb, ` ${strings.panel.stableOnly}`),
+      positionSelect,
       el("label", { htmlFor: "filter-hidden" }, hiddenCb, ` ${strings.panel.hiddenOnly}`),
       typeSelect,
     );
@@ -252,6 +270,7 @@ export function createPanel(container, handlers) {
       target = targetPoint;
       selectedId = null;
       filters.type = "all";
+      filters.position = "all";
       render();
     },
     clear() {

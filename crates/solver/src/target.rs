@@ -15,6 +15,7 @@ use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
 use geom::mesh::{CollisionAttribute, CollisionMesh};
 use geom::voxel::VoxelGrid;
+use rayon::prelude::*;
 use sim::{ThrowConstants, ThrowSpec, ThrowType, eye_height, forward_from_angles, simulate_voxel};
 
 use crate::lineup::Lineup;
@@ -365,6 +366,10 @@ pub struct SolveQuery {
     pub spawns_only: bool,
     pub exact_origin: bool,
     pub referee: bool,
+    /// `s6j_pin_filter.md`: 0 = any (default), 1 = wall or corner, 2 = corner only - matches
+    /// [`origins::position_pin`]'s own 0/1/2 scale. Skipped for an exact origin click
+    /// (`exact_origin && origin_click.is_some()`), which is an explicit user spot.
+    pub origin_pin_min: u8,
 }
 
 impl Default for SolveQuery {
@@ -390,6 +395,7 @@ impl Default for SolveQuery {
             spawns_only: false,
             exact_origin: false,
             referee: false,
+            origin_pin_min: 0,
         }
     }
 }
@@ -1212,6 +1218,18 @@ pub fn solve_for_target(
         });
     }
 
+    // `s6j_pin_filter.md`: pinned origins are only added below when stand spots exist and
+    // `!q.spawns_only` - without this, "spawns + corner only" would filter every spawn-derived
+    // origin down to nothing before a wall/corner variant of any of them ever existed.
+    if q.origin_pin_min > 0 && q.spawns_only {
+        origins::add_pinned_origins_to(
+            &grid,
+            &player_collider,
+            &mut origins_list,
+            Some(&mut crouch_only_extras),
+        );
+    }
+
     if q.exact_origin && has_origin {
         let exact_z = q
             .origin_z
@@ -1270,6 +1288,22 @@ pub fn solve_for_target(
             V3::new(origin_click[0], origin_click[1], click_z),
             Some(&mut crouch_only_extras),
         ));
+    }
+
+    // `s6j_pin_filter.md`: restrict the final origin list to wall/corner-pinned spots. Skipped for
+    // an exact origin click - that is an explicit user spot, not a search the filter should prune.
+    // Uses `origins::position_pin` with the same `player_collider` the ranking pin (`rank.rs`)
+    // re-derives from `l.feet`, so every lineup this solve returns satisfies the filter.
+    let mut pin_filter_emptied = false;
+    if q.origin_pin_min > 0 && !(q.exact_origin && has_origin) {
+        let pin_min = i32::from(q.origin_pin_min);
+        let before_filter = origins_list.len();
+        origins_list = origins_list
+            .par_iter()
+            .filter(|&&o| origins::position_pin(&player_collider, o) >= pin_min)
+            .copied()
+            .collect();
+        pin_filter_emptied = before_filter > 0 && origins_list.is_empty();
     }
 
     let deep_spot = q.exact_origin && has_origin;
@@ -1771,6 +1805,8 @@ pub fn solve_for_target(
 
     let empty_reason = if !verified.is_empty() {
         None
+    } else if pin_filter_emptied {
+        Some("no corner/wall stand spots in the chosen area".to_string())
     } else if origins_list.is_empty() {
         Some("no stand spots in range of that throw position - try a wider search, or a spot on the ground".to_string())
     } else {
@@ -2686,5 +2722,170 @@ mod tests {
                 l.rest_point
             );
         }
+    }
+
+    // ---- `s6j_pin_filter.md`: `origin_pin_min` --------------------------------------------------
+
+    /// A flat floor plus two perpendicular walls meeting near (50,50) - an open spot, a spot
+    /// pressed against one wall, and a spot wedged into the corner they form.
+    fn corner_and_open_floor() -> (CollisionMesh, V3, V3, V3) {
+        let mut mesh = flat_plane(2000.0);
+        add_quad(
+            &mut mesh,
+            [
+                [50.0, -300.0, 0.0],
+                [50.0, 300.0, 0.0],
+                [50.0, 300.0, 60.0],
+                [50.0, -300.0, 60.0],
+            ],
+            1,
+        );
+        add_quad(
+            &mut mesh,
+            [
+                [-300.0, 50.0, 0.0],
+                [300.0, 50.0, 0.0],
+                [300.0, 50.0, 60.0],
+                [-300.0, 50.0, 60.0],
+            ],
+            2,
+        );
+        let open_spot = V3::new(-100.0, -100.0, 0.0);
+        let wall_spot = V3::new(34.0, -100.0, 0.0);
+        let corner_spot = V3::new(34.0, 34.0, 0.0);
+        (mesh, open_spot, wall_spot, corner_spot)
+    }
+
+    /// `origin_pin_min` keeps only origins whose `origins::position_pin` (the same
+    /// `player_collider` and function `rank.rs` re-derives each lineup's own pin from) meets the
+    /// requested class: 0 keeps every stand spot, 1 keeps wall-or-corner, 2 keeps corner only.
+    #[test]
+    fn origin_pin_min_filters_origins_by_class() {
+        let (mesh, open_spot, wall_spot, corner_spot) = corner_and_open_floor();
+        let map = MapData {
+            mesh,
+            nav_areas: vec![],
+            stand_spots: Some(vec![
+                StandSpotOrigin {
+                    feet: open_spot,
+                    crouched: false,
+                },
+                StandSpotOrigin {
+                    feet: wall_spot,
+                    crouched: false,
+                },
+                StandSpotOrigin {
+                    feet: corner_spot,
+                    crouched: false,
+                },
+            ]),
+            spawns: vec![],
+            attribute_filter: None,
+        };
+        let k = ThrowConstants::default();
+        let cancel = AtomicBool::new(false);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let make_target = || Target::Point {
+            pos: V3::new(0.0, 0.0, 0.0),
+            has_z: true,
+            tolerance: 400.0,
+        };
+
+        let solve0 = solve_for_target(
+            &map,
+            &SolveQuery {
+                target: make_target(),
+                origin_pin_min: 0,
+                ..Default::default()
+            },
+            &k,
+            &hooks,
+            &cancel,
+        );
+        assert_eq!(solve0.origins, 3, "pin_min 0 keeps every spot");
+
+        let solve1 = solve_for_target(
+            &map,
+            &SolveQuery {
+                target: make_target(),
+                origin_pin_min: 1,
+                ..Default::default()
+            },
+            &k,
+            &hooks,
+            &cancel,
+        );
+        assert_eq!(solve1.origins, 2, "pin_min 1 keeps wall+corner");
+
+        let solve2 = solve_for_target(
+            &map,
+            &SolveQuery {
+                target: make_target(),
+                origin_pin_min: 2,
+                ..Default::default()
+            },
+            &k,
+            &hooks,
+            &cancel,
+        );
+        assert_eq!(solve2.origins, 1, "pin_min 2 keeps corner only");
+        assert!(
+            !solve2.lineups.is_empty(),
+            "expected the corner spot to still solve a lineup, empty_reason={:?}",
+            solve2.empty_reason
+        );
+        for l in &solve2.lineups {
+            assert!(
+                origins::position_pin(&solve2.player_collider, l.feet) >= 2,
+                "lineup at {:?} must come from a corner-pinned origin",
+                l.feet
+            );
+        }
+    }
+
+    /// `q.spawns_only` skips the general pinned-origins block (it only runs for stand-spot
+    /// origins) - without a dedicated pass, "spawns + corner only" would filter every spawn-derived
+    /// origin down to nothing.
+    #[test]
+    fn origin_pin_min_with_spawns_only_adds_pins_before_filtering() {
+        let (mesh, _open_spot, _wall_spot, _corner_spot) = corner_and_open_floor();
+        // Near the corner but not yet touching either wall (gap ~14u): pin 0 on its own - only
+        // `add_pinned_origins_to`'s own corner proposal near it is pin 2.
+        let spawn = V3::new(20.0, 20.0, 0.0);
+        let map = MapData {
+            mesh,
+            nav_areas: vec![],
+            stand_spots: None,
+            spawns: vec![spawn],
+            attribute_filter: None,
+        };
+        let q = SolveQuery {
+            target: Target::Point {
+                pos: V3::new(0.0, 0.0, 0.0),
+                has_z: true,
+                tolerance: 400.0,
+            },
+            spawn_points: vec![spawn],
+            spawns_only: true,
+            origin_pin_min: 2,
+            ..Default::default()
+        };
+        let k = ThrowConstants::default();
+        let cancel = AtomicBool::new(false);
+        let hooks = SolveHooks {
+            progress: &|_, _| {},
+            on_origin: None,
+            on_candidate: None,
+        };
+        let solve = solve_for_target(&map, &q, &k, &hooks, &cancel);
+        assert!(
+            solve.origins > 0,
+            "expected add_pinned_origins_to's own corner variant of the spawn to survive the filter, empty_reason={:?}",
+            solve.empty_reason
+        );
     }
 }

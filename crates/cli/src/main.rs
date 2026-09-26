@@ -202,6 +202,10 @@ enum Command {
         /// `t`, `ct`, or `all`: search only from spawn positions.
         #[arg(long)]
         spawns: Option<String>,
+        /// `corner`: only lineups wedged into a corner. `wall`: also lineups pressed against a
+        /// single wall.
+        #[arg(long)]
+        pin: Option<String>,
         /// Also run the exhaustive exact-spot referee (exact-origin solves only).
         #[arg(long)]
         referee: bool,
@@ -553,6 +557,7 @@ fn run() -> anyhow::Result<u8> {
             clicks,
             broken,
             spawns,
+            pin,
             referee,
             top,
             json,
@@ -572,6 +577,7 @@ fn run() -> anyhow::Result<u8> {
             clicks.as_deref(),
             broken.as_deref(),
             spawns.as_deref(),
+            pin.as_deref(),
             referee,
             top,
             json.as_deref(),

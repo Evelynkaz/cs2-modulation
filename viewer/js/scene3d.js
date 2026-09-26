@@ -9,6 +9,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "../lib/three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "../lib/three/examples/jsm/controls/OrbitControls.js";
 import { MeshoptDecoder } from "../lib/three/examples/jsm/libs/meshopt_decoder.module.js";
+import { MeshBVH, acceleratedRaycast } from "three-mesh-bvh";
 import { parseSm3d, flattenGroups } from "./mesh3d.js?v=1";
 import { sourceBasis, VERTICAL_FOV_DEG, eyeHeight, hullHeight, PLAYER_CAPSULE_RADIUS } from "./camera.js?v=1";
 import { renderGlbUrl, fetchRenderJson, meshUrl, fetchTrajectory, fetchSmoke, fetchLevels, hasUsableRender } from "./api.js?v=1";
@@ -370,6 +371,16 @@ async function loadCollisionMesh(map) {
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
 
+  // Review fix item 5: a brute-force `Raycaster.intersectObject` walks every triangle in the
+  // collision mesh - measured ~5ms/cast on Mirage (~125k tris) but up to ~80ms on Inferno
+  // (~1.85M), stalling the once-per-frame hover raycast to ~10fps. `MeshBVH` builds a bounding
+  // volume hierarchy once at load time; `acceleratedRaycast`, assigned on `pickProxy` alone below
+  // (not patched onto `THREE.Mesh.prototype` - render.glb's own meshes are untouched), walks that
+  // instead of every triangle.
+  const bvhBuildStart = performance.now();
+  geometry.boundsTree = new MeshBVH(geometry);
+  console.debug(`[cs2mod] ${map}: MeshBVH build ${(performance.now() - bvhBuildStart).toFixed(1)}ms (${(indices.length / 3) | 0} tris)`);
+
   // Group order matches `mesh_payload.rs`'s SM3D layout: 0 world, 1 phantom, 2 door, 3 breakable.
   const overlayMaterials = [
     new THREE.MeshLambertMaterial({ color: COLLISION_COLORS.world, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
@@ -387,6 +398,7 @@ async function loadCollisionMesh(map) {
   // whether the overlay is shown.
   const pickProxy = new THREE.Mesh(geometry, overlayMaterials[0]);
   pickProxy.updateMatrixWorld(true);
+  pickProxy.raycast = acceleratedRaycast;
 
   return { geometry, overlay, pickProxy };
 }
@@ -488,6 +500,12 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   const keys = new Set();
   let pointerOver = false;
   let looking = false;
+  let orbitDragging = false;
+  // S6k hover preview: `lastMouse` is just the latest pointer position (cheap, updated on every
+  // `pointermove`); the actual raycast against the collision mesh only runs once per animation
+  // frame, and only if `lastMouse` moved since the last one (`updateHover`, below the area tool).
+  let lastMouse = null;
+  let lastRaycastMouse = null;
 
   function applyLookAngles() {
     const { forward, up } = sourceBasis(pitchDeg, yawDeg);
@@ -505,6 +523,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   });
   canvasOn("mouseleave", () => {
     pointerOver = false;
+    hideHover();
+  });
+  canvasOn("pointermove", (e) => {
+    lastMouse = { x: e.clientX, y: e.clientY };
   });
   canvasOn("mousedown", (e) => {
     if (mode !== "fly" || e.button !== 2) {
@@ -531,6 +553,12 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     if (!pointerOver && !looking) {
       return;
     }
+    // S6k: Enter/Backspace/Esc drive the armed area tool instead of flying while one is drafting -
+    // none of the three are otherwise used below (WASD/Space/Ctrl/Shift), so flying is unaffected.
+    if (activeDraftKey && mode !== "fpv" && handleDraftKey(e)) {
+      e.preventDefault();
+      return;
+    }
     if (e.code === "Space") {
       e.preventDefault(); // no page scroll, no button activation while flying
     }
@@ -555,9 +583,41 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   );
 
   let onClickHandler = null;
+  let onRightClickHandler = null;
   const raycaster = new THREE.Raycaster();
+  // Review fix item 5: this raycaster only ever powers picks (target/origin/area-vertex clicks,
+  // the hover preview) - all of them want the single nearest hit, never the full sorted list, so
+  // `MeshBVH`'s accelerated raycast can stop at the first hit instead of walking every candidate
+  // leaf. The origin marker's own downward ray (`updateOrigin`) is a separate `THREE.Raycaster`
+  // instance and deliberately leaves this unset - it needs every hit along the ray, not just the
+  // nearest, to pick the floor matching the Shift-click's own z out of a stack.
+  raycaster.firstHitOnly = true;
   const ndc = new THREE.Vector2();
   let downAt = null;
+
+  // Full hit info (point + world-space normal) against the collision `pickProxy` - shared by the
+  // target/origin pick below, the area draft tool, and the hover preview (`raycastAt` is the
+  // point-only shorthand the plain pick/area-vertex code only ever needed before hover existed).
+  function raycastFullAt(clientX, clientY) {
+    if (!collision) {
+      return null;
+    }
+    const rect = renderer.domElement.getBoundingClientRect();
+    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObject(collision.pickProxy, false);
+    if (hits.length === 0) {
+      return null;
+    }
+    const hit = hits[0];
+    const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 0, 1);
+    return { point: hit.point, normal };
+  }
+  function raycastAt(clientX, clientY) {
+    return raycastFullAt(clientX, clientY)?.point ?? null;
+  }
+
   canvasOn("pointerdown", (e) => {
     if (e.button === 0) {
       downAt = { x: e.clientX, y: e.clientY };
@@ -569,19 +629,49 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       return;
     }
     const moved = Math.abs(e.clientX - downAt.x) + Math.abs(e.clientY - downAt.y);
+    const shiftKey = e.shiftKey;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
     downAt = null;
-    if (moved > 6 || !collision || !onClickHandler) {
+    if (moved > 6 || !collision) {
       return;
     }
-    const rect = renderer.domElement.getBoundingClientRect();
-    ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(ndc, camera);
-    const hits = raycaster.intersectObject(collision.pickProxy, false);
-    if (hits.length > 0) {
-      const p = hits[0].point;
-      onClickHandler(p.x, p.y, p.z);
+    // S6k: a click while an area tool is armed only ever places/closes a vertex - it must not also
+    // set the target (mirrors the 2D tool's own behaviour).
+    if (activeDraftKey) {
+      handleDraftClick(activeDraftKey, clientX, clientY);
+      return;
     }
+    const point = raycastAt(clientX, clientY);
+    if (!point) {
+      return;
+    }
+    if (shiftKey) {
+      onRightClickHandler?.(point.x, point.y, point.z);
+      return;
+    }
+    onClickHandler?.(point.x, point.y, point.z);
+  });
+  // S6k: closes the armed area tool's polygon, same as clicking its first vertex - the two clicks
+  // making up this dblclick already each ran `handleDraftClick` via `pointerup` above (mirrors
+  // map2d.js's own dblclick handling, including dropping the resulting near-duplicate vertex).
+  canvasOn("dblclick", () => {
+    if (!activeDraftKey || mode === "fpv" || !lastMouse) {
+      return;
+    }
+    const a = draftAreas[activeDraftKey];
+    if (a.closed || a.points.length < 2) {
+      return;
+    }
+    const last1 = worldToScreenPx(a.points[a.points.length - 1]);
+    const last2 = worldToScreenPx(a.points[a.points.length - 2]);
+    if (Math.hypot(last1.x - last2.x, last1.y - last2.y) < DRAFT_CLOSE_PX) {
+      a.points.pop();
+    }
+    if (a.points.length < 3) {
+      return;
+    }
+    closeDraft(activeDraftKey);
   });
 
   // Orbit mode (`THREE.OrbitControls` handles arbitrary `camera.up` via its own basis realignment,
@@ -592,6 +682,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
   orbit.maxDistance = 20000;
   orbit.addEventListener("start", () => {
     cameraTouched = true;
+    orbitDragging = true;
+  });
+  orbit.addEventListener("end", () => {
+    orbitDragging = false;
   });
 
   function setMode(next) {
@@ -665,6 +759,7 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     if (mode === "orbit") {
       orbit.update();
     }
+    updateHover();
     if (lightingPipeline && effectiveLightingMode() === "game") {
       lightingPipeline.renderFrame(scene, camera);
     } else {
@@ -991,6 +1086,18 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       new THREE.LineBasicMaterial({ color: 0xb3261e }),
     );
     targetGroup.add(stem);
+    // A target set through a real surface (e.g. a window opening) can land on a floor entirely
+    // hidden behind geometry from the current camera - a thin beacon drawn on top of everything,
+    // reaching well above the marker, still shows where it is.
+    const beacon = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(currentTarget.x, currentTarget.y, currentTarget.z),
+        new THREE.Vector3(currentTarget.x, currentTarget.y, currentTarget.z + 200),
+      ]),
+      new THREE.LineBasicMaterial({ color: 0xb3261e, transparent: true, opacity: 0.6, depthTest: false }),
+    );
+    beacon.renderOrder = 999;
+    targetGroup.add(beacon);
   }
 
   // ---- origin/target areas (`s6i_render_job_areas3d.md`): translucent prism "walls" around each
@@ -1070,6 +1177,313 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       }
       buildAreaPrism(key, polygon, floor, zMax != null ? zMax : floor + AREA_DEFAULT_HEIGHT);
     });
+  }
+
+  // ---- origin marker (`s6k_draw_in_3d.md` item 4): Shift+LMB in 3D calls `handleOriginClick`, same
+  // as the 2D right-click - the marker needs the origin's own floor, found via a downward raycast
+  // against the collision mesh from high above. `o.z`, when the click that set `o` just happened in
+  // 3D, is the exact surface that raycast should reproduce (there can be another floor stacked
+  // above it, e.g. a roof, that a plain "topmost hit" would pick instead).
+  const ORIGIN_COLOR = 0x2563eb;
+  const originGroup = new THREE.Group();
+  scene.add(originGroup);
+  let originGen = 0;
+
+  function clearOriginGroup() {
+    disposeObject3D(originGroup);
+    originGroup.clear();
+  }
+
+  function buildOriginMarker(o, floorZ) {
+    clearOriginGroup();
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), new THREE.MeshBasicMaterial({ color: ORIGIN_COLOR }));
+    marker.position.set(o.x, o.y, floorZ + 2);
+    originGroup.add(marker);
+    if (o.reach > 0) {
+      const segments = 48;
+      const pts = [];
+      for (let i = 0; i <= segments; i++) {
+        const a = (i / segments) * Math.PI * 2;
+        pts.push(new THREE.Vector3(o.x + Math.cos(a) * o.reach, o.y + Math.sin(a) * o.reach, floorZ + 2));
+      }
+      originGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: ORIGIN_COLOR })));
+    }
+  }
+
+  function updateOrigin(o) {
+    const gen = ++originGen;
+    if (!o) {
+      clearOriginGroup();
+      return;
+    }
+    collisionReady.then((c) => {
+      if (destroyed || gen !== originGen || !c) {
+        return;
+      }
+      const top = (c.geometry.boundingBox?.max.z ?? 20000) + 1000;
+      const downRay = new THREE.Raycaster(new THREE.Vector3(o.x, o.y, top), new THREE.Vector3(0, 0, -1));
+      const hits = downRay.intersectObject(c.pickProxy, false);
+      let floorZ;
+      if (o.z != null) {
+        floorZ = hits.find((h) => h.point.z <= o.z + 1)?.point.z ?? hits[0]?.point.z ?? o.z;
+      } else {
+        floorZ = hits[0]?.point.z ?? o.z ?? 0;
+      }
+      buildOriginMarker(o, floorZ);
+    });
+  }
+
+  // ---- area drawing tool (`s6k_draw_in_3d.md` item 1): the same `setAreaMode`/`onAreaChange`
+  // interface map2d.js exposes, drafting a polygon vertex-by-vertex directly in 3D instead of only
+  // on the 2D radar. `draftAreas[key].points` keeps the hit z per vertex (`{x,y,z}`) - `main.js`
+  // needs those heights (item 2) to set the z range from where the polygon was actually clicked.
+  const draftGroups = { origin: new THREE.Group(), target: new THREE.Group() };
+  scene.add(draftGroups.origin, draftGroups.target);
+  const draftAreas = {
+    origin: { points: [], closed: false, onChange: null },
+    target: { points: [], closed: false, onChange: null },
+  };
+  let activeDraftKey = null;
+  const DRAFT_CLOSE_PX = 12;
+
+  function clearDraftGroup(key) {
+    disposeObject3D(draftGroups[key]);
+    draftGroups[key].clear();
+  }
+
+  function emitDraftChange(key) {
+    const a = draftAreas[key];
+    a.onChange?.({
+      points: a.points.map((p) => ({ x: p.x, y: p.y })),
+      closed: a.closed,
+      zs: a.points.map((p) => p.z),
+    });
+  }
+
+  function worldToScreenPx(p) {
+    const v = new THREE.Vector3(p.x, p.y, p.z).project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    return { x: rect.left + (v.x * 0.5 + 0.5) * rect.width, y: rect.top + (-v.y * 0.5 + 0.5) * rect.height };
+  }
+
+  // Vertex markers + polyline + (while still drafting) a rubber-band segment out to `cursorPoint` -
+  // all drawn on top of the rest of the scene (`depthTest:false`, a high `renderOrder`), in the same
+  // colour the committed prism for this key already uses (`AREA_COLORS`).
+  function renderDraftGroup(key, cursorPoint) {
+    clearDraftGroup(key);
+    const a = draftAreas[key];
+    if (a.points.length === 0) {
+      return;
+    }
+    const color = AREA_COLORS[key];
+    const group = draftGroups[key];
+    const dotMaterial = new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false });
+    for (const p of a.points) {
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(5, 10, 8), dotMaterial);
+      dot.position.set(p.x, p.y, p.z);
+      dot.renderOrder = 999;
+      group.add(dot);
+    }
+    const linePts = a.points.map((p) => new THREE.Vector3(p.x, p.y, p.z));
+    if (cursorPoint && !a.closed) {
+      linePts.push(new THREE.Vector3(cursorPoint.x, cursorPoint.y, cursorPoint.z));
+    } else if (a.closed && linePts.length >= 3) {
+      linePts.push(linePts[0].clone());
+    }
+    if (linePts.length >= 2) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(linePts),
+        new THREE.LineBasicMaterial({ color, depthTest: false }),
+      );
+      line.renderOrder = 999;
+      group.add(line);
+    }
+  }
+
+  function nearestFirstVertexHit(key, clientX, clientY) {
+    const a = draftAreas[key];
+    if (a.points.length === 0) {
+      return false;
+    }
+    const s = worldToScreenPx(a.points[0]);
+    return Math.hypot(clientX - s.x, clientY - s.y) <= DRAFT_CLOSE_PX;
+  }
+
+  function closeDraft(key) {
+    draftAreas[key].closed = true;
+    renderDraftGroup(key, null); // drop the rubber-band segment now that there is no "next vertex"
+    emitDraftChange(key);
+  }
+
+  function handleDraftClick(key, clientX, clientY) {
+    const a = draftAreas[key];
+    if (a.closed) {
+      return;
+    }
+    if (a.points.length >= 3 && nearestFirstVertexHit(key, clientX, clientY)) {
+      closeDraft(key);
+      return;
+    }
+    const point = raycastAt(clientX, clientY);
+    if (!point) {
+      return;
+    }
+    a.points.push({ x: point.x, y: point.y, z: point.z });
+    emitDraftChange(key);
+    renderDraftGroup(key, point);
+  }
+
+  // Enter/Backspace/Esc, same keys and meanings as the 2D tool's own hint text
+  // (`strings.solveParams.areaHint`) - returns whether it consumed the key, so `onKeyDown` above
+  // knows not to also feed it into the fly-movement key set.
+  function handleDraftKey(e) {
+    const key = activeDraftKey;
+    const a = draftAreas[key];
+    if (a.closed) {
+      return false;
+    }
+    if (e.key === "Enter" && a.points.length >= 3) {
+      closeDraft(key);
+      return true;
+    }
+    if (e.key === "Backspace" && a.points.length > 0) {
+      a.points.pop();
+      emitDraftChange(key);
+      renderDraftGroup(key, null);
+      return true;
+    }
+    if (e.key === "Escape" && a.points.length > 0) {
+      a.points = [];
+      emitDraftChange(key);
+      clearDraftGroup(key);
+      return true;
+    }
+    return false;
+  }
+
+  // ---- hover preview (coordinator follow-up to `s6k_draw_in_3d.md`): a ring at the surface the
+  // cursor is over, plus a small floating "z <height>[, place]" label, so a pick landing behind
+  // geometry (or on an unexpected floor) is obvious before the user commits to it. Also doubles as
+  // the area tool's own "next vertex" preview, reusing the same once-per-frame raycast instead of a
+  // second one (`updateHover`, called from `animate()`).
+  const hoverRing = new THREE.Mesh(
+    new THREE.RingGeometry(10, 13, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }),
+  );
+  hoverRing.renderOrder = 998;
+  hoverRing.visible = false;
+  scene.add(hoverRing);
+  const hoverLabel = document.createElement("div");
+  hoverLabel.style.cssText =
+    "position:fixed; pointer-events:none; display:none; font: 11px sans-serif; padding:2px 6px; " +
+    "border-radius:3px; background:rgba(0,0,0,0.65); color:#fff; white-space:nowrap; z-index:5; transform:translateY(-50%);";
+  document.body.append(hoverLabel);
+
+  const HOVER_PLACE_REUSE_DIST = 16;
+  const HOVER_PLACE_THROTTLE_MS = 250;
+  let hoverPoint = null; // the current hover hit, kept fresh so an async repaint never labels a stale spot
+  let hoverPlaceCache = null; // { x, y, levels } - last `/api/levels` answer, reused only within `HOVER_PLACE_REUSE_DIST`
+  let hoverPlaceFetchedAt = 0;
+  let hoverPlaceFetching = false;
+  let hoverRelabelTimer = null; // review fix item 6's one trailing retry - see `updateHoverLabel`
+
+  function placeNameFor(levels, z) {
+    if (!levels || levels.length === 0) {
+      return null;
+    }
+    let best = levels[0];
+    let bestDist = Math.abs(best.z - z);
+    for (const lvl of levels) {
+      const d = Math.abs(lvl.z - z);
+      if (d < bestDist) {
+        bestDist = d;
+        best = lvl;
+      }
+    }
+    return bestDist <= 64 ? (best.name ?? null) : null;
+  }
+
+  // Review fix item 6: a stale place name (or a fresh one shown for the wrong spot) could appear
+  // two ways - `hoverPlaceCache` used for display regardless of how far `point` had since moved
+  // from it, and an async repaint (the fetch's own `.then`) relabelling the *point that started the
+  // fetch* instead of wherever the cursor actually is by the time it resolves. Fixed by only ever
+  // trusting the cache within `HOVER_PLACE_REUSE_DIST`, and always repainting from `hoverPoint` (the
+  // latest one) rather than a captured argument.
+  function updateHoverLabel(point) {
+    hoverPoint = point;
+    const zText = `z ${Math.round(point.z)}`;
+    const withinReuse = hoverPlaceCache && Math.hypot(point.x - hoverPlaceCache.x, point.y - hoverPlaceCache.y) <= HOVER_PLACE_REUSE_DIST;
+    const place = withinReuse ? placeNameFor(hoverPlaceCache.levels, point.z) : null;
+    hoverLabel.textContent = place ? `${place}, ${zText}` : zText;
+    hoverLabel.style.display = "block";
+    hoverLabel.style.left = `${lastMouse.x + 12}px`;
+    hoverLabel.style.top = `${lastMouse.y}px`;
+
+    if (withinReuse || hoverPlaceFetching) {
+      return; // already have, or are already fetching, an answer close enough to here
+    }
+    const elapsed = Date.now() - hoverPlaceFetchedAt;
+    if (elapsed < HOVER_PLACE_THROTTLE_MS) {
+      // Still inside the throttle window - one trailing retry once it opens, so a cursor that stops
+      // moving right on the boundary still ends up with a fresh label instead of none at all (the
+      // per-frame `updateHover` gate above only re-runs this on the *next* mouse movement).
+      if (!hoverRelabelTimer) {
+        hoverRelabelTimer = setTimeout(() => {
+          hoverRelabelTimer = null;
+          if (hoverRing.visible && hoverPoint) {
+            updateHoverLabel(hoverPoint);
+          }
+        }, HOVER_PLACE_THROTTLE_MS - elapsed);
+      }
+      return;
+    }
+    hoverPlaceFetching = true;
+    hoverPlaceFetchedAt = Date.now();
+    fetchLevels(map, point.x, point.y)
+      .then(({ data }) => {
+        hoverPlaceFetching = false;
+        hoverPlaceCache = { x: point.x, y: point.y, levels: data?.levels ?? [] };
+        if (hoverRing.visible && hoverPoint) {
+          updateHoverLabel(hoverPoint); // repaint from wherever the cursor is now, not this fetch's own point
+        }
+      })
+      .catch(() => {
+        hoverPlaceFetching = false;
+      });
+  }
+
+  function hideHover() {
+    hoverRing.visible = false;
+    hoverLabel.style.display = "none";
+    lastRaycastMouse = null;
+    hoverPoint = null;
+    if (hoverRelabelTimer) {
+      clearTimeout(hoverRelabelTimer);
+      hoverRelabelTimer = null;
+    }
+  }
+
+  function updateHover() {
+    if (!pointerOver || mode === "fpv" || looking || orbitDragging || !lastMouse) {
+      hideHover();
+      return;
+    }
+    if (lastRaycastMouse && lastRaycastMouse.x === lastMouse.x && lastRaycastMouse.y === lastMouse.y) {
+      return; // pointer hasn't moved since the last raycast - nothing to redo
+    }
+    lastRaycastMouse = lastMouse;
+    const hit = raycastFullAt(lastMouse.x, lastMouse.y);
+    if (!hit) {
+      hideHover();
+      return;
+    }
+    hoverRing.visible = true;
+    hoverRing.position.copy(hit.point).addScaledVector(hit.normal, 0.5);
+    hoverRing.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hit.normal);
+    updateHoverLabel(hit.point);
+    if (activeDraftKey && !draftAreas[activeDraftKey].closed) {
+      renderDraftGroup(activeDraftKey, hit.point);
+    }
   }
 
   let lineups = [];
@@ -1212,9 +1626,10 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
     onClick(cb) {
       onClickHandler = cb;
     },
-    onRightClick() {
-      // Not implemented in 3D (`s6f3b_viewer3d.md` F3b-1b only asks for target-picking by click;
-      // right-mouse is reserved for the free-fly look).
+    // Shift+LMB, not a real right-click (`s6k_draw_in_3d.md` item 4 - right-mouse stays reserved
+    // for the free-fly look) - same registration name as map2d.js's own "set the origin" gesture.
+    onRightClick(cb) {
+      onRightClickHandler = cb;
     },
     setTarget(t) {
       currentTarget = t;
@@ -1224,14 +1639,47 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       currentTarget = null;
       drawTarget();
     },
-    setOrigin() {},
-    clearOrigin() {},
+    setOrigin(o) {
+      updateOrigin(o);
+    },
+    clearOrigin() {
+      updateOrigin(null);
+    },
     setArea(key, polygon, zMin, zMax) {
       updateArea(key, polygon, zMin, zMax);
     },
     clearArea(key) {
       areaGen[key]++;
       clearAreaGroup(key);
+    },
+    setAreaMode(key, active) {
+      if (active) {
+        if (activeDraftKey && activeDraftKey !== key) {
+          const other = draftAreas[activeDraftKey];
+          if (!other.closed) {
+            other.points = [];
+            emitDraftChange(activeDraftKey);
+          }
+          clearDraftGroup(activeDraftKey);
+        }
+        activeDraftKey = key;
+        // Unlike the 2D tool, 3D has no vertex-dragging - arming an already-closed key starts a
+        // fresh polygon instead of every click silently doing nothing.
+        if (draftAreas[key].closed) {
+          draftAreas[key] = { points: [], closed: false, onChange: draftAreas[key].onChange };
+        }
+      } else if (activeDraftKey === key) {
+        activeDraftKey = null;
+        const a = draftAreas[key];
+        if (!a.closed) {
+          a.points = [];
+          emitDraftChange(key);
+        }
+        clearDraftGroup(key);
+      }
+    },
+    onAreaChange(key, cb) {
+      draftAreas[key].onChange = cb;
     },
     recolor() {},
     setLineups(list) {
@@ -1353,6 +1801,17 @@ export function createSceneView(container, map, mapSummary, initialTheme) {
       areaGen.target++;
       clearAreaGroup("origin");
       clearAreaGroup("target");
+      originGen++;
+      clearOriginGroup();
+      clearDraftGroup("origin");
+      clearDraftGroup("target");
+      if (hoverRelabelTimer) {
+        clearTimeout(hoverRelabelTimer);
+        hoverRelabelTimer = null;
+      }
+      hoverLabel.remove();
+      hoverRing.geometry.dispose();
+      hoverRing.material.dispose();
       if (collision) {
         disposeObject3D(collision.overlay);
       }

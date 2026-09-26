@@ -925,12 +925,18 @@ async function showMapScreen(map, opts = {}) {
   // closed, `solveState.originArea.polygon.length` is used instead).
   let areaMode = false;
   let areaDraftCount = 0;
+  // Review fix item 3: whether there is actually an unfinished draft right now (`!closed && count >
+  // 0`) - `areaDraftCount` alone can't tell a genuine in-progress draft apart from the count of a
+  // polygon that just closed (same field, `handleAreaChange` sets it from `points.length`
+  // regardless of `closed`), which made the "draft discarded" hint fire on a clean 2D<->3D switch.
+  let areaDraftOpen = false;
   let areaToggleBtnRef = null;
   let areaDeleteBtnRef = null;
   // The target-area tool (`s6g2_target_area.md`), same pattern as the origin-area one above, key
   // `"target"` in `mapView`'s own two-area API.
   let targetAreaMode = false;
   let targetAreaDraftCount = 0;
+  let targetAreaDraftOpen = false;
   let targetAreaToggleBtnRef = null;
   let targetAreaDeleteBtnRef = null;
   // The stacked-floor level buttons (review G2 round 3, decision 4): the clusters
@@ -1021,9 +1027,12 @@ async function showMapScreen(map, opts = {}) {
     for (const v of views()) v.clearTarget();
   }
 
-  // `wz`, when given (a 3D click - the ray already hit a real surface), skips the `/api/levels`
-  // lookup entirely: there is no ambiguity to resolve, the hit point IS the target
-  // (`s6f3b_viewer3d.md`: "точка попадания с высотой = цель").
+  // `wz`, when given (a 3D click - the ray already hit a real surface), skips using `/api/levels`
+  // to resolve an ambiguous z - the hit point IS the target's height, no choice to make
+  // (`s6f3b_viewer3d.md`: "точка попадания с высотой = цель"). It's still fetched for its nav place
+  // name (coordinator follow-up to `s6k_draw_in_3d.md`): a 3D ray can pass clean through an opening
+  // (e.g. a window) and land on a floor the user never meant to see - the closest level's own name,
+  // when the click landed within 64u of it, makes that obvious immediately.
   async function handleMapClick(wx, wy, wz) {
     // In "область" mode a plain map click is only ever meant to place a target-area vertex
     // (through the area tool's own handler, not this one) - ignore it here instead of quietly
@@ -1033,7 +1042,29 @@ async function showMapScreen(map, opts = {}) {
     }
     if (wz !== undefined) {
       caption.textContent = "";
-      applyTarget({ x: wx, y: wy, z: wz, label: null });
+      // Review fix item 4: apply the target immediately (no ambiguity to resolve, the hit point IS
+      // it) and fill the label in once `/api/levels` answers, instead of awaiting it first - a
+      // second, faster click while the first's request was still in flight used to race, letting a
+      // slower reply re-apply a now-stale target over the newer one, and every 3D pick paid the
+      // round trip's latency for a label that's a nice-to-have, not the target itself.
+      const t = { x: wx, y: wy, z: wz, label: null };
+      applyTarget(t);
+      fetchLevels(map, wx, wy).then(({ data }) => {
+        if (solveState.target !== t) {
+          return; // superseded by a later click, or the mode changed, while this was in flight
+        }
+        let label = null;
+        let bestDist = Infinity;
+        for (const lvl of data?.levels ?? []) {
+          const dist = Math.abs(lvl.z - wz);
+          if (dist < bestDist) {
+            bestDist = dist;
+            label = lvl.name ?? null;
+          }
+        }
+        t.label = bestDist <= 64 ? label : null;
+        renderTargetBox();
+      });
       return;
     }
     const { data, error } = await fetchLevels(map, wx, wy);
@@ -1083,6 +1114,7 @@ async function showMapScreen(map, opts = {}) {
   // Updates the "draw/edit/delete area" buttons' text and visibility from the current state -
   // called after anything that changes `areaMode` or `solveState.originArea`.
   function updateAreaButtons() {
+    syncView3dHint();
     if (!areaToggleBtnRef) {
       return;
     }
@@ -1102,17 +1134,24 @@ async function showMapScreen(map, opts = {}) {
   function clearArea() {
     solveState.originArea = null;
     areaDraftCount = 0;
+    areaDraftOpen = false;
     areaLevels = null;
     mapView.setArea("origin", null);
     updateSceneArea("origin");
     if (areaMode) {
       areaMode = false;
-      mapView.setAreaMode("origin", false);
+      for (const v of views()) v.setAreaMode("origin", false);
     }
   }
 
-  function handleOriginClick(wx, wy) {
+  // `wz`: only given by the 3D view's Shift+LMB pick (`s6k_draw_in_3d.md` item 4) - the exact floor
+  // that click hit, passed through so the marker's own downward raycast picks the same one back out
+  // of a stack instead of always the topmost; `buildQuery` never reads it (still only `x`/`y`/`reach`).
+  function handleOriginClick(wx, wy, wz) {
     solveState.origin = { x: wx, y: wy, reach: solveState.params.originReach };
+    if (wz !== undefined) {
+      solveState.origin.z = wz;
+    }
     for (const v of views()) v.setOrigin(solveState.origin);
     // A right-click origin and the origin area are mutually exclusive - placing one resets the
     // other (`s6g_origin_area.md`).
@@ -1138,6 +1177,7 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function updateTargetAreaButtons() {
+    syncView3dHint();
     if (!targetAreaToggleBtnRef) {
       return;
     }
@@ -1157,12 +1197,120 @@ async function showMapScreen(map, opts = {}) {
   function clearTargetAreaState() {
     solveState.targetArea = null;
     targetAreaDraftCount = 0;
+    targetAreaDraftOpen = false;
     targetAreaLevels = null;
     mapView.setArea("target", null);
     updateSceneArea("target");
     if (targetAreaMode) {
       targetAreaMode = false;
-      mapView.setAreaMode("target", false);
+      for (const v of views()) v.setAreaMode("target", false);
+    }
+  }
+
+  // `s6k_draw_in_3d.md` item 3: the payload both area tools (2D's `map2d.js`, 3D's `scene3d.js`)
+  // emit on every vertex change, `closed:true` once - shared so a polygon drawn in either view
+  // behaves exactly the same way. `view` is whichever view actually emitted this change - the one
+  // `setAreaMode(key, false)` needs to turn its own tool off on once the polygon closes.
+  function handleAreaChange(key, view, { points, closed, zs }) {
+    const isOrigin = key === "origin";
+    // Review fix item 3: an unfinished draft right now, as opposed to `points.length` merely
+    // holding the just-closed polygon's own vertex count - the two look identical in
+    // `areaDraftCount` alone, which made a clean 2D<->3D switch (nothing to lose) claim a draft was
+    // discarded.
+    const draftOpen = !closed && points.length > 0;
+    if (isOrigin) {
+      areaDraftCount = points.length;
+      areaDraftOpen = draftOpen;
+    } else {
+      targetAreaDraftCount = points.length;
+      targetAreaDraftOpen = draftOpen;
+    }
+    const already = isOrigin ? solveState.originArea : solveState.targetArea;
+    // Review fix item 1: `!already` alone missed a polygon closed in 3D when an area already
+    // existed (re-arm via "Редактировать область", or a tool carried over from 2D that starts a
+    // fresh 3D draft) - `closed` from `view !== mapView` (i.e. scene3d) is always a genuinely new
+    // polygon regardless of `already`, since scene3d only ever emits `closed:true` once per polygon
+    // (`closeDraft` is its one and only emitter, and re-arming an already-closed key in 3D always
+    // starts over from an empty draft - `setAreaMode`'s own reset, `s6k_draw_in_3d.md` item 1).
+    const justClosed = closed && (!already || view !== mapView);
+    if (closed) {
+      const area = { polygon: points.map((p) => [p.x, p.y]) };
+      if (isOrigin) {
+        solveState.originArea = area;
+      } else {
+        solveState.targetArea = area;
+      }
+      updateSceneArea(key);
+      // A polygon closed in 3D must also appear on the 2D radar (and vice versa the 3D prism
+      // already follows `updateSceneArea` above) - idempotent when `view` already IS `mapView`.
+      mapView.setArea(key, area.polygon);
+      if (isOrigin && solveState.origin) {
+        solveState.origin = null;
+        for (const v of views()) v.clearOrigin();
+        syncScopeSelect();
+      }
+      if (!isOrigin && solveState.target) {
+        solveState.target = null;
+        for (const v of views()) v.clearTarget();
+      }
+      if (justClosed) {
+        if (isOrigin) {
+          areaMode = false;
+        } else {
+          targetAreaMode = false;
+        }
+        view.setAreaMode(key, false);
+        // Item 2: the clicked heights (3D only) set the z range directly, instead of waiting on
+        // the nav-based `prefillAreaZRange` below (2D drawing never has `zs` at all).
+        if (zs && zs.length > 0) {
+          const zMin = Math.round(Math.min(...zs) - 24);
+          const zMax = Math.round(Math.max(...zs) + 48);
+          if (isOrigin) {
+            solveState.params.areaZMin = zMin;
+            solveState.params.areaZMax = zMax;
+          } else {
+            solveState.params.targetAreaZMin = zMin;
+            solveState.params.targetAreaZMax = zMax;
+          }
+          updateSceneArea(key);
+        }
+        prefillAreaZRange(area.polygon).then((prefill) => {
+          if (isOrigin) {
+            areaLevels = prefill ? prefill.clusters : null;
+          } else {
+            targetAreaLevels = prefill ? prefill.clusters : null;
+          }
+          if (!zs || zs.length === 0) {
+            if (!prefill) {
+              // No nav under the new area (e.g. a roof): don't keep the previous area's range.
+              if (isOrigin) {
+                solveState.params.areaZMin = null;
+                solveState.params.areaZMax = null;
+              } else {
+                solveState.params.targetAreaZMin = null;
+                solveState.params.targetAreaZMax = null;
+              }
+            } else if (isOrigin) {
+              [solveState.params.areaZMin, solveState.params.areaZMax] = prefill.range;
+            } else {
+              [solveState.params.targetAreaZMin, solveState.params.targetAreaZMax] = prefill.range;
+            }
+            updateSceneArea(key);
+          }
+          if (isOrigin) {
+            renderParamsBox();
+          } else {
+            renderTargetBox();
+          }
+        });
+      }
+    }
+    if (isOrigin) {
+      updateAreaButtons();
+      updateOriginStatus();
+    } else {
+      updateTargetAreaButtons();
+      updateTargetStatus();
     }
   }
 
@@ -1410,18 +1558,22 @@ async function showMapScreen(map, opts = {}) {
     areaDeleteBtnRef = areaDeleteBtn;
     areaToggleBtn.addEventListener("click", () => {
       areaMode = !areaMode;
-      mapView.setAreaMode("origin", areaMode);
+      // `s6k_draw_in_3d.md` item 3/5: arm only whichever view is currently visible (2D -> mapView,
+      // 3D -> sceneView) - a hidden view's own tool must never stay silently armed.
+      const active = viewMode === "3d" ? sceneView : mapView;
+      for (const v of views()) v.setAreaMode("origin", areaMode && v === active);
       if (areaMode && solveState.origin) {
         // Starting to draw/edit an area is exclusive with a point origin (`s6g_origin_area.md`).
         solveState.origin = null;
         for (const v of views()) v.clearOrigin();
         syncScopeSelect();
       }
-      // map2d.js only ever drafts one area tool at a time - activating this one silently
-      // deactivated the target-area tool there too, so its own local flag/button/status must
-      // follow (review G2, risk 6).
+      // Only one area tool drafts at a time (either view) - activating this one silently
+      // deactivated the target-area tool too, so its own local flag/button/status must follow
+      // (review G2, risk 6).
       if (areaMode && targetAreaMode) {
         targetAreaMode = false;
+        for (const v of views()) v.setAreaMode("target", false);
         updateTargetAreaButtons();
         updateTargetStatus();
       }
@@ -1579,7 +1731,12 @@ async function showMapScreen(map, opts = {}) {
     if (solveState.target) {
       const t = solveState.target;
       const label = t.label ? ` (${t.label})` : "";
-      targetBox.append(el("p", { textContent: `${t.x.toFixed(0)}, ${t.y.toFixed(0)}, ${t.z.toFixed(0)}${label}` }));
+      // Coordinator follow-up to `s6k_draw_in_3d.md`: "<место>, z <округлённо>" (or just "z ..."
+      // with no place) right next to the raw coordinates, so a 3D click that landed somewhere
+      // unexpected (e.g. through a window, on the floor below) is obvious at a glance.
+      const zText = `z ${Math.round(t.z)}`;
+      const placeText = t.label ? `${t.label}, ${zText}` : zText;
+      targetBox.append(el("p", { textContent: `${t.x.toFixed(0)}, ${t.y.toFixed(0)}, ${t.z.toFixed(0)}${label} - ${placeText}` }));
     } else {
       targetBox.append(el("p", { className: "hint", textContent: strings.mapScreen.targetNone }));
     }
@@ -1631,10 +1788,12 @@ async function showMapScreen(map, opts = {}) {
     targetAreaDeleteBtnRef = deleteBtn;
     toggleBtn.addEventListener("click", () => {
       targetAreaMode = !targetAreaMode;
-      mapView.setAreaMode("target", targetAreaMode);
+      const active = viewMode === "3d" ? sceneView : mapView;
+      for (const v of views()) v.setAreaMode("target", targetAreaMode && v === active);
       // Same reasoning as the origin area's own toggle above, mirrored (review G2, risk 6).
       if (targetAreaMode && areaMode) {
         areaMode = false;
+        for (const v of views()) v.setAreaMode("origin", false);
         updateAreaButtons();
         updateOriginStatus();
       }
@@ -1900,6 +2059,9 @@ async function showMapScreen(map, opts = {}) {
     sceneView = createSceneView(threeContainer, map, mapSummary, state.theme);
     currentViews.push(sceneView);
     sceneView.onClick((wx, wy, wz) => handleMapClick(wx, wy, wz));
+    sceneView.onRightClick((wx, wy, wz) => handleOriginClick(wx, wy, wz));
+    sceneView.onAreaChange("origin", (payload) => handleAreaChange("origin", sceneView, payload));
+    sceneView.onAreaChange("target", (payload) => handleAreaChange("target", sceneView, payload));
     sceneView.onLoadProgress((loaded, total) => {
       const percent = total > 0 ? Math.round((loaded / total) * 100) : null;
       view3dStatus.className = "hint";
@@ -1907,6 +2069,7 @@ async function showMapScreen(map, opts = {}) {
     });
     sceneView.onLoadDone(() => {
       view3dStatus.textContent = strings.view3d.flyHint;
+      syncView3dHint();
     });
     sceneView.onLoadError((msg) => {
       view3dStatus.className = "hint status-error";
@@ -1932,6 +2095,23 @@ async function showMapScreen(map, opts = {}) {
       sceneView.setSelected(lastSelectedId);
     }
     return sceneView;
+  }
+
+  // Review fix item 2: `view3dStatus` is written from several places (load progress/done/error,
+  // the fly hint, the area-draw hint) - only ever touches it while it's currently showing one of
+  // the two *steady-state* hints (leaves a load-progress/error message alone), and always picks
+  // between them from the tool state right now, so calling it after any of those writers, or after
+  // `areaMode`/`targetAreaMode` changes, can't leave a stale or wrong hint showing.
+  function syncView3dHint() {
+    if (viewMode !== "3d") {
+      return;
+    }
+    const current = view3dStatus.textContent;
+    if (current !== strings.view3d.flyHint && current !== strings.view3d.areaDrawHint) {
+      return;
+    }
+    view3dStatus.className = "hint";
+    view3dStatus.textContent = areaMode || targetAreaMode ? strings.view3d.areaDrawHint : strings.view3d.flyHint;
   }
 
   // `s6i_render_job_areas3d.md` change item 2: whether `switchViewMode("3d")` is currently
@@ -2012,6 +2192,12 @@ async function showMapScreen(map, opts = {}) {
       return;
     }
     render3dBlocked = false;
+    // `s6k_draw_in_3d.md` item 3: a half-drawn draft doesn't survive a 2D<->3D switch - the armed
+    // tool itself moves to whichever view becomes visible, instead of staying silently armed on the
+    // one being hidden. Captured before `viewMode` changes below (and before the disarm-on-the-old-
+    // view call below resets the draft count to 0).
+    const armedKey = areaMode ? "origin" : targetAreaMode ? "target" : null;
+    const hadDraft = armedKey === "origin" ? areaDraftOpen : armedKey === "target" ? targetAreaDraftOpen : false;
     viewMode = mode;
     if (mode === "3d") {
       // Unhide *before* creating/resizing the scene view - `threeContainer.getBoundingClientRect()`
@@ -2040,6 +2226,15 @@ async function showMapScreen(map, opts = {}) {
       lightingBtn.hidden = true;
       view3dStatus.className = "hint";
       view3dStatus.textContent = "";
+    }
+    if (armedKey) {
+      const active = mode === "3d" ? sceneView : mapView;
+      for (const v of views()) v.setAreaMode(armedKey, v === active);
+      syncView3dHint();
+      if (hadDraft) {
+        caption.className = "hint";
+        caption.textContent = strings.view3d.areaDraftDiscarded;
+      }
     }
     syncPrepare3dButton();
   }
@@ -2126,78 +2321,8 @@ async function showMapScreen(map, opts = {}) {
     }
     mapView.onClick((wx, wy) => handleMapClick(wx, wy));
     mapView.onRightClick((wx, wy) => handleOriginClick(wx, wy));
-    mapView.onAreaChange("origin", ({ points, closed }) => {
-      areaDraftCount = points.length;
-      // `closed` stays true on every later drag of an already-closed polygon's vertex too, not
-      // just the one event where it first closes - only that first transition should auto-exit
-      // the tool, or a drag's very first `pointermove` would turn `areaMode` off mid-drag and the
-      // rest of the drag would pan the map instead of moving the vertex.
-      const justClosed = closed && !solveState.originArea;
-      if (closed) {
-        solveState.originArea = { polygon: points.map((p) => [p.x, p.y]) };
-        updateSceneArea("origin");
-        if (solveState.origin) {
-          solveState.origin = null;
-          for (const v of views()) v.clearOrigin();
-          syncScopeSelect();
-        }
-        if (justClosed) {
-          areaMode = false;
-          mapView.setAreaMode("origin", false);
-          prefillAreaZRange(solveState.originArea.polygon).then((prefill) => {
-            if (!prefill) {
-              // No nav under the new area (e.g. a roof): don't keep the previous area's range.
-              areaLevels = null;
-              solveState.params.areaZMin = null;
-              solveState.params.areaZMax = null;
-              renderParamsBox();
-              updateSceneArea("origin");
-              return;
-            }
-            areaLevels = prefill.clusters;
-            [solveState.params.areaZMin, solveState.params.areaZMax] = prefill.range;
-            renderParamsBox();
-            updateSceneArea("origin");
-          });
-        }
-      }
-      updateAreaButtons();
-      updateOriginStatus();
-    });
-    mapView.onAreaChange("target", ({ points, closed }) => {
-      targetAreaDraftCount = points.length;
-      // Same "only the first close transition exits the tool" reasoning as the origin area above.
-      const justClosed = closed && !solveState.targetArea;
-      if (closed) {
-        solveState.targetArea = { polygon: points.map((p) => [p.x, p.y]) };
-        updateSceneArea("target");
-        if (solveState.target) {
-          solveState.target = null;
-          for (const v of views()) v.clearTarget();
-        }
-        if (justClosed) {
-          targetAreaMode = false;
-          mapView.setAreaMode("target", false);
-          prefillAreaZRange(solveState.targetArea.polygon).then((prefill) => {
-            if (!prefill) {
-              // No nav under the new area (e.g. a roof): don't keep the previous area's range.
-              targetAreaLevels = null;
-              solveState.params.targetAreaZMin = null;
-              solveState.params.targetAreaZMax = null;
-              renderTargetBox();
-              updateSceneArea("target");
-              return;
-            }
-            targetAreaLevels = prefill.clusters;
-            [solveState.params.targetAreaZMin, solveState.params.targetAreaZMax] = prefill.range;
-            renderTargetBox();
-            updateSceneArea("target");
-          });
-        }
-      }
-      updateTargetAreaButtons();
-      updateTargetStatus();
-    });
+    mapView.onAreaChange("origin", (payload) => handleAreaChange("origin", mapView, payload));
+    mapView.onAreaChange("target", (payload) => handleAreaChange("target", mapView, payload));
     if (opts.autoBody) {
       applyAutoBody(opts.autoBody);
     }

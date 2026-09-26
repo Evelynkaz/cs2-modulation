@@ -560,3 +560,44 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+## three-mesh-bvh
+
+- URL: https://github.com/gkjohnson/three-mesh-bvh
+- Copyright (c) 2018 Garrett Johnson
+- Version 0.9.15, npm package `three-mesh-bvh`, downloaded as the registry tarball
+  (`https://registry.npmjs.org/three-mesh-bvh/-/three-mesh-bvh-0.9.15.tgz`, sha1
+  `0e070be254527155b4cc9285277cddaf531d8ef1`, sha512
+  `f717440e40b31684fc54f147f43ce7c0549d6da2048ccbccd74e88aaaed326eaeb22179428371d5b8a6b7c94c2c6bca28785d2fd4c56b341f72b830b31117239`)
+  - no npm and no CDN at runtime, see `viewer/lib/README.md`. `0.9.15` is the newest version
+  whose `peerDependencies.three` (`>= 0.159.0`) still accepts the vendored three 0.186.0.
+- Vendored unmodified into `viewer/lib/three-mesh-bvh/`: `build/index.module.js` (the package's
+  own bundled ES module build, imports the bare specifier `"three"` the same way the vendored
+  three.js files do). Used by `viewer/js/scene3d.js` to build a BVH over the collision mesh
+  (`MeshBVH`) and accelerate its raycasts (`acceleratedRaycast`) - the brute-force
+  `Raycaster.intersectObject` a full collision mesh took up to ~80ms/cast on the largest maps,
+  visibly stalling the 3D hover preview (`s6k_draw_in_3d.md` review fix item 5).
+
+```
+MIT License
+
+Copyright (c) 2018 Garrett Johnson
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

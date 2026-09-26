@@ -3,7 +3,7 @@
 // live here.
 
 import { state, applyTheme, resolveInitialTheme, storeTheme } from "./state.js?v=1";
-import { strings } from "./strings.js?v=2";
+import { strings } from "./strings.js?v=4";
 import {
   fetchConfig,
   putConfig,
@@ -11,16 +11,21 @@ import {
   fetchJobs,
   fetchRadar,
   fetchLevels,
+  fetchTrajectory,
   radarPngUrl,
+  mapArtUrl,
+  fetchOverview,
   deleteJob,
   hasUsableRender,
 } from "./api.js?v=1";
-import { renderSetup } from "./setup.js?v=1";
+import { renderSetup } from "./setup.js?v=2";
 import { startPrepare, reconnectJob, stageLabel } from "./jobs.js?v=1";
-import { createMapView } from "./map2d.js?v=1";
-import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=2";
-import { createPanel, TYPE_LABELS } from "./panel.js?v=2";
+import { createMapView, renderThumbnail } from "./map2d.js?v=4";
+import { runSolve, buildQuery, parseSetpos, selectionError } from "./solve.js?v=3";
+import { createPanel, TYPE_LABELS, CLICK_LABELS } from "./panel.js?v=4";
 import { createSceneView } from "./scene3d.js?v=1";
+import { segmented, chip, collapsible } from "./ui.js?v=2";
+import { icon, THROW_TYPE_ICON } from "./icons.js?v=1";
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -41,6 +46,8 @@ function el(tag, props, ...children) {
 
 const app = document.getElementById("app");
 const statusEl = document.getElementById("status");
+const globalTopbar = document.getElementById("topbar");
+const globalThemeBtn = document.getElementById("theme-toggle");
 let radarView = null; // { recolor(): void } for the current map screen's 2D canvas, if any.
 // AMBER-7: the map view owns a ResizeObserver, a devicePixelRatio listener and a recolored
 // canvas - each `showMapScreen` must destroy the previous one instead of leaking it. F3b-1b: a
@@ -61,36 +68,73 @@ function announce(text) {
   statusEl.textContent = text;
 }
 
+// Non-map screens (setup, map list) scroll normally inside a centred `.page`; the map screen owns
+// its own full-viewport layout and must never scroll at the `#app` level (S6m: "no page scroll").
+function setAppScroll(scroll) {
+  app.className = scroll ? "app-scroll" : "";
+}
+
+// The map screen builds its own combined header row (back + map name + 2D/3D + theme) - the
+// generic topbar is hidden while it's open and restored by every other screen.
+function setGlobalTopbarVisible(visible) {
+  globalTopbar.hidden = !visible;
+}
+
 // ---- bootstrap ------------------------------------------------------------------------------
 
+function syncThemeButton(btn) {
+  btn.innerHTML = icon(state.theme === "dark" ? "sun" : "moon", 18);
+  const label = state.theme === "dark" ? strings.theme.toggleToLight : strings.theme.toggleToDark;
+  btn.setAttribute("aria-label", label);
+  btn.title = label;
+}
+
+// Flips the theme and keeps every currently-mounted theme button (the global one, plus the map
+// screen's own copy, when that's the one open) in sync. `extraSync`: the caller's own button, if
+// it isn't `globalThemeBtn`.
+function toggleThemeAnd(extraSync) {
+  applyTheme(state.theme === "dark" ? "light" : "dark");
+  storeTheme(state.theme);
+  syncThemeButton(globalThemeBtn);
+  extraSync?.();
+  radarView?.recolor(state.theme);
+}
+
 function wireThemeToggle() {
-  const btn = document.getElementById("theme-toggle");
-  const sync = () => {
-    btn.textContent = state.theme === "dark" ? strings.theme.toggleToLight : strings.theme.toggleToDark;
-  };
-  sync();
-  btn.addEventListener("click", () => {
-    applyTheme(state.theme === "dark" ? "light" : "dark");
-    storeTheme(state.theme);
-    sync();
-    radarView?.recolor(state.theme);
-  });
+  syncThemeButton(globalThemeBtn);
+  globalThemeBtn.addEventListener("click", () => toggleThemeAnd());
 }
 
 function renderServerDown(root, retry) {
+  setAppScroll(true);
   root.replaceChildren(
-    el("p", { className: "status status-error", textContent: strings.errors.serverDown }),
     el(
-      "button",
-      { type: "button", textContent: strings.errors.retryButton, onclick: retry },
+      "div",
+      { className: "page" },
+      el("p", { className: "status status-error", textContent: strings.errors.serverDown }),
+      el("button", { type: "button", className: "primary", textContent: strings.errors.retryButton, onclick: retry }),
     ),
   );
 }
 
 function renderLoadingMaps() {
+  setAppScroll(true);
   app.replaceChildren(
-    el("h1", { textContent: strings.maps.heading }),
-    el("p", { className: "hint", textContent: strings.maps.loading }),
+    el("div", { className: "page" }, el("h1", { textContent: strings.maps.heading }), el("p", { className: "hint", textContent: strings.maps.loading })),
+  );
+}
+
+function openSetup(config) {
+  setAppScroll(true);
+  setGlobalTopbarVisible(true);
+  state.screen = "setup";
+  renderSetup(
+    app,
+    (cfg) => {
+      state.config = cfg;
+      showMapsScreen();
+    },
+    config,
   );
 }
 
@@ -233,7 +277,13 @@ function bodyFromHash(q) {
     body.fineScan = true;
   }
   if (q.types) {
-    body.types = q.types.split(",");
+    // S6m: "RunJumpThrow" no longer exists in the product - a link bookmarked before this change
+    // must not resurrect it (`s6m_consumer_redesign.md`: "a stale persisted selection... must be
+    // cleaned on load").
+    const types = q.types.split(",").filter((t) => t !== "RunJumpThrow");
+    if (types.length > 0) {
+      body.types = types;
+    }
   }
   if (q.strengths) {
     const strengths = q.strengths.split(",").map(finiteNumber).filter((v) => v !== undefined);
@@ -277,15 +327,7 @@ async function routeFromConfig() {
   }
   state.config = data;
   if (!data.configured) {
-    state.screen = "setup";
-    renderSetup(
-      app,
-      (cfg) => {
-        state.config = cfg;
-        showMapsScreen();
-      },
-      data,
-    );
+    openSetup(data);
     return;
   }
   // The maps list is already in `data.maps` - no need for a second `/api/maps` round trip.
@@ -312,69 +354,76 @@ async function showMapsScreen() {
   renderMapsScreen();
 }
 
-function pill(label, present) {
-  const marker = present ? strings.maps.pillOk : strings.maps.pillMissing;
-  return el("span", {
-    className: present ? "pill pill-ok" : "pill pill-missing",
-    textContent: `${marker} ${label}`,
+// "de_mirage" -> "Mirage" - a friendlier card title; the raw map name stays visible underneath
+// (`.map-card-sub`) so two maps that prettify the same way are never actually ambiguous.
+function prettifyMapName(map) {
+  const base = map.replace(/^(de|cs|aim|arena|dz|ar)_/i, "");
+  return base.length > 0 ? base[0].toUpperCase() + base.slice(1) : map;
+}
+
+// The game mode a map's own name prefix implies (round-2 design critique 7) - `null` for a prefix
+// with no defined mode (e.g. "aim_"/"arena_"), which just sorts after the three known ones and
+// shows no mode tag.
+const MODE_ORDER = { de: 0, cs: 1, ar: 2 };
+function mapPrefix(map) {
+  const m = /^(de|cs|ar)_/i.exec(map);
+  return m ? m[1].toLowerCase() : null;
+}
+function modeLabel(prefix) {
+  return { de: strings.maps.modeDe, cs: strings.maps.modeCs, ar: strings.maps.modeAr }[prefix] ?? null;
+}
+
+// de_ maps first, then cs_, then ar_ (and anything else after), alphabetical by pretty name
+// within each group.
+function sortedMaps(maps) {
+  return [...maps].sort((a, b) => {
+    const oa = MODE_ORDER[mapPrefix(a.map)] ?? 99;
+    const ob = MODE_ORDER[mapPrefix(b.map)] ?? 99;
+    if (oa !== ob) {
+      return oa - ob;
+    }
+    return prettifyMapName(a.map).localeCompare(prettifyMapName(b.map), "ru");
   });
 }
 
+function mapStatusInfo(m) {
+  if (m.stale) {
+    return { text: strings.maps.statusStale, cls: "badge-hard" };
+  }
+  if (!(m.hasLineups && m.hasStandSpots && m.hasRadar)) {
+    return { text: strings.maps.statusNeedsPrepare, cls: "badge-medium" };
+  }
+  if (hasUsableRender(m)) {
+    return { text: strings.maps.status3dReady, cls: "badge-easy" };
+  }
+  return { text: strings.maps.statusReady, cls: "badge-easy" };
+}
+
 function renderMapsScreen() {
+  setAppScroll(true);
+  setGlobalTopbarVisible(true);
   app.replaceChildren();
   announce(strings.maps.heading);
-  const settingsBtn = el("button", {
-    type: "button",
-    textContent: strings.maps.backToSetup,
-    onclick: () => {
-      state.screen = "setup";
-      renderSetup(
-        app,
-        (cfg) => {
-          state.config = cfg;
-          showMapsScreen();
-        },
-        state.config,
-      );
-    },
-  });
-  app.append(
-    el(
-      "div",
-      { className: "map-screen-header" },
-      el("h1", { textContent: strings.maps.heading }),
-      settingsBtn,
-    ),
+  const settingsBtn = el("button", { type: "button", className: "btn-ghost" });
+  settingsBtn.innerHTML = `${icon("gear", 16)} ${strings.maps.backToSetup}`;
+  settingsBtn.addEventListener("click", () => openSetup(state.config));
+
+  const page = el(
+    "div",
+    { className: "page" },
+    el("div", { className: "page-header" }, el("h1", { textContent: strings.maps.heading }), settingsBtn),
   );
 
   if (state.maps.length === 0) {
-    app.append(renderExtractNewForm());
-    return;
+    page.append(renderExtractNewForm());
+  } else {
+    const grid = el("div", { className: "map-grid" });
+    for (const m of sortedMaps(state.maps)) {
+      grid.append(renderMapCard(m));
+    }
+    page.append(grid, renderExtractNewForm(true));
   }
-
-  const table = el(
-    "table",
-    { className: "maps" },
-    el(
-      "thead",
-      null,
-      el(
-        "tr",
-        null,
-        el("th", { textContent: strings.maps.columnMap }),
-        el("th", { textContent: strings.maps.columnBuild }),
-        el("th", { textContent: "" }),
-        el("th", { textContent: "" }),
-      ),
-    ),
-  );
-  const tbody = el("tbody");
-  for (const m of state.maps) {
-    tbody.append(renderMapRow(m));
-  }
-  table.append(tbody);
-  app.append(table);
-  app.append(renderExtractNewForm(true));
+  app.append(page);
 }
 
 function renderProgressBox() {
@@ -410,7 +459,7 @@ function missingKinds(m) {
 }
 
 // ---- running jobs: `state.activeJobs` holds one record per map with a job in flight, so a
-// table re-render (switching maps, saving settings, a finished sibling job) never orphans it;
+// map-list re-render (switching maps, saving settings, a finished sibling job) never orphans it;
 // `attachDom`/`renderReconnectInto` (re)bind it to whatever DOM the current render produced.
 
 function startElapsedTimer(record) {
@@ -436,7 +485,8 @@ function paintLabel(record) {
   if (!record.sink || !record.currentKind) {
     return;
   }
-  const elapsed = ((Date.now() - record.startedAt) / 1000).toFixed(1);
+  // Russian decimal comma (round-2 design critique 9).
+  const elapsed = ((Date.now() - record.startedAt) / 1000).toFixed(1).replace(".", ",");
   const msg = record.lastMsg;
   // A render job's own phase lines (`{stage:"render",phase:"entities"|"lighting"|"skybox"}`) carry
   // no `total` - previously fell through to "в очереди" ("queued") mid-job, even though the job was
@@ -449,7 +499,7 @@ function paintLabel(record) {
   record.sink.label.textContent = `${stageLabel(record.currentKind)} - ${progressText} (${elapsed} c)`;
 }
 
-// Binds `record` to a freshly rendered row's progress DOM and repaints it from the record's
+// Binds `record` to a freshly rendered card's progress DOM and repaints it from the record's
 // current state, so a re-render of a still-running job shows exactly where it is.
 function attachDom(record, dom) {
   record.sink = dom;
@@ -664,6 +714,9 @@ async function reattachJobs() {
         if (record.sink) {
           record.sink.label.textContent = strings.maps.stageDone;
         }
+        // Refetch, not a plain re-render (round-2 review finding 3): `state.maps` is whatever was
+        // loaded before this job finished - a completed job changes readiness/status, so the
+        // list needs `/api/maps` again, not just its own stale entries redrawn.
         if (state.screen === "maps") {
           showMapsScreen();
         }
@@ -699,21 +752,43 @@ async function reattachJobs() {
   }
 }
 
-function renderMapRow(m) {
-  const allReady = m.hasLineups && m.hasStandSpots && m.hasRadar;
-  const statusTd = el(
-    "td",
-    null,
-    pill(strings.maps.geometry, m.hasLineups),
-    pill(strings.maps.standSpots, m.hasStandSpots),
-    pill(strings.maps.radar, m.hasRadar),
-  );
-  if (m.stale) {
-    const msg = state.config?.gameDir ? strings.maps.staleWrongBuild : strings.maps.staleNoGameDir;
-    statusTd.append(el("div", { className: "stale", textContent: msg }));
+// The map card's own thumbnail - prefers the game's own loading-screen screenshot
+// (`mapArtUrl`/`s6p_map_art.md`, a parallel task; 404s cleanly if that endpoint or file isn't
+// there yet), falls back to our recolored radar (`viewer-map.png` is a class/height data texture,
+// not a human-viewable photo, so it's recolored the same way the map screen's own canvas is via
+// `map2d.js`'s `renderThumbnail`), and only ever leaves the plain placeholder icon if both fail -
+// never an empty box (round-2 design critique 7).
+function renderThumbSlot(m) {
+  const placeholder = el("div", { className: "map-card-thumb-empty", innerHTML: icon("layers", 28) });
+
+  function useRecolor() {
+    if (!m.hasRadar) {
+      return;
+    }
+    const raw = new Image();
+    raw.onload = () => {
+      try {
+        placeholder.replaceWith(el("img", { className: "map-card-thumb", alt: "", src: renderThumbnail(raw, state.theme) }));
+      } catch {
+        // Leave the placeholder - a broken thumbnail must not break the card.
+      }
+    };
+    raw.src = `${radarPngUrl(m.map)}?v=${encodeURIComponent(m.build ?? "0")}`;
   }
 
-  const actions = el("div", { className: "map-actions" });
+  const art = new Image();
+  art.onload = () => placeholder.replaceWith(el("img", { className: "map-card-thumb", alt: "", src: art.src }));
+  art.onerror = useRecolor;
+  art.src = mapArtUrl(m.map, "screenshot");
+  return placeholder;
+}
+
+function renderMapCard(m) {
+  const allReady = m.hasLineups && m.hasStandSpots && m.hasRadar;
+  const status = mapStatusInfo(m);
+  const thumb = renderThumbSlot(m);
+
+  const actions = el("div", { className: "map-card-actions" });
   const { box: progressBox, label, barSpan } = renderProgressBox();
   const cancelBtn = el("button", { type: "button", textContent: strings.maps.cancelButton, hidden: true });
   const record = state.activeJobs.get(m.map);
@@ -729,48 +804,46 @@ function renderMapRow(m) {
       attachDom(record, dom);
     }
   } else if (allReady) {
-    const openBtn = el("button", {
-      type: "button",
-      className: "primary",
-      textContent: strings.maps.openButton,
-    });
+    const openBtn = el("button", { type: "button", className: "primary", textContent: strings.maps.openButton });
     openBtn.addEventListener("click", () => selectMap(m.map));
     actions.append(openBtn);
   } else {
-    const prepareBtn = el("button", { type: "button", textContent: strings.maps.prepareButton });
+    const prepareBtn = el("button", { type: "button", className: "primary", textContent: strings.maps.prepareButton });
     prepareBtn.addEventListener("click", () => {
-      startJobFlow(
-        missingKinds(m),
-        m.map,
-        { progressBox, label, barSpan, disableButtons: [prepareBtn], cancelBtn },
-        () => showMapsScreen(),
-      );
+      startJobFlow(missingKinds(m), m.map, { progressBox, label, barSpan, disableButtons: [prepareBtn], cancelBtn }, () => showMapsScreen());
     });
     actions.append(prepareBtn);
   }
-
   if (m.stale && !record) {
     const reextractBtn = el("button", { type: "button", textContent: strings.maps.reextractButton });
     reextractBtn.addEventListener("click", () => {
-      startJobFlow(
-        ["extract"],
-        m.map,
-        { progressBox, label, barSpan, disableButtons: [reextractBtn], cancelBtn },
-        () => showMapsScreen(),
-      );
+      startJobFlow(["extract"], m.map, { progressBox, label, barSpan, disableButtons: [reextractBtn], cancelBtn }, () => showMapsScreen());
     });
     actions.append(reextractBtn);
   }
   actions.append(cancelBtn);
 
-  return el(
-    "tr",
-    null,
-    el("td", { textContent: m.map }),
-    el("td", { textContent: m.build }),
-    statusTd,
-    el("td", null, actions, progressBox),
+  const mode = modeLabel(mapPrefix(m.map));
+  const statusRow = el("div", { className: "map-card-status" }, el("span", { className: `badge ${status.cls}`, textContent: status.text }));
+  if (mode) {
+    statusRow.append(el("span", { className: "badge badge-neutral", textContent: mode }));
+  }
+  const body = el(
+    "div",
+    { className: "map-card-body" },
+    el("span", { className: "map-card-title", textContent: prettifyMapName(m.map) }),
+    el("span", { className: "map-card-sub", textContent: m.map }),
+    statusRow,
   );
+  // The stale reason (round-2 review finding 11 - dropped in the S6m redesign): whether the cache
+  // has simply never been checked against an installed game (no game dir configured yet) or was
+  // built from a different game build.
+  if (m.stale) {
+    const reason = state.config?.gameDir ? strings.maps.staleWrongBuild : strings.maps.staleNoGameDir;
+    body.append(el("p", { className: "hint status-error", textContent: reason }));
+  }
+  body.append(actions, progressBox);
+  return el("div", { className: "map-card" }, thumb, body);
 }
 
 function renderExtractNewForm(compact = false) {
@@ -780,7 +853,7 @@ function renderExtractNewForm(compact = false) {
     placeholder: strings.maps.extractNamePlaceholder,
   });
   const label = el("label", { htmlFor: "extract-map-name", textContent: strings.maps.extractNewLabel });
-  const btn = el("button", { type: "button", textContent: strings.maps.extractButton });
+  const btn = el("button", { type: "button", className: "primary", textContent: strings.maps.extractButton });
   const cancelBtn = el("button", { type: "button", textContent: strings.maps.cancelButton, hidden: true });
   const { box: progressBox, label: progressLabel, barSpan } = renderProgressBox();
 
@@ -803,9 +876,11 @@ function renderExtractNewForm(compact = false) {
     progressBox,
   ];
   if (!compact) {
+    // Only the empty-list case reaches here uncompacted (round-2 review finding 11 - dropped in
+    // the S6m redesign) - explains why there's nothing above this form yet.
     children.unshift(el("p", { className: "hint", textContent: strings.maps.noMaps }));
   }
-  return el("div", { className: "field" }, ...children);
+  return el("div", { className: compact ? "field" : "field card" }, ...children);
 }
 
 function selectMap(map) {
@@ -815,7 +890,7 @@ function selectMap(map) {
 
 // ---- screen 3: map + target + solve -------------------------------------------------------------
 
-const ALL_TYPES = ["Stand", "Crouch", "JumpThrow", "CrouchJumpThrow", "RunJumpThrow"];
+const ALL_TYPES = ["Stand", "Crouch", "JumpThrow", "CrouchJumpThrow"];
 const ALL_STRENGTHS = [1, 0.5, 0];
 
 // `opts.autoBody`: a full `/api/lineup` request body reconstructed from the address bar
@@ -826,27 +901,44 @@ async function showMapScreen(map, opts = {}) {
   state.currentMap = map;
   destroyCurrentMapView();
   radarView = null;
+  setAppScroll(false);
+  setGlobalTopbarVisible(false);
   app.replaceChildren();
   announce(map);
 
   const mapSummary = state.maps.find((m) => m.map === map) ?? {};
 
-  const header = el(
-    "div",
-    { className: "map-screen-header" },
-    el("h1", { textContent: map }),
-    el("button", { type: "button", textContent: strings.mapScreen.backToList, onclick: showMapsScreen }),
+  // ---- combined header row: back / map name / 2D-3D / theme ----
+  const backBtn = el("button", { type: "button", className: "btn-ghost", textContent: strings.mapScreen.backToList });
+  backBtn.addEventListener("click", showMapsScreen);
+  const mapTitleEl = el("h1", { className: "map-title", textContent: prettifyMapName(map), title: map });
+  const viewModeSeg = segmented({
+    name: "view-mode",
+    ariaLabel: "2D/3D",
+    value: "2d",
+    options: [
+      { value: "2d", label: strings.view3d.toggle2d },
+      { value: "3d", label: strings.view3d.toggle3d },
+    ],
+    onChange: (v) => switchViewMode(v),
+  });
+  const localThemeBtn = el("button", { type: "button", className: "icon-btn btn-ghost" });
+  syncThemeButton(localThemeBtn);
+  localThemeBtn.addEventListener("click", () => toggleThemeAnd(() => syncThemeButton(localThemeBtn)));
+  const mapHeader = el(
+    "header",
+    { className: "topbar map-topbar" },
+    el("div", { className: "topbar-left" }, backBtn, mapTitleEl),
+    viewModeSeg,
+    el("div", { className: "topbar-right" }, localThemeBtn),
   );
-  const wrap = el("div", { className: "radar-wrap" });
+
+  // ---- centre stage: radar / 3D, with the 3D toolbar overlaid top-left ----
   const canvas = el("canvas", { id: "radar-canvas", role: "img", "aria-label": `Радар карты ${map}` });
   const threeContainer = el("div", { className: "three-container", hidden: true });
   const fpvOverlay = el("div", { className: "fpv-overlay", hidden: true });
-  wrap.append(canvas, threeContainer, fpvOverlay);
-  const caption = el("p", { className: "hint" });
+  const caption = el("p", { className: "stage-caption" });
 
-  // F3b-1b: the 2D/3D toggle plus the 3D-only controls ("show collisions", fly/orbit).
-  const toggle2dBtn = el("button", { type: "button", textContent: strings.view3d.toggle2d, className: "primary" });
-  const toggle3dBtn = el("button", { type: "button", textContent: strings.view3d.toggle3d });
   const collisionsBtn = el("button", { type: "button", textContent: strings.view3d.collisionsOn, hidden: true });
   const cameraModeBtn = el("button", { type: "button", textContent: strings.view3d.modeOrbit, hidden: true });
   // F3b-2: "game"/"simple" lighting toggle (`s6f3b2_lighting_shader.md` §7) - hidden until a 3D view
@@ -864,35 +956,94 @@ async function showMapScreen(map, opts = {}) {
     barSpan: render3dBarSpan,
   } = renderProgressBox();
   const render3dCancelBtn = el("button", { type: "button", textContent: strings.maps.cancelButton, hidden: true });
+  // `s6p_map_art.md` (round-2 design critique 8): the official radar as the 2D base layer - both
+  // start hidden and only ever appear once `fetchOverview` actually succeeds for this map.
+  const schemeBtn = el("button", { type: "button", textContent: strings.mapScreen.schemeToggle, hidden: true });
+  const sectionRow = el("div", { className: "view-toolbar-row", role: "group", "aria-label": strings.mapScreen.schemeToggle, hidden: true });
   const viewToolbar = el(
     "div",
     { className: "view-toolbar" },
-    el("div", { className: "field-row", role: "group", "aria-label": "2D/3D" }, toggle2dBtn, toggle3dBtn, collisionsBtn, cameraModeBtn, lightingBtn),
+    el("div", { className: "view-toolbar-row", role: "group", "aria-label": "2D" }, schemeBtn),
+    sectionRow,
+    el("div", { className: "view-toolbar-row", role: "group", "aria-label": "3D" }, collisionsBtn, cameraModeBtn, lightingBtn),
     view3dStatus,
-    el("div", { className: "field-row" }, prepare3dBtn, render3dCancelBtn),
+    el("div", { className: "view-toolbar-row" }, prepare3dBtn, render3dCancelBtn),
     render3dProgressBox,
   );
+  const stage = el("div", { className: "map-stage" }, canvas, threeContainer, fpvOverlay, viewToolbar, caption);
 
-  // RED-1: params is the tallest box by far - it goes last, collapsed, so target/run/results
-  // (what a two-minute solve actually needs seen) are the ones sitting in the visible band.
-  const paramsContent = el("div", { className: "params-content" });
-  const paramsBox = el(
-    "details",
-    { className: "field params-box" },
-    el("summary", { textContent: strings.solveParams.heading }),
-    paramsContent,
+  // ---- left column: the 3 steps + run button + "Дополнительно" ----
+  const targetModeSeg = segmented({
+    name: "target-mode",
+    ariaLabel: strings.mapScreen.targetModeLabel,
+    value: "point",
+    options: [
+      { value: "point", label: strings.mapScreen.targetModePoint },
+      { value: "area", label: strings.mapScreen.targetModeArea },
+    ],
+    onChange: (v) => setTargetMode(v),
+  });
+  const targetStepBody = el("div", {});
+  const targetCard = el(
+    "div",
+    { className: "card" },
+    el("div", { className: "card-heading" }, el("span", { className: "step-number", textContent: "1" }), el("span", { textContent: strings.mapScreen.stepTarget })),
+    targetModeSeg,
+    targetStepBody,
   );
-  const targetBox = el("div", { className: "field target-box" });
-  const runBox = el("div", { className: "field run-box" });
-  const panelBox = el("div", { className: "panel-box" });
-  const sidebar = el("div", { className: "map-sidebar" }, targetBox, runBox, panelBox, paramsBox);
-  const layout = el("div", { className: "solve-layout" }, wrap, sidebar);
 
-  app.append(header, viewToolbar, caption, layout);
+  const originStepBody = el("div", {});
+  const originCard = el(
+    "div",
+    { className: "card" },
+    el("div", { className: "card-heading" }, el("span", { className: "step-number", textContent: "2" }), el("span", { textContent: strings.mapScreen.stepOrigin })),
+    originStepBody,
+  );
+
+  const throwStepBody = el("div", {});
+  const throwCard = el(
+    "div",
+    { className: "card" },
+    el("div", { className: "card-heading" }, el("span", { className: "step-number", textContent: "3" }), el("span", { textContent: strings.mapScreen.stepThrow })),
+    throwStepBody,
+  );
+
+  const runCardBody = el("div", {});
+  const runCard = el("div", { className: "card" }, runCardBody);
+
+  const advancedContent = el("div", {});
+  const advancedBox = collapsible({
+    summary: strings.solveParams.heading,
+    content: advancedContent,
+    storageKey: "cs2-modulation-advanced-open",
+    defaultOpen: false,
+  });
+
+  const stepsCol = el("div", { className: "map-steps" }, targetCard, originCard, throwCard, runCard, advancedBox);
+  const resultsCol = el("div", { className: "map-results" });
+
+  const tabsSeg = segmented({
+    name: "map-tabs",
+    value: "steps",
+    options: [
+      { value: "steps", label: "Настройка" },
+      { value: "results", label: strings.panel.heading },
+    ],
+    onChange: (v) => {
+      stepsCol.classList.toggle("tab-hidden", v !== "steps");
+      resultsCol.classList.toggle("tab-hidden", v !== "results");
+    },
+  });
+  resultsCol.classList.add("tab-hidden");
+  const tabsWrap = el("div", { className: "map-tabs" }, tabsSeg);
+
+  const body = el("div", { className: "map-body" }, tabsWrap, stepsCol, stage, resultsCol);
+  const screen = el("div", { className: "map-screen" }, mapHeader, body);
+  app.append(screen);
 
   const { data: radarData, error: radarError } = await fetchRadar(map);
   if (radarError !== undefined) {
-    caption.className = "status status-error";
+    caption.className = "stage-caption status-error";
     caption.textContent = radarError ?? strings.errors.serverDown;
     return;
   }
@@ -916,10 +1067,18 @@ async function showMapScreen(map, opts = {}) {
   let mapView = null;
   let sceneView = null; // lazily created on first switch to 3D, kept alive alongside mapView
   let viewMode = "2d"; // "2d" | "3d"
-  let originStatusBox = null;
+  let originStatusBox = null; // point-status `.step-row` text span
+  let originAreaStatusBox = null; // area vertex-count hint
+  let originPointBlock = null;
+  let originAreaBlock = null;
   let targetStatusBox = null;
   let runRefs = null;
-  let scopeSelectRef = null;
+  let scopeSegRef = null;
+  // The origin-scope segmented's own UI intent ("all" | "spawns" | "point" | "area"), distinct
+  // from `solveState.params.scope` (server-relevant, only ever "all"/"spawns") - picking "точка"/
+  // "область" before anything is actually placed has nothing else to remember that choice by, and
+  // reading `solveState.params.scope` back for it just snapped the segmented back to "Карта".
+  let originScopeUi = "all";
   // The origin-area tool (`s6g_origin_area.md`): `areaMode` mirrors `mapView`'s own draw-mode
   // flag, `areaDraftCount` is the in-progress vertex count before the polygon is closed (once
   // closed, `solveState.originArea.polygon.length` is used instead).
@@ -941,7 +1100,7 @@ async function showMapScreen(map, opts = {}) {
   let targetAreaDeleteBtnRef = null;
   // The stacked-floor level buttons (review G2 round 3, decision 4): the clusters
   // `prefillAreaZRange` found under the most recently closed area, one per key, or `null` before
-  // any area has been closed or once one clears - `renderParamsBox`/`renderTargetAreaControls`
+  // any area has been closed or once one clears - `renderOriginStep`/`renderTargetAreaControls`
   // only show the button row while there is more than one cluster.
   let areaLevels = null;
   let targetAreaLevels = null;
@@ -976,23 +1135,20 @@ async function showMapScreen(map, opts = {}) {
     sceneView.setArea(key, area.polygon, zMin, zMax);
   }
 
-  // AMBER-12: a right-click origin must be reflected in the "where to throw from" select, not
-  // just on the map - otherwise the control keeps reading "по всей карте" while the request
-  // actually carries an origin, and there is no single action that clears it.
-  function syncScopeSelect() {
-    if (!scopeSelectRef) {
-      return;
+  // The origin-scope segmented's true value from state, not from whatever was last clicked -
+  // a right-click origin or a closed/drafting area sets it on their own (mirrors the old
+  // dynamically-appearing "точка" `<option>`).
+  function currentScopeValue() {
+    if (solveState.origin) {
+      return "point";
     }
-    const pointOption = scopeSelectRef.querySelector('option[value="point"]');
-    if (solveState.origin && !pointOption) {
-      scopeSelectRef.append(el("option", { value: "point", textContent: strings.solveParams.scopePointOption }));
-    } else if (!solveState.origin && pointOption) {
-      pointOption.remove();
+    if (solveState.originArea || areaMode) {
+      return "area";
     }
-    scopeSelectRef.value = solveState.origin ? "point" : solveState.params.scope;
+    return originScopeUi;
   }
 
-  const panel = createPanel(panelBox, {
+  const panel = createPanel(resultsCol, {
     onSelect: (id) => {
       lastSelectedId = id;
       for (const v of views()) v.setSelected(id);
@@ -1004,7 +1160,13 @@ async function showMapScreen(map, opts = {}) {
       for (const v of views()) v.setHover(null);
     },
     onFirstPerson: (l) => handleFirstPerson(l),
+    onShow3d: () => switchViewMode("3d"),
+    requestPreview: (l, kind) => requestPreview(l, kind),
   });
+  // `panel`'s own preview Blob URLs otherwise outlive this screen (`destroyCurrentMapView` never
+  // touched it) - `clear()` already revokes them, so a `destroy` that just calls it is enough
+  // (round-2 review finding 8).
+  currentViews.push({ destroy: () => panel.clear() });
 
   function applyTarget(t) {
     solveState.target = t;
@@ -1018,6 +1180,7 @@ async function showMapScreen(map, opts = {}) {
     for (const v of views()) v.setTarget(t);
     renderTargetBox();
     updateTargetStatus();
+    updateOfficialSectionForTarget();
   }
 
   // RED-2: a click that only narrows down to a level choice must not leave the previous
@@ -1069,7 +1232,7 @@ async function showMapScreen(map, opts = {}) {
     }
     const { data, error } = await fetchLevels(map, wx, wy);
     if (error !== undefined) {
-      caption.className = "status status-error";
+      caption.className = "stage-caption status-error";
       caption.textContent = error ?? strings.errors.serverDown;
       return;
     }
@@ -1079,11 +1242,12 @@ async function showMapScreen(map, opts = {}) {
       // map whose geometry sits far from the origin, feed it straight into the server crash).
       clearTarget();
       pendingLevels = null;
-      caption.className = "status status-error";
+      caption.className = "stage-caption status-error";
       caption.textContent = strings.mapScreen.noFloorHere;
       renderTargetBox();
       return;
     }
+    caption.className = "stage-caption";
     caption.textContent = "";
     if (levels.length === 1) {
       applyTarget({ x: wx, y: wy, z: levels[0].z, label: levels[0].name ?? null });
@@ -1094,20 +1258,32 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
-  // Vs. "точка ±R", shows "область: N вершин" while the origin-area tool has anything drawn
-  // (`s6g_origin_area.md`: "строка статуса вместо «точка ±R» показывает «область: N вершин»").
+  // Refreshes the point-origin `.step-row` (coords + radius, with a clear button) and the area
+  // tool's vertex-count hint, then makes sure the right one of the two blocks is visible and the
+  // scope segmented reflects reality (mirrors the old dynamically-appearing "точка" `<option>`).
   function updateOriginStatus() {
-    if (!originStatusBox) {
-      return;
+    scopeSegRef?.setValue(currentScopeValue());
+    if (originPointBlock) {
+      originPointBlock.hidden = currentScopeValue() !== "point";
     }
-    if (solveState.originArea) {
-      originStatusBox.textContent = strings.solveParams.areaStatus(solveState.originArea.polygon.length);
-    } else if (areaDraftCount > 0) {
-      originStatusBox.textContent = strings.solveParams.areaStatus(areaDraftCount);
-    } else if (solveState.origin) {
-      originStatusBox.textContent = `${strings.solveParams.scopePoint}: ${solveState.origin.x.toFixed(0)}, ${solveState.origin.y.toFixed(0)} (±${solveState.origin.reach})`;
-    } else {
-      originStatusBox.textContent = "";
+    if (originAreaBlock) {
+      originAreaBlock.hidden = currentScopeValue() !== "area";
+    }
+    if (originStatusBox) {
+      originStatusBox.hidden = !solveState.origin;
+      if (solveState.origin) {
+        originStatusBox.querySelector(".step-row-text").textContent =
+          `${solveState.origin.x.toFixed(0)}, ${solveState.origin.y.toFixed(0)} · R=${solveState.origin.reach}`;
+      }
+    }
+    if (originAreaStatusBox) {
+      if (solveState.originArea) {
+        originAreaStatusBox.textContent = strings.solveParams.areaStatus(solveState.originArea.polygon.length);
+      } else if (areaDraftCount > 0) {
+        originAreaStatusBox.textContent = strings.solveParams.areaStatus(areaDraftCount);
+      } else {
+        originAreaStatusBox.textContent = "";
+      }
     }
   }
 
@@ -1158,7 +1334,6 @@ async function showMapScreen(map, opts = {}) {
     clearArea();
     updateAreaButtons();
     updateOriginStatus();
-    syncScopeSelect();
   }
 
   // Vs. "точка", shows "область: N вершин" while the target-area tool has anything drawn
@@ -1247,7 +1422,6 @@ async function showMapScreen(map, opts = {}) {
       if (isOrigin && solveState.origin) {
         solveState.origin = null;
         for (const v of views()) v.clearOrigin();
-        syncScopeSelect();
       }
       if (!isOrigin && solveState.target) {
         solveState.target = null;
@@ -1298,7 +1472,7 @@ async function showMapScreen(map, opts = {}) {
             updateSceneArea(key);
           }
           if (isOrigin) {
-            renderParamsBox();
+            renderOriginStep();
           } else {
             renderTargetBox();
           }
@@ -1439,7 +1613,7 @@ async function showMapScreen(map, opts = {}) {
     if (!clusters || clusters.length < 2) {
       return null;
     }
-    const row = el("div", { className: "field-row" }, el("span", { className: "hint", textContent: strings.solveParams.areaLevelsLabel }));
+    const row = el("div", { className: "chip-row" }, el("span", { className: "hint", textContent: strings.solveParams.areaLevelsLabel }));
     clusters.forEach((c, i) => {
       let label;
       if (clusters.length === 2) {
@@ -1463,95 +1637,82 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
-  function renderParamsBox() {
-    paramsContent.replaceChildren();
+  // ---- step 2: "Откуда бросать" -----------------------------------------------------------------
 
-    const grenadeOptions = [
-      ["smoke", strings.solveParams.grenadeSmoke, true],
-      ["flash", strings.solveParams.grenadeFlash, false],
-      ["he", strings.solveParams.grenadeHe, false],
-      ["molotov", strings.solveParams.grenadeMolotov, false],
-      ["decoy", strings.solveParams.grenadeDecoy, false],
-    ];
-    const grenadeRow = el("div", { className: "field-row", role: "radiogroup", "aria-label": strings.solveParams.grenadeLabel });
-    for (const [value, label, enabled] of grenadeOptions) {
-      const id = `grenade-${value}`;
-      const input = el("input", { type: "radio", name: "grenade", id, value, checked: value === "smoke", disabled: !enabled });
-      const text = enabled ? label : `${label} (${strings.solveParams.grenadeComingSoon})`;
-      grenadeRow.append(el("span", { className: "radio-item" }, input, el("label", { htmlFor: id, textContent: text })));
-    }
-    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.grenadeLabel }), grenadeRow);
-
-    const scopeSelect = el("select", { id: "scope-select" });
-    scopeSelect.append(
-      el("option", { value: "all", textContent: strings.solveParams.scopeAll }),
-      el("option", { value: "spawns", textContent: strings.solveParams.scopeSpawns }),
-    );
-    scopeSelectRef = scopeSelect;
-    syncScopeSelect();
-    scopeSelect.addEventListener("change", () => {
-      // The "point" option only ever exists while `solveState.origin` is set (`syncScopeSelect`
-      // adds/removes it) - picking any other option is how the placed origin gets removed.
-      solveState.params.scope = scopeSelect.value;
+  function onOriginScopeChange(v) {
+    originScopeUi = v;
+    if (v === "all" || v === "spawns") {
+      solveState.params.scope = v;
       if (solveState.origin) {
         solveState.origin = null;
-        for (const v of views()) v.clearOrigin();
-        syncScopeSelect();
+        for (const vv of views()) vv.clearOrigin();
       }
-      if (solveState.originArea) {
+      if (solveState.originArea || areaMode) {
         clearArea();
         updateAreaButtons();
       }
-      updateOriginStatus();
-    });
-    paramsContent.append(
-      el("label", { htmlFor: "scope-select", textContent: strings.solveParams.scopeLabel }),
-      scopeSelect,
-      el("p", { className: "hint", textContent: strings.solveParams.scopePoint }),
-    );
-
-    const originReachInput = el("input", { id: "origin-reach", type: "number", min: 16, max: 4000, value: solveState.params.originReach });
-    originReachInput.addEventListener("input", () => {
-      const v = parseFloat(originReachInput.value);
-      if (!Number.isFinite(v)) {
-        return;
+    } else if (v === "point") {
+      solveState.params.scope = "all";
+      if (solveState.originArea || areaMode) {
+        clearArea();
+        updateAreaButtons();
       }
+    } else if (v === "area") {
+      solveState.params.scope = "all";
+      if (solveState.origin) {
+        solveState.origin = null;
+        for (const vv of views()) vv.clearOrigin();
+      }
+    }
+    updateOriginStatus();
+  }
+
+  function renderOriginStep() {
+    originStepBody.replaceChildren();
+
+    scopeSegRef = segmented({
+      name: "origin-scope",
+      ariaLabel: strings.solveParams.scopeLabel,
+      value: currentScopeValue(),
+      options: [
+        { value: "all", label: strings.solveParams.scopeAll },
+        { value: "spawns", label: strings.solveParams.scopeSpawns },
+        { value: "point", label: strings.solveParams.scopePointSeg },
+        { value: "area", label: strings.solveParams.scopeAreaSeg },
+      ],
+      onChange: onOriginScopeChange,
+    });
+    originStepBody.append(scopeSegRef);
+
+    // ---- "точка": hint + radius slider + the placed point, with a clear button ----
+    const reachRange = el("input", { id: "origin-reach", type: "range", min: 16, max: 2000, step: 8, value: solveState.params.originReach });
+    const reachVal = el("span", { className: "hint", textContent: `${solveState.params.originReach} ед.` });
+    reachRange.addEventListener("input", () => {
+      const v = parseFloat(reachRange.value);
       solveState.params.originReach = v;
+      reachVal.textContent = `${v} ед.`;
       if (solveState.origin) {
         solveState.origin.reach = v;
-        for (const v2 of views()) v2.setOrigin(solveState.origin);
+        for (const vv of views()) vv.setOrigin(solveState.origin);
         updateOriginStatus();
       }
     });
-    paramsContent.append(
-      el("div", { className: "field-row" }, el("label", { htmlFor: "origin-reach", textContent: strings.solveParams.originReachLabel }), originReachInput),
-    );
-    originStatusBox = el("p", { className: "hint" });
-    paramsContent.append(originStatusBox);
-    updateOriginStatus();
-
-    // `s6j_pin_filter.md`: restrict the search to wall/corner-pinned stand spots.
-    const originPinSelect = el("select", { id: "origin-pin-select" });
-    originPinSelect.append(
-      el("option", { value: "", textContent: strings.solveParams.originPinAny }),
-      el("option", { value: "wall", textContent: strings.solveParams.originPinWallOrCorner }),
-      el("option", { value: "corner", textContent: strings.solveParams.originPinCornerOnly }),
-    );
-    originPinSelect.value = solveState.params.originPin ?? "";
-    originPinSelect.addEventListener("change", () => {
-      solveState.params.originPin = originPinSelect.value || null;
+    const clearOriginBtn = el("button", { type: "button", className: "icon-btn btn-ghost", innerHTML: icon("close", 14), "aria-label": strings.mapScreen.originRowClear });
+    clearOriginBtn.addEventListener("click", () => {
+      solveState.origin = null;
+      for (const vv of views()) vv.clearOrigin();
+      updateOriginStatus();
     });
-    paramsContent.append(
-      el(
-        "div",
-        { className: "field-row" },
-        el("label", { htmlFor: "origin-pin-select", textContent: strings.solveParams.originPinLabel }),
-        originPinSelect,
-      ),
+    originStatusBox = el("div", { className: "step-row", hidden: true }, el("span", { className: "step-row-text" }), clearOriginBtn);
+    originPointBlock = el(
+      "div",
+      {},
+      el("p", { className: "hint", textContent: strings.mapScreen.originHintPoint }),
+      el("div", { className: "field-row" }, el("label", { htmlFor: "origin-reach", textContent: strings.solveParams.originReachLabel }), reachRange, reachVal),
+      originStatusBox,
     );
 
-    // `s6g_origin_area.md`: draw/edit a polygon on the map restricting where a throw may
-    // originate from, instead of the point+radius above.
+    // ---- "область": draw/edit/delete + z range + floor chips ----
     const areaToggleBtn = el("button", { type: "button" });
     const areaDeleteBtn = el("button", { type: "button", textContent: strings.solveParams.areaDeleteButton, hidden: true });
     areaToggleBtnRef = areaToggleBtn;
@@ -1566,7 +1727,6 @@ async function showMapScreen(map, opts = {}) {
         // Starting to draw/edit an area is exclusive with a point origin (`s6g_origin_area.md`).
         solveState.origin = null;
         for (const v of views()) v.clearOrigin();
-        syncScopeSelect();
       }
       // Only one area tool drafts at a time (either view) - activating this one silently
       // deactivated the target-area tool too, so its own local flag/button/status must follow
@@ -1604,8 +1764,11 @@ async function showMapScreen(map, opts = {}) {
       solveState.params.areaZMax = zMax;
       updateSceneArea("origin");
     });
-    paramsContent.append(
-      el("p", { textContent: strings.solveParams.areaLabel }),
+    originAreaStatusBox = el("p", { className: "hint" });
+    originAreaBlock = el(
+      "div",
+      {},
+      el("p", { className: "hint", textContent: strings.mapScreen.targetHintArea }),
       el("p", { className: "hint", textContent: strings.solveParams.areaHint }),
       el("div", { className: "field-row" }, areaToggleBtn, areaDeleteBtn),
       el(
@@ -1616,82 +1779,37 @@ async function showMapScreen(map, opts = {}) {
         el("label", { htmlFor: "area-zmax", textContent: strings.solveParams.areaZMaxLabel }),
         areaZMaxInput,
       ),
+      areaLevelButtons,
+      el("p", { className: "hint", textContent: strings.solveParams.areaZHint }),
+      originAreaStatusBox,
     );
-    if (areaLevelButtons) {
-      paramsContent.append(areaLevelButtons);
-    }
-    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.areaZHint }));
+
+    originStepBody.append(originPointBlock, originAreaBlock);
+
+    // ---- "Упор": any / wall-or-corner / corner-only ----
+    const pinSeg = segmented({
+      name: "origin-pin",
+      ariaLabel: strings.solveParams.originPinLabel,
+      value: solveState.params.originPin ?? "",
+      options: [
+        { value: "", label: strings.solveParams.originPinAny },
+        { value: "wall", label: strings.solveParams.originPinWallOrCorner },
+        { value: "corner", label: strings.solveParams.originPinCornerOnly },
+      ],
+      onChange: (v) => {
+        solveState.params.originPin = v || null;
+      },
+    });
+    originStepBody.append(
+      el("p", { className: "hint", textContent: strings.solveParams.originPinLabel }),
+      pinSeg,
+    );
+
     updateAreaButtons();
-
-    const tolInput = el("input", { id: "tolerance-input", type: "number", min: 1, max: 512, value: solveState.params.tolerance });
-    tolInput.addEventListener("input", () => {
-      const v = parseFloat(tolInput.value);
-      if (Number.isFinite(v)) {
-        solveState.params.tolerance = v;
-      }
-    });
-    paramsContent.append(
-      el("div", { className: "field-row" }, el("label", { htmlFor: "tolerance-input", textContent: strings.solveParams.toleranceLabel }), tolInput),
-    );
-
-    const stabInput = el("input", { id: "stability-input", type: "number", min: 0.05, max: 1, step: 0.05, value: solveState.params.minStability });
-    stabInput.addEventListener("input", () => {
-      const v = parseFloat(stabInput.value);
-      if (Number.isFinite(v)) {
-        solveState.params.minStability = v;
-      }
-    });
-    paramsContent.append(
-      el("div", { className: "field-row" }, el("label", { htmlFor: "stability-input", textContent: strings.solveParams.minStabilityLabel }), stabInput),
-    );
-
-    const fineCb = el("input", { type: "checkbox", id: "fine-scan", checked: solveState.params.fineScan });
-    fineCb.addEventListener("change", () => {
-      solveState.params.fineScan = fineCb.checked;
-    });
-    paramsContent.append(el("label", { htmlFor: "fine-scan" }, fineCb, ` ${strings.solveParams.fineScanLabel}`));
-
-    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.typesLabel }));
-    const typesRow = el("div", { className: "field-row" });
-    for (const t of ALL_TYPES) {
-      const id = `type-${t}`;
-      const cb = el("input", { type: "checkbox", id, checked: solveState.params.types.includes(t) });
-      cb.addEventListener("change", () => toggleInArray(solveState.params.types, t, cb.checked));
-      typesRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: id, textContent: TYPE_LABELS[t] })));
-    }
-    paramsContent.append(typesRow);
-
-    paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.strengthsLabel }));
-    const strengthsRow = el("div", { className: "field-row" });
-    const strengthDefs = [
-      [1, strings.solveParams.strength1],
-      [0.5, strings.solveParams.strengthHalf],
-      [0, strings.solveParams.strength0],
-    ];
-    for (const [val, label] of strengthDefs) {
-      const id = `strength-${val}`;
-      const cb = el("input", { type: "checkbox", id, checked: solveState.params.strengths.includes(val) });
-      cb.addEventListener("change", () => toggleInArray(solveState.params.strengths, val, cb.checked));
-      strengthsRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: id, textContent: label })));
-    }
-    paramsContent.append(strengthsRow);
-
-    if (mapSummary.hasGlass || mapSummary.hasDoors) {
-      paramsContent.append(el("p", { className: "hint", textContent: strings.solveParams.brokenLabel }));
-      const brokenRow = el("div", { className: "field-row" });
-      if (mapSummary.hasGlass) {
-        const cb = el("input", { type: "checkbox", id: "broken-glass", checked: solveState.params.broken.includes("glass") });
-        cb.addEventListener("change", () => toggleInArray(solveState.params.broken, "glass", cb.checked));
-        brokenRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: "broken-glass", textContent: strings.solveParams.brokenGlass })));
-      }
-      if (mapSummary.hasDoors) {
-        const cb = el("input", { type: "checkbox", id: "broken-doors", checked: solveState.params.broken.includes("doors") });
-        cb.addEventListener("change", () => toggleInArray(solveState.params.broken, "doors", cb.checked));
-        brokenRow.append(el("span", { className: "checkbox-item" }, cb, el("label", { htmlFor: "broken-doors", textContent: strings.solveParams.brokenDoors })));
-      }
-      paramsContent.append(brokenRow);
-    }
+    updateOriginStatus();
   }
+
+  // ---- step 1: "Куда бросить" --------------------------------------------------------------------
 
   // `s6g2_target_area.md`: switches between a point target (as before) and an area target - the
   // two are mutually exclusive.
@@ -1711,17 +1829,11 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function renderTargetBox() {
-    targetBox.replaceChildren();
-    targetBox.append(el("h2", { textContent: strings.mapScreen.targetLabel }));
-
-    const modeRow = el("div", { className: "field-row", role: "radiogroup", "aria-label": strings.mapScreen.targetModeLabel });
-    for (const [value, label] of [["point", strings.mapScreen.targetModePoint], ["area", strings.mapScreen.targetModeArea]]) {
-      const id = `target-mode-${value}`;
-      const input = el("input", { type: "radio", name: "target-mode", id, value, checked: solveState.targetMode === value });
-      input.addEventListener("change", () => setTargetMode(value));
-      modeRow.append(el("span", { className: "radio-item" }, input, el("label", { htmlFor: id, textContent: label })));
-    }
-    targetBox.append(modeRow);
+    // Keeps the "Точка | Область" segmented in sync with `solveState.targetMode` - without this
+    // it never updated after the initial render (round-2 review finding 9), e.g. a deep link that
+    // opens straight into area mode still showed "Точка" selected.
+    targetModeSeg.setValue(solveState.targetMode);
+    targetStepBody.replaceChildren();
 
     if (solveState.targetMode === "area") {
       renderTargetAreaControls();
@@ -1730,21 +1842,43 @@ async function showMapScreen(map, opts = {}) {
 
     if (solveState.target) {
       const t = solveState.target;
-      const label = t.label ? ` (${t.label})` : "";
-      // Coordinator follow-up to `s6k_draw_in_3d.md`: "<место>, z <округлённо>" (or just "z ..."
-      // with no place) right next to the raw coordinates, so a 3D click that landed somewhere
-      // unexpected (e.g. through a window, on the floor below) is obvious at a glance.
-      const zText = `z ${Math.round(t.z)}`;
-      const placeText = t.label ? `${t.label}, ${zText}` : zText;
-      targetBox.append(el("p", { textContent: `${t.x.toFixed(0)}, ${t.y.toFixed(0)}, ${t.z.toFixed(0)}${label} - ${placeText}` }));
+      const rowText = `${t.label ?? "Точка"} · ${strings.mapScreen.targetRowZ(Math.round(t.z))}`;
+      const clearBtn = el("button", { type: "button", className: "icon-btn btn-ghost", innerHTML: icon("close", 14), "aria-label": strings.mapScreen.targetRowClear });
+      clearBtn.addEventListener("click", () => {
+        clearTarget();
+        renderTargetBox();
+      });
+      targetStepBody.append(el("div", { className: "step-row" }, el("span", { className: "step-row-text", title: `${t.x.toFixed(0)}, ${t.y.toFixed(0)}, ${t.z.toFixed(0)}`, textContent: rowText }), clearBtn));
     } else {
-      targetBox.append(el("p", { className: "hint", textContent: strings.mapScreen.targetNone }));
+      targetStepBody.append(el("p", { className: "hint", textContent: strings.mapScreen.targetHintPoint }));
     }
-    targetBox.append(el("p", { className: "hint", textContent: strings.mapScreen.targetHint }));
 
+    if (pendingLevels) {
+      const chooser = el("div", { className: "level-chooser" });
+      chooser.append(el("p", { className: "hint", textContent: strings.mapScreen.levelsHeading }));
+      for (const lvl of pendingLevels.levels) {
+        const btn = el("button", {
+          type: "button",
+          textContent: `${lvl.name ?? strings.mapScreen.levelUnnamed} (z=${lvl.z.toFixed(0)})`,
+        });
+        btn.addEventListener("click", () => {
+          applyTarget({ x: pendingLevels.x, y: pendingLevels.y, z: lvl.z, label: lvl.name });
+        });
+        chooser.append(btn);
+      }
+      targetStepBody.append(chooser);
+    }
+
+    // A rarely-needed affordance (paste a console `setpos` line) - tucked behind a small toggle so
+    // it doesn't compete with the map-click flow that covers the common case.
+    const manualToggleBtn = el("button", { type: "button", className: "btn-ghost", textContent: strings.mapScreen.manualToggle });
     const manualInput = el("input", { id: "manual-setpos", type: "text", placeholder: strings.mapScreen.manualPlaceholder });
     const manualBtn = el("button", { type: "button", textContent: strings.mapScreen.manualButton });
     const manualStatus = el("p", { className: "status" });
+    const manualRow = el("div", { hidden: true }, el("div", { className: "field-row" }, manualInput, manualBtn), manualStatus);
+    manualToggleBtn.addEventListener("click", () => {
+      manualRow.hidden = !manualRow.hidden;
+    });
     manualBtn.addEventListener("click", () => {
       const parsed = parseSetpos(manualInput.value);
       if (!parsed) {
@@ -1756,31 +1890,11 @@ async function showMapScreen(map, opts = {}) {
       manualStatus.textContent = "";
       applyTarget({ x: parsed.x, y: parsed.y, z: parsed.z, label: null });
     });
-    targetBox.append(
-      el("label", { htmlFor: "manual-setpos", textContent: strings.mapScreen.manualLabel }),
-      el("div", { className: "field-row" }, manualInput, manualBtn),
-      manualStatus,
-    );
-
-    if (pendingLevels) {
-      const chooser = el("div", { className: "level-chooser" });
-      chooser.append(el("p", { textContent: strings.mapScreen.levelsHeading }));
-      for (const lvl of pendingLevels.levels) {
-        const btn = el("button", {
-          type: "button",
-          textContent: `${lvl.name ?? strings.mapScreen.levelUnnamed} (z=${lvl.z.toFixed(0)})`,
-        });
-        btn.addEventListener("click", () => {
-          applyTarget({ x: pendingLevels.x, y: pendingLevels.y, z: lvl.z, label: lvl.name });
-        });
-        chooser.append(btn);
-      }
-      targetBox.append(chooser);
-    }
+    targetStepBody.append(manualToggleBtn, manualRow);
   }
 
   // The target-area tool's own controls (draw/edit/delete, z range, status) - same shape as the
-  // origin area's block in `renderParamsBox`, just targeting `mapView`'s `"target"` area key.
+  // origin area's block in `renderOriginStep`, just targeting `mapView`'s `"target"` area key.
   function renderTargetAreaControls() {
     const toggleBtn = el("button", { type: "button" });
     const deleteBtn = el("button", { type: "button", textContent: strings.solveParams.areaDeleteButton, hidden: true });
@@ -1824,7 +1938,8 @@ async function showMapScreen(map, opts = {}) {
       solveState.params.targetAreaZMax = zMax;
       updateSceneArea("target");
     });
-    targetBox.append(
+    targetStepBody.append(
+      el("p", { className: "hint", textContent: strings.mapScreen.targetHintArea }),
       el("p", { className: "hint", textContent: strings.solveParams.targetAreaHint }),
       el("div", { className: "field-row" }, toggleBtn, deleteBtn),
       el(
@@ -1837,20 +1952,142 @@ async function showMapScreen(map, opts = {}) {
       ),
     );
     if (targetAreaLevelButtons) {
-      targetBox.append(targetAreaLevelButtons);
+      targetStepBody.append(targetAreaLevelButtons);
     }
-    targetBox.append(el("p", { className: "hint", textContent: strings.solveParams.areaZHint }));
     targetStatusBox = el("p", { className: "hint" });
-    targetBox.append(targetStatusBox);
+    targetStepBody.append(el("p", { className: "hint", textContent: strings.solveParams.areaZHint }), targetStatusBox);
     updateTargetAreaButtons();
     updateTargetStatus();
   }
 
+  // ---- step 3: "Граната и бросок" ----------------------------------------------------------------
+
+  function renderThrowStep() {
+    throwStepBody.replaceChildren();
+
+    // A single active "Смок" chip + a muted line for what's coming - not four big disabled chips
+    // for grenades that don't exist yet (round-2 design critique 4).
+    const smokeId = "grenade-smoke";
+    const grenadeRow = el(
+      "div",
+      { className: "chip-row", role: "radiogroup", "aria-label": strings.solveParams.grenadeLabel },
+      el("input", { type: "radio", name: "grenade", id: smokeId, value: "smoke", checked: true, className: "chip-input" }),
+      el("label", { htmlFor: smokeId, className: "chip", textContent: strings.solveParams.grenadeSmoke }),
+    );
+    throwStepBody.append(
+      el("p", { className: "hint", textContent: strings.solveParams.grenadeLabel }),
+      grenadeRow,
+      el("p", { className: "hint", textContent: strings.solveParams.grenadeOthersSoon }),
+    );
+
+    const typesRow = el("div", { className: "chip-row" });
+    for (const t of ALL_TYPES) {
+      typesRow.append(
+        chip({
+          id: `type-${t}`,
+          label: TYPE_LABELS[t],
+          iconName: THROW_TYPE_ICON[t],
+          checked: solveState.params.types.includes(t),
+          onChange: (checked) => toggleInArray(solveState.params.types, t, checked),
+        }),
+      );
+    }
+    throwStepBody.append(el("p", { className: "hint", textContent: strings.solveParams.typesLabel }), typesRow);
+
+    const strengthsRow = el("div", { className: "chip-row" });
+    const strengthDefs = [
+      [1, strings.solveParams.strength1],
+      [0.5, strings.solveParams.strengthHalf],
+      [0, strings.solveParams.strength0],
+    ];
+    for (const [val, label] of strengthDefs) {
+      strengthsRow.append(
+        chip({
+          id: `strength-${val}`,
+          label,
+          checked: solveState.params.strengths.includes(val),
+          onChange: (checked) => toggleInArray(solveState.params.strengths, val, checked),
+        }),
+      );
+    }
+    throwStepBody.append(el("p", { className: "hint", textContent: strings.solveParams.strengthsLabel }), strengthsRow);
+  }
+
+  // ---- "Дополнительно": допуск, мин. стабильность, подробный поиск, разрушения -------------------
+
+  function renderAdvanced() {
+    advancedContent.replaceChildren();
+
+    const tolInput = el("input", { id: "tolerance-input", type: "number", min: 1, max: 512, value: solveState.params.tolerance });
+    tolInput.addEventListener("input", () => {
+      const v = parseFloat(tolInput.value);
+      if (Number.isFinite(v)) {
+        solveState.params.tolerance = v;
+      }
+    });
+    advancedContent.append(
+      el("div", { className: "field-row" }, el("label", { htmlFor: "tolerance-input", textContent: strings.solveParams.toleranceLabel }), tolInput),
+    );
+
+    const stabInput = el("input", { id: "stability-input", type: "number", min: 0.05, max: 1, step: 0.05, value: solveState.params.minStability });
+    stabInput.addEventListener("input", () => {
+      const v = parseFloat(stabInput.value);
+      if (Number.isFinite(v)) {
+        solveState.params.minStability = v;
+      }
+    });
+    advancedContent.append(
+      el("div", { className: "field-row" }, el("label", { htmlFor: "stability-input", textContent: strings.solveParams.minStabilityLabel }), stabInput),
+    );
+
+    advancedContent.append(
+      chip({
+        id: "fine-scan",
+        label: strings.solveParams.fineScanLabel,
+        checked: solveState.params.fineScan,
+        onChange: (checked) => {
+          solveState.params.fineScan = checked;
+        },
+      }),
+    );
+
+    if (mapSummary.hasGlass || mapSummary.hasDoors) {
+      const brokenRow = el("div", { className: "chip-row" });
+      if (mapSummary.hasGlass) {
+        brokenRow.append(
+          chip({
+            id: "broken-glass",
+            label: strings.solveParams.brokenGlass,
+            checked: solveState.params.broken.includes("glass"),
+            onChange: (checked) => toggleInArray(solveState.params.broken, "glass", checked),
+          }),
+        );
+      }
+      if (mapSummary.hasDoors) {
+        brokenRow.append(
+          chip({
+            id: "broken-doors",
+            label: strings.solveParams.brokenDoors,
+            checked: solveState.params.broken.includes("doors"),
+            onChange: (checked) => toggleInArray(solveState.params.broken, "doors", checked),
+          }),
+        );
+      }
+      advancedContent.append(el("p", { className: "hint", textContent: strings.solveParams.brokenLabel }), brokenRow);
+    }
+  }
+
+  // ---- run button / progress ---------------------------------------------------------------------
+
   function paintProgress(refs, lastPhase, startedAt, checkedTotal, verifiedTotal) {
     const elapsed = (Date.now() - startedAt) / 1000;
     const label = strings.solve.phases[lastPhase] ?? lastPhase;
-    refs.status.className = "status";
-    refs.status.textContent = `${label} - ${strings.solve.elapsed(elapsed)} - ${strings.solve.checkedCount(checkedTotal)}, ${strings.solve.verifiedCount(verifiedTotal)}`;
+    refs.progressText.textContent = `${label} - ${strings.solve.elapsed(elapsed)} - ${strings.solve.checkedCount(checkedTotal)}, ${strings.solve.verifiedCount(verifiedTotal)}`;
+  }
+
+  function setRunning(running) {
+    runRefs.runBtn.hidden = running;
+    runRefs.progressWrap.hidden = !running;
   }
 
   function applyResult(data, cameFromCache, broken) {
@@ -1874,32 +2111,39 @@ async function showMapScreen(map, opts = {}) {
     // BLUE-19: use the server's own settled target (it can differ from the clicked point by a
     // few units), not `solveState.target`.
     const settledTarget = data.target ? { x: data.target[0], y: data.target[1], z: data.target[2] } : solveState.target;
-    panel.setResult(lineups, settledTarget);
+    // The results column shows its own empty state (with the server's own reason, translated -
+    // round-3 review finding 7: the server's `emptyReason` is English prose, never shown raw)
+    // when there is nothing to list (round-2 review finding 10) - `panel.setResult` needs it too.
+    const emptyReasonRu = strings.solve.translateEmptyReason(data.emptyReason);
+    panel.setResult(lineups, settledTarget, emptyReasonRu);
     const cachedNote = cameFromCache ? `${strings.solve.cachedResult} ` : "";
     if (lineups.length === 0) {
-      runRefs.status.className = "status";
-      runRefs.status.textContent = `${cachedNote}${data.emptyReason ?? ""} ${strings.solve.emptyHint}`.trim();
+      runRefs.idleStatus.className = "status";
+      runRefs.idleStatus.textContent = `${cachedNote}${emptyReasonRu} ${strings.solve.emptyHint}`.trim();
     } else {
-      runRefs.status.className = "status status-ok";
-      runRefs.status.textContent = `${cachedNote}${strings.panel.count(lineups.length)}`.trim();
+      runRefs.idleStatus.className = "status status-ok";
+      runRefs.idleStatus.textContent = `${cachedNote}${strings.solve.verifiedCount(lineups.length)}`.trim();
+      // Below 1280px, jump to the results tab only once there's actually something to show there
+      // (round-2 review finding 10) - zero results is better read next to the run button/status.
+      tabsSeg.setValue("results");
+      stepsCol.classList.add("tab-hidden");
+      resultsCol.classList.remove("tab-hidden");
+      resultsCol.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
-    // RED-1: scroll the results into view - after a long solve the sidebar may still be
-    // showing the run box (or an empty results box) from before the page had anything to show.
-    panelBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function startSolve(bodyOverride) {
     if (!solveState.target && !solveState.targetArea) {
-      runRefs.status.className = "status status-error";
-      runRefs.status.textContent = strings.solve.needTarget;
+      runRefs.idleStatus.className = "status status-error";
+      runRefs.idleStatus.textContent = strings.solve.needTarget;
       return;
     }
     // AMBER-9: an empty types/strengths selection is indistinguishable, once serialised, from
     // "use every default" - the server would then silently solve with all of them.
     const selErr = selectionError(solveState.params);
     if (selErr) {
-      runRefs.status.className = "status status-error";
-      runRefs.status.textContent = selErr === "types" ? strings.solve.needTypes : strings.solve.needStrengths;
+      runRefs.idleStatus.className = "status status-error";
+      runRefs.idleStatus.textContent = selErr === "types" ? strings.solve.needTypes : strings.solve.needStrengths;
       return;
     }
     if (solveState.running) {
@@ -1914,10 +2158,9 @@ async function showMapScreen(map, opts = {}) {
       v.setSelected(null);
     }
     panel.clear();
-    runRefs.runBtn.disabled = true;
-    runRefs.cancelBtn.hidden = false;
-    runRefs.status.className = "status";
-    runRefs.status.textContent = strings.solve.phases.queued;
+    setRunning(true);
+    runRefs.idleStatus.textContent = "";
+    runRefs.progressText.textContent = strings.solve.phases.queued;
 
     const originAreaForQuery = solveState.originArea
       ? { polygon: solveState.originArea.polygon, zMin: solveState.params.areaZMin, zMax: solveState.params.areaZMax }
@@ -1943,8 +2186,7 @@ async function showMapScreen(map, opts = {}) {
       clearInterval(timer);
       solveState.running = false;
       solveState.controller = null;
-      runRefs.runBtn.disabled = false;
-      runRefs.cancelBtn.hidden = true;
+      setRunning(false);
     }
 
     solveState.controller = runSolve(body, {
@@ -1975,26 +2217,30 @@ async function showMapScreen(map, opts = {}) {
       },
       onError: (message) => {
         finish();
-        runRefs.status.className = "status status-error";
-        runRefs.status.textContent = message ?? strings.errors.serverDown;
+        runRefs.idleStatus.className = "status status-error";
+        runRefs.idleStatus.textContent = message ?? strings.errors.serverDown;
       },
       onCancelled: () => {
         finish();
-        runRefs.status.className = "status";
-        runRefs.status.textContent = "";
+        runRefs.idleStatus.className = "status";
+        runRefs.idleStatus.textContent = "";
       },
     });
   }
 
   function renderRunBox() {
-    runBox.replaceChildren();
-    const runBtn = el("button", { type: "button", className: "primary", textContent: strings.solve.runButton });
-    const cancelBtn = el("button", { type: "button", textContent: strings.solve.cancelButton, hidden: true });
-    const status = el("p", { className: "status", role: "status" });
+    runCardBody.replaceChildren();
+    const runBtn = el("button", { type: "button", className: "primary btn-block", textContent: strings.solve.runButton });
+    const cancelBtn = el("button", { type: "button", className: "btn-block", textContent: strings.solve.cancelButton });
+    const progressText = el("p", { className: "status", role: "status" });
+    const progressBarSpan = el("span");
+    const progressBar = el("div", { className: "progress-bar indeterminate" }, progressBarSpan);
+    const progressWrap = el("div", { hidden: true }, progressBar, progressText, cancelBtn);
+    const idleStatus = el("p", { className: "status", role: "status" });
     runBtn.addEventListener("click", () => startSolve());
     cancelBtn.addEventListener("click", () => solveState.controller?.cancel());
-    runBox.append(el("div", { className: "field-row" }, runBtn, cancelBtn), status);
-    runRefs = { runBtn, cancelBtn, status };
+    runCardBody.append(runBtn, progressWrap, idleStatus);
+    runRefs = { runBtn, cancelBtn, progressWrap, progressText, idleStatus };
   }
 
   function applyAutoBody(body) {
@@ -2014,6 +2260,7 @@ async function showMapScreen(map, opts = {}) {
     if (body.origin) {
       solveState.origin = { x: body.origin[0], y: body.origin[1], reach: body.originReach ?? 300 };
       for (const v of views()) v.setOrigin(solveState.origin);
+      originScopeUi = "point";
     } else if (body.originArea) {
       solveState.originArea = { polygon: body.originArea };
       mapView.setArea("origin", body.originArea);
@@ -2023,9 +2270,11 @@ async function showMapScreen(map, opts = {}) {
       if (body.zMax != null) {
         solveState.params.areaZMax = body.zMax;
       }
+      originScopeUi = "area";
     }
     if (body.scope) {
       solveState.params.scope = body.scope;
+      originScopeUi = body.scope;
     }
     if (body.tolerance != null) {
       solveState.params.tolerance = body.tolerance;
@@ -2070,6 +2319,9 @@ async function showMapScreen(map, opts = {}) {
     sceneView.onLoadDone(() => {
       view3dStatus.textContent = strings.view3d.flyHint;
       syncView3dHint();
+      // Any gallery still showing "unavailable" gets a fresh try now that the model is actually
+      // loaded (round-2 review finding 6).
+      panel.retryPreviews();
     });
     sceneView.onLoadError((msg) => {
       view3dStatus.className = "hint status-error";
@@ -2165,7 +2417,7 @@ async function showMapScreen(map, opts = {}) {
         Object.assign(mapSummary, fresh);
       }
     }
-    if (!viewToolbar.isConnected) {
+    if (!screen.isConnected) {
       // This map screen was left while the job ran - never touch its views (a hidden scene on a
       // detached container, and radarView reset for whatever screen is open now). Re-render the
       // list if the user is on it, the same way the list's own flows settle.
@@ -2180,6 +2432,125 @@ async function showMapScreen(map, opts = {}) {
     }
   }
 
+  // ---- `s6p_map_art.md` official radar overlay (round-2 design critique 8) -----------------------
+  // A parallel task adds `GET /api/overview`/`GET /api/mapart` to the server - both are fetched
+  // defensively (a 404/failed `fetchOverview` just leaves `officialSections` empty, so every
+  // control here stays hidden and `mapView`'s rendering is exactly what it always was).
+  let officialOverview = null;
+  let officialSections = [];
+  let activeSectionName = null;
+  let schemeOn = false;
+  const sectionImageCache = new Map(); // section.radar -> loaded Image
+
+  function sectionForZ(z) {
+    if (officialSections.length === 0) {
+      return null;
+    }
+    if (z != null) {
+      const hit = officialSections.find((s) => z >= s.altitudeMin && z <= s.altitudeMax);
+      if (hit) {
+        return hit;
+      }
+    }
+    return officialSections[0];
+  }
+
+  function loadSectionImage(section) {
+    return new Promise((resolve) => {
+      const cached = sectionImageCache.get(section.radar);
+      if (cached) {
+        resolve(cached);
+        return;
+      }
+      const img2 = new Image();
+      img2.onload = () => {
+        sectionImageCache.set(section.radar, img2);
+        resolve(img2);
+      };
+      img2.onerror = () => resolve(null);
+      img2.src = mapArtUrl(map, "radar", section.radar);
+    });
+  }
+
+  function renderSectionSwitcher() {
+    sectionRow.replaceChildren();
+    if (officialSections.length < 2) {
+      sectionRow.hidden = true;
+      return;
+    }
+    sectionRow.hidden = viewMode !== "2d";
+    for (const s of officialSections) {
+      const label = { default: strings.mapScreen.sectionDefault, lower: strings.mapScreen.sectionLower, upper: strings.mapScreen.sectionUpper }[s.name]
+        ?? (s.name.charAt(0).toUpperCase() + s.name.slice(1));
+      const btn = el("button", { type: "button", className: s.name === activeSectionName ? "primary" : "", textContent: label });
+      btn.addEventListener("click", () => applyOfficialSection(s));
+      sectionRow.append(btn);
+    }
+  }
+
+  async function applyOfficialSection(section) {
+    if (section.name === activeSectionName) {
+      return;
+    }
+    activeSectionName = section.name;
+    renderSectionSwitcher();
+    const image = await loadSectionImage(section);
+    // A second call (e.g. the target moved to another floor again) may have already changed
+    // `activeSectionName` while this one's image was still loading - applying this now-stale
+    // image would flash the wrong section back in behind the newer one (round-3 review finding 6).
+    if (section.name !== activeSectionName) {
+      return;
+    }
+    if (!mapView) {
+      return; // screen left while the image was loading
+    }
+    if (!image) {
+      mapView.setOfficialLayer(null);
+      return;
+    }
+    mapView.setOfficialLayer({ image, posX: officialOverview.posX, posY: officialOverview.posY, scale: officialOverview.scale });
+    mapView.setShowScheme(schemeOn);
+    syncSchemeControls();
+  }
+
+  // Auto-picks the section from the target's own z (round-2 design critique 8) - a live hover-z
+  // pick would need `map2d.js` to report pointer moves in world space, which it doesn't expose
+  // today; re-picking on every target change covers the common case (aiming a search at a level)
+  // without that extra plumbing.
+  function updateOfficialSectionForTarget() {
+    if (officialSections.length === 0) {
+      return;
+    }
+    const z = solveState.target?.z ?? null;
+    const section = sectionForZ(z);
+    if (section) {
+      applyOfficialSection(section);
+    }
+  }
+
+  function syncSchemeControls() {
+    const has = !!mapView?.hasOfficialLayer();
+    schemeBtn.hidden = viewMode !== "2d" || !has;
+    schemeBtn.className = schemeOn ? "primary" : "";
+    sectionRow.hidden = viewMode !== "2d" || officialSections.length < 2;
+  }
+
+  schemeBtn.addEventListener("click", () => {
+    schemeOn = !schemeOn;
+    mapView?.setShowScheme(schemeOn);
+    syncSchemeControls();
+  });
+
+  async function initOfficialArt() {
+    const { data, error } = await fetchOverview(map);
+    if (error !== undefined || !data || !Array.isArray(data.sections) || data.sections.length === 0) {
+      return; // No official art for this map (or the endpoint doesn't exist yet) - unchanged rendering.
+    }
+    officialOverview = data;
+    officialSections = data.sections;
+    await updateOfficialSectionForTarget();
+  }
+
   function switchViewMode(mode) {
     if (viewMode === mode) {
       return;
@@ -2189,6 +2560,7 @@ async function showMapScreen(map, opts = {}) {
       view3dStatus.textContent = mapSummary.hasRender ? strings.view3d.renderOutdated : strings.view3d.noRender;
       render3dBlocked = true;
       syncPrepare3dButton();
+      viewModeSeg.setValue("2d");
       return;
     }
     render3dBlocked = false;
@@ -2199,6 +2571,7 @@ async function showMapScreen(map, opts = {}) {
     const armedKey = areaMode ? "origin" : targetAreaMode ? "target" : null;
     const hadDraft = armedKey === "origin" ? areaDraftOpen : armedKey === "target" ? targetAreaDraftOpen : false;
     viewMode = mode;
+    viewModeSeg.setValue(mode);
     if (mode === "3d") {
       // Unhide *before* creating/resizing the scene view - `threeContainer.getBoundingClientRect()`
       // reads 0x0 while `hidden` (`display: none`), and nothing else is guaranteed to correct that
@@ -2207,23 +2580,30 @@ async function showMapScreen(map, opts = {}) {
       threeContainer.hidden = false;
       const view = ensureSceneView();
       view.resize();
+      // Covers the case `onLoadDone` won't fire again for - a scene that was already loaded from
+      // an earlier visit to 3D (round-2 review finding 6).
+      panel.retryPreviews();
       radarView = null; // theme toggle no-ops while 3D is shown, same as off the map screen
-      toggle3dBtn.className = "primary";
-      toggle2dBtn.className = "";
       collisionsBtn.hidden = false;
       cameraModeBtn.hidden = false;
       lightingBtn.hidden = !view.isLightingSupported();
+      schemeBtn.hidden = true;
+      sectionRow.hidden = true;
       view3dStatus.className = "hint";
       view3dStatus.textContent = strings.view3d.flyHint;
     } else {
       canvas.hidden = false;
       threeContainer.hidden = true;
       radarView = mapView;
-      toggle2dBtn.className = "primary";
-      toggle3dBtn.className = "";
+      // Theme toggles while in 3D are a no-op for the 2D canvas (`radarView` is `null` then) - it
+      // can be stale by the time 2D is shown again, so recolor unconditionally here (cheap, and a
+      // no-op recompute when nothing actually changed) rather than only on the toggle itself
+      // (round-2 polish pass).
+      mapView?.recolor(state.theme);
       collisionsBtn.hidden = true;
       cameraModeBtn.hidden = true;
       lightingBtn.hidden = true;
+      syncSchemeControls();
       view3dStatus.className = "hint";
       view3dStatus.textContent = "";
     }
@@ -2232,14 +2612,12 @@ async function showMapScreen(map, opts = {}) {
       for (const v of views()) v.setAreaMode(armedKey, v === active);
       syncView3dHint();
       if (hadDraft) {
-        caption.className = "hint";
+        caption.className = "stage-caption";
         caption.textContent = strings.view3d.areaDraftDiscarded;
       }
     }
     syncPrepare3dButton();
   }
-  toggle2dBtn.addEventListener("click", () => switchViewMode("2d"));
-  toggle3dBtn.addEventListener("click", () => switchViewMode("3d"));
 
   lightingBtn.addEventListener("click", () => {
     if (!sceneView) {
@@ -2278,12 +2656,15 @@ async function showMapScreen(map, opts = {}) {
   }
 
   function renderFpvOverlay(info) {
+    // Built from `info.type`/`info.click` (structured fields), never the server's own English
+    // `info.how` (round-2 review finding 5).
+    const label = `${TYPE_LABELS[info.type] ?? strings.panel.typeUnknown} · ${CLICK_LABELS[info.click] ?? strings.panel.clickUnknown}`;
     fpvOverlay.replaceChildren(
       el("div", { className: "fpv-crosshair", "aria-hidden": "true" }),
       el(
         "div",
         { className: "fpv-label" },
-        el("div", { textContent: `${info.how} - ${info.click}` }),
+        el("div", { textContent: label }),
         el("p", { className: "hint", textContent: strings.fpv.exitHint }),
       ),
       el(
@@ -2312,6 +2693,43 @@ async function showMapScreen(map, opts = {}) {
     document.addEventListener("keydown", onFpvKeydown);
   }
 
+  // Previews (S6n's `sceneView.capturePreview`, called by `panel.js`'s lineup card gallery) -
+  // feature-detected since the method may not exist yet, and treated the same way whether it's
+  // absent or resolves `null` (panel.js shows a placeholder + "Показать прицел в 3D" either way).
+  async function requestPreview(l, kind) {
+    if (typeof sceneView?.capturePreview !== "function") {
+      return null;
+    }
+    // `ensureLoaded()` (S6n) waits for render.glb + game lighting + the collision mesh, so the
+    // very first capture after switching to 3D doesn't race `capturePreview`'s own "not loaded
+    // yet -> null" return - a `null` this early would otherwise get read as "capturePreview isn't
+    // really available" and never retried until `onLoadDone`/a 3D switch fires again.
+    const ready = await sceneView.ensureLoaded();
+    if (!ready) {
+      return null;
+    }
+    // A lineup's own JSON never carries `trajectory` - only "land" needs the flight arc (the aim/
+    // stand previews are a static pose), so it's fetched here, same call `scene3d.js`'s own
+    // selected-lineup arc already makes (round-2 review finding 7).
+    let trajectory;
+    if (kind === "land") {
+      const { data: traj } = await fetchTrajectory(map, {
+        x: l.feet[0], y: l.feet[1], z: l.feet[2], type: l.type, pitch: l.pitch, yaw: l.yaw,
+        strength: l.strength, runDeg: l.runDeg, broken: l.broken,
+      });
+      trajectory = traj?.points;
+    }
+    try {
+      const blob = await sceneView.capturePreview({
+        kind, feet: l.feet, pitch: l.pitch, yaw: l.yaw, type: l.type, rest: l.rest, trajectory,
+        width: 480, height: 270,
+      });
+      return blob ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   const img = new Image();
   img.onload = () => {
     mapView = createMapView(canvas, radarData, img, state.theme);
@@ -2326,15 +2744,23 @@ async function showMapScreen(map, opts = {}) {
     if (opts.autoBody) {
       applyAutoBody(opts.autoBody);
     }
-    renderParamsBox();
+    initOfficialArt();
+    renderOriginStep();
     renderTargetBox();
+    renderThrowStep();
     renderRunBox();
+    renderAdvanced();
     if (opts.autoBody) {
-      startSolve(opts.autoBody);
+      // Not `startSolve(opts.autoBody)`: that skipped `buildQuery` entirely, which is also where
+      // `aimPrecision` gets added and `types` gets normalised - a deep link's own solve would run
+      // without either, including the server's "RunJumpThrow" back into the results
+      // (round-2 review finding 2). `applyAutoBody` above already applied every field into
+      // `solveState`, so a fresh `buildQuery()` reconstructs the same request correctly.
+      startSolve();
     }
   };
   img.onerror = () => {
-    caption.className = "status status-error";
+    caption.className = "stage-caption status-error";
     caption.textContent = strings.errors.genericPrefix;
   };
   img.src = radarPngUrl(map) + `?v=${encodeURIComponent(radarData.build ?? "0")}`;

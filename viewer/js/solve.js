@@ -5,7 +5,6 @@
 import { solveLineup } from "./api.js?v=1";
 
 const SERVER_DEFAULTS = { tolerance: 80, minStability: 0.4 };
-const ALL_TYPES = ["Stand", "Crouch", "JumpThrow", "CrouchJumpThrow", "RunJumpThrow"];
 const ALL_STRENGTHS = [0, 0.5, 1];
 
 // An empty `types`/`strengths` selection is not "use the server's default" - it is impossible to
@@ -29,7 +28,10 @@ export function selectionError(params) {
 // panel's current selections. Fields left at the server's own default are omitted, per
 // `s6f2_solve_ui.md` ("параметры, равные умолчанию, в запрос не класть").
 export function buildQuery(map, target, targetArea, origin, originArea, params) {
-  const body = { map };
+  // S6m: always request the precise-aim difficulty model (a parallel task adds `aimPrecision` to
+  // the server) - not gated behind any UI control yet, so it's simplest to always send it rather
+  // than track a would-be-constant "default" value here.
+  const body = { map, aimPrecision: "precise" };
   if (target) {
     body.target = [target.x, target.y, target.z];
   } else if (targetArea) {
@@ -66,7 +68,11 @@ export function buildQuery(map, target, targetArea, origin, originArea, params) 
   if (params.fineScan) {
     body.fineScan = true;
   }
-  if (params.types && params.types.length > 0 && params.types.length < ALL_TYPES.length) {
+  // Always send `types` explicitly, unlike the other "equals the default -> omit" fields above:
+  // the server's own default type list still includes "RunJumpThrow" (S6m dropped it from the
+  // product, not from the server) - omitting `types` here at a full 4-of-4 selection would fall
+  // through to that server default and let it back in.
+  if (params.types && params.types.length > 0) {
     body.types = params.types;
   }
   if (params.strengths && params.strengths.length > 0 && params.strengths.length < ALL_STRENGTHS.length) {

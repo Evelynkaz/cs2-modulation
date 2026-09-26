@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cs2-modulation</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/viewer/app.css?v=1">
+  <link rel="stylesheet" href="/viewer/app.css?v=3">
   <script type="importmap">
     {
       "imports": {
@@ -16,12 +16,13 @@
   </script>
 </head>
 <body>
-  <header class="topbar">
+  <header id="topbar" class="topbar">
     <span class="brand">cs2-modulation</span>
-    <button id="theme-toggle" type="button" aria-label="Переключить тему"></button>
+    <button id="theme-toggle" type="button" class="icon-btn btn-ghost" aria-label="Переключить тему"></button>
   </header>
   <main id="app"></main>
   <div id="status" role="status" aria-live="polite" class="sr-only"></div>
-  <script type="module" src="/viewer/js/main.js?v=1"></script>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="/viewer/js/main.js?v=3"></script>
 </body>
 </html>

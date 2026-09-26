@@ -2,7 +2,7 @@
 // directory, then hand off to the caller once `game_dir` is configured.
 
 import { putConfig } from "./api.js?v=1";
-import { strings } from "./strings.js?v=1";
+import { strings } from "./strings.js?v=4";
 
 function el(tag, props, ...children) {
   const node = document.createElement(tag);
@@ -142,10 +142,10 @@ export function renderSetup(root, onConfigured, initialConfig = null) {
   });
 
   root.append(
-    heading,
-    intro,
-    gameField,
-    cacheField,
-    continueButton,
+    el(
+      "div",
+      { className: "page setup-page" },
+      el("div", { className: "card" }, heading, intro, gameField, cacheField, continueButton),
+    ),
   );
 }

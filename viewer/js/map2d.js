@@ -43,6 +43,28 @@ function lerp(a, b, t) {
   ];
 }
 
+function currentSurfaceColor() {
+  return getComputedStyle(document.documentElement).getPropertyValue("--surface").trim();
+}
+
+// A `drawImage` scaled far down (the official radar art is ~1024px, drawn much smaller) also
+// samples the source PNG's own transparent edge pixels - CS2's radar art leaves near-white RGB
+// under near-zero alpha there, so at a big downscale ratio that shows through as a faint white
+// seam right at the image's own content silhouette (round-4 integration item 4, the Nuke lower
+// section's "stray horizontal line" near the bottom of its drawn content). Flattening the image
+// once against the stage's own background (normal source-over blend) removes the transparency
+// before any scaling happens, so there is nothing left to fringe.
+function flattenOfficial(img, bg) {
+  const off = document.createElement("canvas");
+  off.width = img.naturalWidth;
+  off.height = img.naturalHeight;
+  const octx = off.getContext("2d");
+  octx.fillStyle = bg;
+  octx.fillRect(0, 0, off.width, off.height);
+  octx.drawImage(img, 0, 0);
+  return off;
+}
+
 function recolorImage(img, theme) {
   const off = document.createElement("canvas");
   off.width = img.naturalWidth;
@@ -77,6 +99,27 @@ function recolorImage(img, theme) {
   return off;
 }
 
+// S6m: the map list's own card thumbnails (`main.js`) - `viewer-map.png` is a data texture (R =
+// class, G = height tint, B unused), not a human-viewable radar photo, so showing it directly as
+// an `<img>` renders a near-black smear. Recolors through the same `recolorImage` the radar canvas
+// itself uses, then downsamples onto a small canvas (classification needs the PNG's exact class
+// bytes, so it has to happen at native resolution first - only the *result* gets shrunk) rather
+// than keeping one full-resolution canvas alive per map card. Returns a data URL.
+export function renderThumbnail(img, theme, maxWidth = 480) {
+  const full = recolorImage(img, theme);
+  const scale = Math.min(1, maxWidth / full.width);
+  const w = Math.max(1, Math.round(full.width * scale));
+  const h = Math.max(1, Math.round(full.height * scale));
+  const small = document.createElement("canvas");
+  small.width = w;
+  small.height = h;
+  const ctx = small.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(full, 0, 0, w, h);
+  return small.toDataURL("image/png");
+}
+
 // `canvas`: the radar `<canvas>`. `viewerMap`: `/api/radar`'s `{region:[x0,y0,x1,y1], pixelSize}`.
 // `img`: the loaded `viewer-map.png`. `theme`: `"light"|"dark"`, for the initial recolor.
 export function createMapView(canvas, viewerMap, img, theme) {
@@ -89,6 +132,11 @@ export function createMapView(canvas, viewerMap, img, theme) {
 
   let target = null; // { x, y, z, label }
   let origin = null; // { x, y, reach }
+  // The official radar image as an optional base layer (`s6p_map_art.md`) - `{ image, posX, posY,
+  // scale }` (world units per official-image px; may differ from `pixelSize`, our own radar's own
+  // world-units-per-px). `null` keeps the original (and only, pre-S6p) rendering exactly.
+  let official = null;
+  let showScheme = false;
   let lineups = []; // [{ id, feet:[x,y,z], rest:[x,y,z] }]
   let selectedId = null;
   let hoverId = null;
@@ -299,7 +347,23 @@ export function createMapView(canvas, viewerMap, img, theme) {
     const dh = source.height * scale;
     const cx = rect.width / 2 + offset.x;
     const cy = rect.height / 2 + offset.y;
-    ctx.drawImage(source, cx - dw / 2, cy - dh / 2, dw, dh);
+    // `s6p_map_art.md` (round-2 design critique 8): the official radar image as the base layer
+    // when one is loaded, our own class/height scheme as an optional, semi-transparent overlay on
+    // top of it (off by default) - otherwise (no official art, or it failed to load) our scheme is
+    // the only layer, exactly as before.
+    if (official) {
+      const [ox, oy] = worldToCanvas(official.posX, official.posY, { rect, scale, cx, cy });
+      const officialScale = (scale / pixelSize) * official.scale;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(official.image, ox, oy, official.image.width * officialScale, official.image.height * officialScale);
+      if (showScheme) {
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(source, cx - dw / 2, cy - dh / 2, dw, dh);
+        ctx.globalAlpha = 1;
+      }
+    } else {
+      ctx.drawImage(source, cx - dw / 2, cy - dh / 2, dw, dh);
+    }
 
     // Hoisted once per frame (AMBER-6) - `worldToCanvas`/`drawPoints` then skip their own
     // `getBoundingClientRect()` work per point.
@@ -624,7 +688,28 @@ export function createMapView(canvas, viewerMap, img, theme) {
     recolor(newTheme) {
       theme = newTheme;
       source = recolorImage(img, theme);
+      if (official) {
+        official = { ...official, image: flattenOfficial(official.rawImage, currentSurfaceColor()) };
+      }
       draw();
+    },
+    // `s6p_map_art.md` (round-2 design critique 8) - `image`: a loaded official radar `Image`;
+    // `posX`/`posY`/`scale`: the section's own world<->image-pixel transform (same convention as
+    // our own `worldToPixel` above: image px = (x-posX)/scale, (posY-y)/scale). `null`/omitted
+    // `image` clears the layer back to our own scheme rendering. `rawImage` is kept alongside the
+    // flattened `image` so a later theme change (`recolor`) can reflatten against the new background.
+    setOfficialLayer(data) {
+      official = data?.image
+        ? { ...data, rawImage: data.image, image: flattenOfficial(data.image, currentSurfaceColor()) }
+        : null;
+      requestDraw();
+    },
+    hasOfficialLayer() {
+      return !!official;
+    },
+    setShowScheme(v) {
+      showScheme = v;
+      requestDraw();
     },
     setTarget(t) {
       target = t;

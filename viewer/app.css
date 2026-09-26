@@ -1,32 +1,89 @@
+/* S6m consumer redesign: dark-first CS2-flavored design system. Tokens on `:root` are the dark
+   theme (the app's own default); `:root[data-theme="light"]` overrides them for the light theme.
+   Offline app - system font stack only, inline SVG icons (`icons.js`), no external fonts/CDN. */
+
 :root {
+  --bg: #0e1014;
+  --surface: #161922;
+  --surface-2: #1d212c;
+  --surface-3: #262b38;
+  --border: #2a2f3b;
+  --text: #e9ebf1;
+  --text-2: #a1a7b5;
+  --text-3: #6b7183;
+  --accent: #f2a33a;
+  --accent-hover: #f5b459;
+  --accent-pressed: #d98f28;
+  --accent-fg: #1b1408;
+  --success: #3ecf8e;
+  --warning: #f2a33a;
+  --danger: #ef5a5a;
+  --danger-hover: #f5807f;
+  /* Per-key area colours (origin = violet, target = warm/orange), routed through tokens so the
+     2D/3D drawing tools (`map2d.js`, `scene3d.js`) and this stylesheet agree on one palette. */
+  --origin: #a78bfa;
+  --origin-fill: rgba(167, 139, 250, 0.2);
+  --target-area: #fb923c;
+  --target-area-fill: rgba(251, 146, 60, 0.2);
+  --radius-card: 10px;
+  --radius-control: 8px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --fs-1: 12px;
+  --fs-2: 13px;
+  --fs-3: 14px;
+  --fs-4: 16px;
+  --fs-5: 20px;
+  --fs-6: 24px;
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.28);
+  --shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+
+  /* Back-compat aliases: a few not-yet-touched bits of markup (status lines, `.field`, generic
+     inputs) still read the old token names - point them at the new palette instead of keeping two
+     systems alive side by side. */
+  --bg-compat: var(--bg);
+  --fg: var(--text);
+  --muted: var(--text-2);
+  --panel: var(--surface);
+  --accent-fg-compat: var(--accent-fg);
+  --danger-compat: var(--danger);
+  --ok: var(--success);
+}
+
+:root[data-theme="light"] {
   --bg: #f4f5f7;
-  --fg: #1b1e24;
-  --muted: #5b6270;
-  --panel: #ffffff;
-  --border: #d7dae0;
-  --accent: #2563eb;
-  --accent-fg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #eef0f3;
+  --surface-3: #e4e7ec;
+  --border: #d9dce2;
+  --text: #1b1e24;
+  --text-2: #5b6270;
+  --text-3: #838a99;
+  --accent: #c97a12;
+  --accent-hover: #dd8a1c;
+  --accent-pressed: #a8660d;
+  --accent-fg: #fffaf0;
+  --success: #1a7f37;
+  --warning: #c97a12;
   --danger: #b3261e;
-  --ok: #1a7f37;
+  --danger-hover: #c94840;
+  --origin: #7c3aed;
+  --origin-fill: rgba(124, 58, 237, 0.13);
+  --target-area: #c2410c;
+  --target-area-fill: rgba(194, 65, 12, 0.13);
+  --shadow-card: 0 2px 10px rgba(20, 24, 32, 0.1);
+  --shadow-popover: 0 10px 30px rgba(20, 24, 32, 0.18);
   color-scheme: light;
 }
 
-:root[data-theme="dark"] {
-  --bg: #14161a;
-  --fg: #e7e9ee;
-  --muted: #9aa1ad;
-  --panel: #1c1f26;
-  --border: #30343c;
-  --accent: #5b9dff;
-  --accent-fg: #0d1117;
-  --danger: #ff6b64;
-  --ok: #4fd17a;
-  color-scheme: dark;
-}
-
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root:not([data-theme="light"]):not([data-theme="dark"]) {
-    color-scheme: dark;
+    color-scheme: light;
   }
 }
 
@@ -34,100 +91,250 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, "Segoe UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: var(--fs-3);
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
   min-height: 100vh;
 }
 
+h1, h2, h3 {
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Author-origin rules beat the UA stylesheet's own `[hidden] { display: none }` regardless of
+   specificity - `button`/`.btn` below sets `display: inline-flex` unconditionally, which would
+   otherwise make every `hidden` button (job cancel buttons, dialogs, view toggles, ...) show up
+   anyway. Reassert it once, globally, `!important` so no later rule can repeat the mistake. */
+[hidden] {
+  display: none !important;
+}
+
+button, input, select {
+  font-family: inherit;
+}
+
+/* ---- topbar (all screens except the map screen, which builds its own combined header row) ---- */
+
 .topbar {
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.25rem;
+  padding: 0 var(--sp-4);
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--surface);
 }
 
 .brand {
-  font-weight: 600;
+  font-weight: 700;
+  font-size: var(--fs-4);
+  letter-spacing: 0.01em;
 }
 
 main#app {
-  padding: 1.25rem;
-  max-width: 960px;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+}
+
+/* The map screen hides the global topbar (it builds its own header row instead) - `#app` must
+   then claim the full viewport itself, not still reserve the topbar's 56px as empty space below
+   its content (round-2 review finding 12). Every screen that keeps the global topbar visible also
+   keeps the `.app-scroll` class, so this never fires while the topbar is actually on screen. */
+main#app:not(.app-scroll) {
+  height: 100vh;
+}
+
+/* Non-map screens (setup, map list) scroll normally and keep a comfortable reading width. */
+main#app.app-scroll {
+  overflow-y: auto;
+  padding: var(--sp-5) var(--sp-4) var(--sp-6);
+}
+
+main#app.app-scroll > .page {
+  max-width: 1040px;
   margin: 0 auto;
 }
 
-h1 {
-  font-size: 1.4rem;
-  margin: 0 0 0.5rem;
-}
-
 p.hint {
-  color: var(--muted);
-  font-size: 0.9rem;
+  color: var(--text-2);
+  font-size: var(--fs-2);
   margin: 0.2rem 0 0.6rem;
+  line-height: 1.5;
 }
 
-.field {
-  background: var(--panel);
+/* ---- buttons -------------------------------------------------------------------------------- */
+
+.btn, button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 8px 14px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-
-.field-row {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-input[type="text"] {
-  flex: 1 1 260px;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 0.95rem;
-}
-
-button {
-  padding: 0.5rem 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--fg);
-  font-size: 0.9rem;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-3);
+  font-weight: 500;
   cursor: pointer;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s, transform 0.05s;
 }
 
-button.primary {
+.btn:hover, button:hover {
+  background: var(--surface-3);
+}
+
+.btn:active, button:active {
+  transform: translateY(1px);
+}
+
+.btn:disabled, button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+
+.btn-primary, button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-fg);
 }
 
-button:disabled {
-  opacity: 0.6;
-  cursor: default;
+.btn-primary:hover, button.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-primary:active, button.primary:active {
+  background: var(--accent-pressed);
+  border-color: var(--accent-pressed);
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.btn-ghost, button.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn-ghost:hover, button.ghost:hover {
+  background: var(--surface-2);
+}
+
+.btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: transparent;
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.btn-block {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.icon-btn {
+  padding: 8px;
+  line-height: 0;
+}
+
+.icon {
+  display: block;
 }
 
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 a:focus-visible,
-canvas:focus-visible {
-  outline: 3px solid var(--accent);
+canvas:focus-visible,
+.segmented-input:focus-visible + .segmented-label,
+.chip-input:focus-visible + .chip,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* A compact native dropdown (results sort) - styled to match the rest of the control set instead
+   of the bare browser default. */
+.select {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-2);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* ---- form controls (still used by setup.js, manual setpos, number fields) ------------------- */
+
+.field {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+
+.field-row {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+label {
+  font-size: var(--fs-2);
+  color: var(--text-2);
+}
+
+input[type="text"],
+input[type="number"] {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-3);
+}
+
+input[type="text"] {
+  flex: 1 1 260px;
+}
+
+input[type="number"] {
+  width: 6.5rem;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  flex: 1 1 auto;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 .status {
   margin: 0.4rem 0 0;
-  font-size: 0.85rem;
+  font-size: var(--fs-2);
   min-height: 1.1em;
 }
 
@@ -136,67 +343,209 @@ canvas:focus-visible {
 }
 
 .status-ok {
-  color: var(--ok);
+  color: var(--success);
 }
 
-table.maps {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--panel);
+.radio-item,
+.checkbox-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0.15rem 0.6rem 0.15rem 0;
+  font-size: var(--fs-2);
+}
+
+/* ---- segmented control (2-4 option radio groups / selects) --------------------------------- */
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  padding: 2px;
+  gap: 2px;
 }
 
-table.maps th,
-table.maps td {
-  text-align: left;
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
+.segmented-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
 }
 
-table.maps tr:last-child td {
-  border-bottom: none;
+.segmented-label {
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: var(--fs-2);
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
 }
 
-.pill {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
+.segmented-input:checked + .segmented-label {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.segmented-input:not(:checked) + .segmented-label:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* The "chips" variant: same single-select radio mechanics, but each option is its own separated
+   rounded pill instead of a joined segment group (used for the results filters). */
+.segmented-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.segmented-chips .segmented-label {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
   border-radius: 999px;
-  font-size: 0.75rem;
-  margin: 0 0.25rem 0.25rem 0;
+  padding: 5px 12px;
+}
+
+/* Selected = filled amber with dark text, unselected = a neutral outline - the two must be
+   unmistakable at a glance for every chip/segment in the app (round-2 design critique 2). */
+.segmented-chips .segmented-input:checked + .segmented-label {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+/* ---- toggle chips (multi-select checkboxes, e.g. throw type / click / broken-state) --------- */
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.chip-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
   border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+/* Selected = filled amber with dark text, unselected = a neutral outline (round-2 design
+   critique 2 - the throw-type chips all looked selected with only a subtle tinted background). */
+.chip-input:checked + .chip {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.chip-input:checked + .chip:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.chip-input:disabled + .chip {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chip-input:disabled + .chip:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+/* ---- badge / pill ---------------------------------------------------------------------------- */
+
+.pill, .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: var(--fs-1);
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 
 .pill-ok {
-  background: color-mix(in srgb, var(--ok) 18%, transparent);
-  border-color: var(--ok);
-  color: var(--ok);
+  border-color: var(--success);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
 .pill-missing {
-  color: var(--muted);
+  color: var(--text-3);
 }
 
-.stale {
-  color: var(--danger);
-  font-size: 0.85rem;
-  margin: 0.25rem 0;
+.badge-easy {
+  border-color: var(--success);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
 }
+
+.badge-medium {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+
+.badge-hard {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+
+.badge-neutral {
+  color: var(--text-2);
+}
+
+/* ---- progress bar ----------------------------------------------------------------------------- */
 
 .progress {
   margin-top: 0.4rem;
-  font-size: 0.85rem;
-  color: var(--muted);
+  font-size: var(--fs-2);
+  color: var(--text-2);
 }
 
 .progress-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--border);
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
   overflow: hidden;
-  margin-top: 0.2rem;
+  margin-top: 0.3rem;
 }
 
 .progress-bar > span {
@@ -204,29 +553,360 @@ table.maps tr:last-child td {
   height: 100%;
   background: var(--accent);
   width: 0%;
+  transition: width 0.2s ease;
 }
 
-.map-actions {
+/* The solve's own progress bar has no real done/total - an indeterminate sliding stripe instead
+   of a fixed-width fill (job-prepare bars keep the determinate fill above). */
+.progress-bar.indeterminate > span {
+  width: 35%;
+  transition: none;
+  animation: progress-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+/* ---- toast -------------------------------------------------------------------------------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 12px);
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 10px 18px;
+  font-size: var(--fs-3);
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* ---- collapsible ("Дополнительно") ----------------------------------------------------------- */
+
+.collapsible-summary {
   display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  color: var(--text);
+  font-size: var(--fs-3);
+  font-weight: 600;
 }
 
-.map-screen-header {
+.collapsible-summary:hover {
+  background: none;
+  color: var(--accent);
+}
+
+.collapsible-chevron {
+  display: flex;
+  transition: transform 0.15s ease;
+}
+
+.collapsible-summary.open .collapsible-chevron {
+  transform: rotate(180deg);
+}
+
+.collapsible-body {
+  padding-top: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* ---- empty state ------------------------------------------------------------------------------ */
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  color: var(--text-2);
+}
+
+.empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto var(--sp-3);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+.empty-title {
+  color: var(--text);
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+/* The results column's own "still searching" state (round-4 integration item 2) - a compact
+   indeterminate bar under the message, echoing the run button's own progress bar without
+   duplicating its phase/counter text (that already lives in the steps column). */
+.panel-searching {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  color: var(--text-2);
+}
+
+.panel-searching .progress-bar {
+  max-width: 220px;
+  margin: var(--sp-3) auto 0;
+}
+
+/* ---- card (generic surface used by steps, map cards, lineup cards) --------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-4);
+}
+
+.card-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-3);
+  font-weight: 600;
+  margin: 0 0 var(--sp-3);
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 12px;
+  font-weight: 700;
+  flex: none;
+}
+
+/* ---- setup screen (centred card) --------------------------------------------------------------- */
+
+.setup-page {
+  max-width: 560px;
+  margin: 40px auto;
+}
+
+/* ---- map list screen ---------------------------------------------------------------------------- */
+
+.page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--sp-4);
 }
 
-.radar-wrap {
+.map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-4);
+}
+
+.map-card {
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   overflow: hidden;
-  background: var(--panel);
-  height: 70vh;
-  min-height: 320px;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+}
+
+.map-card-thumb {
+  aspect-ratio: 16 / 10;
+  background: var(--surface-2);
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  border-bottom: 1px solid var(--border);
+}
+
+.map-card-thumb-empty {
+  aspect-ratio: 16 / 10;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.map-card-body {
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1;
+}
+
+.map-card-title {
+  font-size: var(--fs-4);
+  font-weight: 700;
+}
+
+.map-card-sub {
+  font-size: var(--fs-1);
+  color: var(--text-3);
+  margin-top: -6px;
+}
+
+.map-card-status {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.map-card-actions {
+  margin-top: auto;
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ---- map screen: full-viewport, no page scroll (S6m) ------------------------------------------ */
+
+.map-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.map-topbar {
+  flex: none;
+}
+
+.map-topbar .topbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.map-topbar .map-title {
+  font-size: var(--fs-4);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-topbar .topbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.map-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 340px 1fr 380px;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  overflow: hidden;
+}
+
+.map-steps {
+  min-height: 0;
+  min-width: 0;
+  /* The hidden 1px `.segmented-input`/`.chip-input` elements scattered through the steps are
+     `position: absolute` with no `top`/`left` of their own - without a positioned ancestor here,
+     their containing block is the viewport, which skips right past this box's own `overflow-y`
+     clip and grows the page instead of just this column (round-3 review finding 1). */
   position: relative;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding-right: 2px;
+}
+
+.map-stage {
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.map-results {
+  min-height: 0;
+  min-width: 0;
+  /* Same reasoning as `.map-steps` above - the "Только лёгкие" chip lives directly in here. */
+  position: relative;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding-right: 2px;
+}
+
+.map-tabs {
+  display: none;
+}
+
+/* Below 1280px the steps and results columns share one spot (a "Настройка | Раскидки" tab picks
+   which one shows) - both are assigned the same `panel` grid area, so the hidden one drops out via
+   `display:none` instead of shifting layout. */
+@media (max-width: 1280px) {
+  .map-body {
+    grid-template-columns: 340px 1fr;
+    /* A fixed row height for the tab bar, not `auto` - `stage` spans both rows, and an `auto`
+       track shares in sizing every item placed across it, so the tab row would otherwise stretch
+       to whatever height the radar/3D stage wants (its min-content is tall). */
+    grid-template-rows: 44px 1fr;
+    grid-template-areas: "tabs stage" "panel stage";
+  }
+  .map-tabs {
+    display: inline-flex;
+    align-items: center;
+    grid-area: tabs;
+  }
+  .map-stage {
+    grid-area: stage;
+  }
+  .map-steps,
+  .map-results {
+    grid-area: panel;
+  }
+  .map-steps.tab-hidden,
+  .map-results.tab-hidden {
+    display: none;
+  }
 }
 
 canvas#radar-canvas {
@@ -241,18 +921,6 @@ canvas#radar-canvas:active {
   cursor: grabbing;
 }
 
-/* `[hidden]` alone loses to the plain-id rules above on specificity - these re-assert it for the
-   three elements `main.js`'s 2D/3D/first-person toggle shows and hides. */
-canvas#radar-canvas[hidden],
-.three-container[hidden],
-.fpv-overlay[hidden] {
-  display: none;
-}
-
-.view-toolbar {
-  margin-bottom: 0.5rem;
-}
-
 .three-container {
   width: 100%;
   height: 100%;
@@ -263,6 +931,67 @@ canvas#radar-canvas[hidden],
 .three-container canvas {
   display: block;
   outline: none;
+}
+
+/* 3D toolbar, overlaid top-left over the stage (radar/3D), per the S6m layout. */
+.view-toolbar {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-2);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  max-width: calc(100% - 16px);
+}
+
+.view-toolbar-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 4px;
+  backdrop-filter: blur(4px);
+}
+
+.view-toolbar .hint,
+.view-toolbar .status {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 4px 8px;
+  margin: 0;
+  max-width: 420px;
+}
+
+/* An empty hint (nothing to say right now) or a row whose every button is hidden (2D, or a map
+   with no 3D toggle yet) must not paint an empty box over the radar (round-2 review finding 13). */
+.view-toolbar .hint:empty {
+  display: none;
+}
+
+.view-toolbar-row:not(:has(> button:not([hidden]))) {
+  display: none;
+}
+
+.stage-caption {
+  position: absolute;
+  bottom: var(--sp-2);
+  left: var(--sp-2);
+  right: var(--sp-2);
+  z-index: 5;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  font-size: var(--fs-2);
+}
+
+.stage-caption:empty {
+  display: none;
 }
 
 .fpv-overlay {
@@ -328,106 +1057,123 @@ canvas#radar-canvas[hidden],
   pointer-events: auto;
 }
 
-.solve-layout {
+/* ---- step cards (target / origin / throw) ------------------------------------------------------ */
+
+.step-row {
   display: flex;
-  gap: 1rem;
-  align-items: flex-start;
-}
-
-.radar-wrap {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.map-sidebar {
-  flex: 0 0 320px;
-  max-height: 80vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-@media (max-width: 900px) {
-  .solve-layout {
-    flex-direction: column;
-  }
-  .map-sidebar {
-    flex: 1 1 auto;
-    max-height: none;
-    width: 100%;
-  }
-  .radar-wrap {
-    height: 50vh;
-  }
-}
-
-.params-box summary,
-.target-box h2,
-.panel-box h2 {
-  font-size: 1rem;
-  margin: 0 0 0.4rem;
-}
-
-.params-box summary {
-  cursor: pointer;
-}
-
-.params-box .params-content {
-  margin-top: 0.6rem;
-}
-
-.params-box label,
-.target-box label {
-  display: block;
-  font-size: 0.85rem;
-  margin: 0.3rem 0 0.15rem;
-}
-
-.params-box input[type="number"] {
-  width: 6rem;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-  color: var(--fg);
-}
-
-.radio-item,
-.checkbox-item {
-  display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  margin: 0.15rem 0.6rem 0.15rem 0;
-  font-size: 0.85rem;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-2);
+  font-size: var(--fs-2);
+}
+
+.step-row-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .level-chooser {
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-2);
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .level-chooser button {
-  display: block;
   width: 100%;
-  text-align: left;
-  margin-bottom: 0.3rem;
+  justify-content: flex-start;
 }
 
-.panel-filters {
+/* ---- results header / lineup list -------------------------------------------------------------- */
+
+.panel-heading-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  justify-content: space-between;
+  gap: var(--sp-2);
 }
 
-.panel-filters label {
+.panel-heading-row h2 {
+  font-size: var(--fs-4);
+}
+
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  margin: var(--sp-2) 0;
+}
+
+/* Removable active-filter pills, shown under the toolbar only while a filter (besides "Только
+   лёгкие", which is already visible as its own chip) is actually applied. */
+.active-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 var(--sp-2);
+}
+
+.filter-pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 4px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-1);
+}
+
+.filter-pill button {
+  padding: 2px;
+  border: none;
+  background: none;
+  line-height: 0;
+  color: inherit;
+}
+
+.filter-pill button:hover {
+  color: var(--text);
+  background: none;
+}
+
+/* A small anchored dropdown (the "Фильтры" popover) - `position:relative` on the trigger's wrap so
+   the panel anchors under the button, not the whole results column. */
+.popover-anchor {
+  position: relative;
+  display: inline-block;
+}
+
+.popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 50;
+  min-width: 260px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: var(--sp-3);
+  box-shadow: var(--shadow-popover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.popover-row-label {
+  font-size: var(--fs-1);
+  color: var(--text-2);
+  margin: 0 0 4px;
 }
 
 .lineup-list {
@@ -436,61 +1182,242 @@ canvas#radar-canvas[hidden],
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--sp-3);
 }
 
-.lineup-row {
+.lineup-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.5rem 0.6rem;
-  background: var(--panel);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  overflow: hidden;
 }
 
-.lineup-row.selected {
+.lineup-card.selected {
   border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .lineup-select {
   cursor: pointer;
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
 }
 
 .lineup-select:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.lineup-title {
+.lineup-select-main {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* A small cached "aim" preview shown on the collapsed card, once one exists for this lineup
+   (round-2 design critique 5) - never fetched just to populate this, only reused once the full
+   gallery already has it from an earlier expand/select. */
+.lineup-thumb {
+  flex: none;
+  width: 72px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
+.lineup-header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.lineup-name {
   font-weight: 600;
+  font-size: var(--fs-3);
+}
+
+.lineup-steps {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .lineup-stats {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--muted);
-  margin: 0.25rem 0;
+  gap: var(--sp-4);
+  font-size: var(--fs-2);
+  color: var(--text-2);
 }
 
-.lineup-flags {
-  display: flex;
-  gap: 0.3rem;
-  margin-bottom: 0.25rem;
+.lineup-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.lineup-copy {
+.lineup-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.lineup-expand-btn {
+  transition: transform 0.15s ease;
+}
+
+.lineup-expand-btn.open {
+  transform: rotate(180deg);
+}
+
+.lineup-actions .copy-status {
+  font-size: var(--fs-1);
+  color: var(--success);
 }
 
 .copy-fallback {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Instructions + gallery + details, one toggle (round-2 design critique 5) - the card's single
+   divider from the collapsed header lives here, not on each sub-block. */
+.lineup-expanded {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  background: var(--surface-2);
+}
+
+.lineup-more {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-2);
+  color: var(--text-2);
+}
+
+.lineup-more .warn {
+  color: var(--warning);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* ---- preview gallery ------------------------------------------------------------------------- */
+
+.preview-gallery {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  grid-template-rows: auto auto;
+  gap: var(--sp-2);
+}
+
+/* Previews unavailable (2D, or `capturePreview` doesn't exist yet) - ONE block, never three empty
+   "Предпросмотр недоступен" tiles (round-2 design critique 6). */
+.preview-gallery.preview-gallery-single {
+  display: block;
+}
+
+.preview-unsupported {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--text-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+}
+
+.preview-tile {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: pointer;
+  aspect-ratio: 16 / 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-tile.preview-aim {
+  grid-row: 1 / 3;
+}
+
+.preview-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.preview-tile-label {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  font-size: var(--fs-1);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+
+.preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  padding: var(--sp-2);
+  text-align: center;
+}
+
+.preview-placeholder button {
+  font-size: var(--fs-1);
+  padding: 5px 10px;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 5, 8, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.lightbox img {
+  max-width: min(92vw, 1100px);
+  max-height: 88vh;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-popover);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: var(--sp-4);
+  right: var(--sp-4);
+  background: var(--surface);
 }
 
 .sr-only {

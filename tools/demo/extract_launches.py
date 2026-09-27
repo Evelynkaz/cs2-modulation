@@ -100,9 +100,12 @@ DUPLICATE_POS_TOLERANCE = 0.02
 # s6v Part C (`s6v_c_pro_demos.md`): a pro/tournament demo reuses the same `grenade_entity_id`
 # across rounds (real FACEIT example: mirage, 102 raw groups for 108 detonations, gaps of
 # 11618-239124 ticks inside one raw "projectile"). Split each raw entity id's own samples into
-# separate throws at any tick gap > `SEGMENT_GAP_TICKS` or a position jump > `SEGMENT_JUMP_DIST` -
-# each piece is then fit/graded/duplicate-checked exactly like a single-throw entity used to be.
-SEGMENT_GAP_TICKS = 1
+# separate throws at any tick gap greater than the demo's own MODAL tick delta (`modal_tick_delta`,
+# `s6v_fix2.md`: 1 for a normal 64-tick GOTV recording, 2 for a tournament GOTV recorded at
+# `tv_snapshotrate 32` - a fixed threshold of 1 would split every single throw of such a demo into
+# one throw per sample) or a position jump > `SEGMENT_JUMP_DIST` - each piece is then
+# fit/graded/duplicate-checked exactly like a single-throw entity used to be.
+SEGMENT_GAP_TICKS = 1  # fallback when a demo has no projectile samples to compute a mode from
 SEGMENT_JUMP_DIST = 64.0
 
 # Player proximity (`s6v_c_pro_demos.md`): a throw that touches a player must not be graded as a
@@ -121,7 +124,7 @@ PLAYER_HULL_Z = 72.0
 FIRE_SEARCH_WINDOW_TICKS = int(8 * 64)  # 8s before the detonate tick
 FIRE_BURN_TICKS = int(7 * 64)  # a fire lasts ~7s after `inferno_startburn` if no matching `inferno_expire`
 FIRE_NEAR_DIST = 250.0
-EARLY_DETONATION_SPEED = 30.0  # u/s, over the last recorded tick gap before the detonate tick
+EARLY_DETONATION_SPEED = 30.0  # u/s, max over the last up-to-4 sample pairs at/before detonate_tick - 2 (see early_detonation_fire)
 
 
 @dataclass
@@ -206,11 +209,30 @@ def fit_free_flight(ticks_rel: np.ndarray, pos: np.ndarray) -> FitResult:
     )
 
 
-def split_segments(ticks: np.ndarray, pos: np.ndarray, gap=SEGMENT_GAP_TICKS, jump=SEGMENT_JUMP_DIST):
-    """Splits one raw entity's own recorded `(ticks, pos)` into separate throws at a tick gap
-    greater than `gap` or a position jump greater than `jump` units (`s6v_c_pro_demos.md`'s
+def modal_tick_delta(all_ticks: list) -> int:
+    """The demo's own modal tick delta between consecutive samples of the same raw entity id, over
+    every projectile's own samples (`s6v_fix2.md`, DECISION: support 2-tick tournament GOTV
+    recordings): 1 for a normal 64-tick recording, 2 for `tv_snapshotrate 32` - used as
+    `split_segments`' own gap threshold so an ordinary 2-tick-spaced recording is not spuriously
+    split into one throw per sample. Falls back to `SEGMENT_GAP_TICKS` when there is nothing to
+    compute a mode from (fewer than 2 samples for every entity id)."""
+    deltas = [d for ticks in all_ticks for d in np.diff(np.sort(ticks)).tolist() if d > 0]
+    if not deltas:
+        return SEGMENT_GAP_TICKS
+    values, counts = np.unique(deltas, return_counts=True)
+    return int(values[np.argmax(counts)])
+
+
+def split_segments(
+    ticks: np.ndarray, pos: np.ndarray, *extra: np.ndarray, gap=SEGMENT_GAP_TICKS, jump=SEGMENT_JUMP_DIST
+):
+    """Splits one raw entity's own recorded `(ticks, pos, *extra)` into separate throws at a tick
+    gap greater than `gap` or a position jump greater than `jump` units (`s6v_c_pro_demos.md`'s
     recycled-entity-id finding; ported from the scratch prototype `scratch/pro/split_pro.py`).
-    Returns a list of `(ticks_slice, pos_slice)`, in order."""
+    `extra` is any number of additional per-sample arrays (e.g. per-sample thrower/name) split the
+    same way, so the first entry of each is the segment's own first sample (`s6v_fix2.md`: thrower/
+    name must come from the segment, not from the whole raw entity id's first sample).
+    Returns a list of `(ticks_slice, pos_slice, *extra_slices)`, in order."""
     n = len(ticks)
     segments = []
     start = 0
@@ -221,7 +243,7 @@ def split_segments(ticks: np.ndarray, pos: np.ndarray, gap=SEGMENT_GAP_TICKS, ju
                 np.linalg.norm(pos[i] - pos[i - 1]) > jump
             )
         if cut:
-            segments.append((ticks[start:i], pos[start:i]))
+            segments.append((ticks[start:i], pos[start:i], *(e[start:i] for e in extra)))
             start = i
     return segments
 
@@ -310,6 +332,23 @@ def early_detonation_fire(ticks, pos, detonate_tick, game_rest, fire_windows):
     return bool(speed > EARLY_DETONATION_SPEED and burning_nearby), nearest_dist
 
 
+def claim_detonation(claimed: dict, entity_id: int, detonate_tick: int, first_tick: int):
+    """Tracks which segment first claims each `(entity_id, detonate_tick)` `smokegrenade_detonate`
+    event. When a smoke detonates in fire (`early_detonation_fire`), its recorded position snaps
+    back and it keeps getting recorded motionless afterwards - `split_segments`' position-jump cut
+    then turns that motionless tail into a SECOND segment matching the SAME detonation (real cases:
+    inferno entity 481's tail from tick 56243, entity 133's from tick ~110182 - both fit g~=0 and
+    were counted as low-confidence throws). Returns a `skipped` reason string when `(entity_id,
+    detonate_tick)` was already claimed by an earlier segment, else records this segment as the
+    claim and returns `None`."""
+    key = (entity_id, detonate_tick)
+    claimed_at = claimed.get(key)
+    if claimed_at is not None:
+        return f"post-detonation tail of the segment at tick {claimed_at} (shares its smokegrenade_detonate)"
+    claimed[key] = first_tick
+    return None
+
+
 def extract(demo_path: str) -> dict:
     parser = DemoParser(demo_path)
     header = parser.parse_header()
@@ -342,14 +381,19 @@ def extract(demo_path: str) -> dict:
 
     # s6v Part C: split each raw entity id's own samples into separate throws before anything
     # else - a recycled id otherwise concatenates several rounds' throws into one "projectile".
+    groups = [(eid, g.sort_values("tick")) for eid, g in proj.groupby("grenade_entity_id")]
+    gap = modal_tick_delta([g["tick"].to_numpy() for _, g in groups])
     segments = []  # (entity_id, ticks, pos, thrower_steamid, thrower_name)
-    for entity_id, g in proj.groupby("grenade_entity_id"):
-        g = g.sort_values("tick")
+    for entity_id, g in groups:
         ticks = g["tick"].to_numpy()
         pos = g[["x", "y", "z"]].to_numpy(dtype=np.float64)
-        thrower = str(g[thrower_col].iloc[0]) if thrower_col else None
-        name = str(g[name_col].iloc[0]) if name_col else None
-        for seg_ticks, seg_pos in split_segments(ticks, pos):
+        throwers = g[thrower_col].to_numpy() if thrower_col else np.full(len(g), None, dtype=object)
+        names = g[name_col].to_numpy() if name_col else np.full(len(g), None, dtype=object)
+        for seg_ticks, seg_pos, seg_thrower, seg_name in split_segments(
+            ticks, pos, throwers, names, gap=gap
+        ):
+            thrower = str(seg_thrower[0]) if thrower_col else None
+            name = str(seg_name[0]) if name_col else None
             segments.append((int(entity_id), seg_ticks, seg_pos, thrower, name))
     segments.sort(key=lambda s: s[1][0])  # chronological, by first tick
 
@@ -368,6 +412,7 @@ def extract(demo_path: str) -> dict:
     projectiles = []
     skipped = []
     accepted_raw = []  # [(entity_id, ticks, pos)] of every non-duplicate segment seen so far
+    claimed_detonations = {}  # (entity_id, detonate_tick) -> first_tick of the claiming segment
     for entity_id, ticks, pos, thrower, thrower_name in segments:
         n = len(ticks)
 
@@ -433,9 +478,13 @@ def extract(demo_path: str) -> dict:
         notes = []
         if len(det_rows) > 0:
             det_row = det_rows.iloc[0]
+            detonate_tick = int(det_row["tick"])
+            tail_reason = claim_detonation(claimed_detonations, entity_id, detonate_tick, int(ticks[0]))
+            if tail_reason is not None:
+                skipped.append({"entity_id": entity_id, "reason": tail_reason})
+                continue
             game_rest = [float(det_row["x"]), float(det_row["y"]), float(det_row["z"])]
             rest_source = "detonate_event"
-            detonate_tick = int(det_row["tick"])
         else:
             game_rest = [float(pos[-1, 0]), float(pos[-1, 1]), float(pos[-1, 2])]
             rest_source = "last_position"
@@ -575,7 +624,7 @@ def main() -> int:
         print("no .dem files found in the given input(s)", file=sys.stderr)
         return 1
 
-    multi = len(demos) > 1
+    multi = len(args.demo) > 1 or any(Path(a).is_dir() for a in args.demo)
     if multi and args.output:
         Path(args.output).mkdir(parents=True, exist_ok=True)
 

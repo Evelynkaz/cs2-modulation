@@ -63,10 +63,9 @@ fn discover_input_files(inputs: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
 
 /// `--solid <spec>` (`s6v_c_pro_demos.md`): `export-obj --filter` syntax (`grenade` default,
 /// `attrs:Name1,Name2`) plus `grenade-minus:Name1,...` - the grenade mask with the named attribute
-/// groups made non-solid, to A/B a hypothesis like "EntityPhysicsClip does not block grenades"
-/// without code edits. The `grenade-minus:` predicate mirrors `geom::filter::grenade_mask`'s own
-/// (ported from `CollisionMesh.cs:GrenadeSolidFilter`) rather than calling it, since
-/// `AttributeMask` has no public way to combine two already-built masks by attribute name.
+/// groups made non-solid, to A/B a hypothesis like "was the glass already broken?"
+/// (`grenade-minus:EntityBreakable`) without code edits; the default mask already treats
+/// `EntityPhysicsClip` as non-solid (settled by the corpus + demo evidence).
 fn parse_solid_spec(spec: &str, mesh: &CollisionMesh) -> anyhow::Result<AttributeMask> {
     if let Some(rest) = spec.strip_prefix("grenade-minus:") {
         let minus: Vec<String> = rest
@@ -74,14 +73,9 @@ fn parse_solid_spec(spec: &str, mesh: &CollisionMesh) -> anyhow::Result<Attribut
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let any_ci =
-            |layers: &[String], name: &str| layers.iter().any(|l| l.eq_ignore_ascii_case(name));
         return Ok(geom::filter::from_fn(mesh, |a| {
-            let grenade_solid = !any_ci(&a.interact_exclude, "csgo_thrown_grenade")
-                && !any_ci(&a.interact_as, "playerclip")
-                && !any_ci(&a.interact_as, "npcclip")
-                && !any_ci(&a.interact_as, "sky");
-            grenade_solid && !minus.iter().any(|n| a.name.eq_ignore_ascii_case(n))
+            geom::filter::is_grenade_solid(a)
+                && !minus.iter().any(|n| a.name.eq_ignore_ascii_case(n))
         }));
     }
     geom::filter::parse_filter(spec, mesh)
@@ -278,6 +272,20 @@ fn print_replay_line(demo: &str, l: &ProjectileLaunch, r: &ThrowReplay, multi: b
     }
 }
 
+/// Groups `items` by a caller-supplied key, preserving encounter order within each bucket.
+/// Pure so it is unit-testable without a real replay run.
+fn group_by_map<'a, T, U>(
+    items: &'a [T],
+    key_of: impl Fn(&'a T) -> &'a str,
+    value_of: impl Fn(&'a T) -> U,
+) -> BTreeMap<&'a str, Vec<U>> {
+    let mut by_map: BTreeMap<&str, Vec<U>> = BTreeMap::new();
+    for item in items {
+        by_map.entry(key_of(item)).or_default().push(value_of(item));
+    }
+    by_map
+}
+
 fn print_summary_block(label: &str, summary: &calib::DemoReplaySummary, top: usize) {
     println!(
         "{label}: {} graded throw(s), within 1u {} within 3u {} within 8u {}  \
@@ -434,14 +442,15 @@ pub fn replay_demo(
         }
     }
 
-    let mut by_map: BTreeMap<&str, Vec<GradedThrow>> = BTreeMap::new();
-    for rec in &records {
-        by_map.entry(rec.map).or_default().push(GradedThrow {
+    let by_map: BTreeMap<&str, Vec<GradedThrow>> = group_by_map(
+        &records,
+        |rec| rec.map,
+        |rec| GradedThrow {
             launch: rec.launch,
             replay: &rec.replay,
             map: rec.map,
-        });
-    }
+        },
+    );
 
     if by_map.len() > 1 {
         for (map_name, throws) in &by_map {
@@ -598,16 +607,35 @@ mod tests {
         let mesh = two_attr_mesh();
         let grenade = parse_solid_spec("grenade", &mesh).unwrap();
         assert!(grenade.is_solid(0));
-        assert!(grenade.is_solid(1));
+        assert!(!grenade.is_solid(1)); // EntityPhysicsClip is non-solid under `grenade`
         let attrs = parse_solid_spec("attrs:Default", &mesh).unwrap();
         assert!(attrs.is_solid(0));
         assert!(!attrs.is_solid(1));
     }
 
     #[test]
+    fn solid_spec_grenade_minus_default_keeps_entity_physics_clip_non_solid() {
+        let mesh = two_attr_mesh();
+        let mask = parse_solid_spec("grenade-minus:Default", &mesh).unwrap();
+        assert!(!mask.is_solid(0)); // Default made non-solid
+        assert!(!mask.is_solid(1)); // EntityPhysicsClip already non-solid under `grenade`
+    }
+
+    #[test]
     fn solid_spec_rejects_an_unknown_spec() {
         let mesh = two_attr_mesh();
         assert!(parse_solid_spec("bogus", &mesh).is_err());
+    }
+
+    #[test]
+    fn group_by_map_splits_by_map_and_total_is_sum() {
+        let items = vec![("de_mirage", 1), ("de_dust2", 2), ("de_mirage", 3)];
+        let grouped = group_by_map(&items, |i| i.0, |i| i.1);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[&"de_mirage"], vec![1, 3]);
+        assert_eq!(grouped[&"de_dust2"], vec![2]);
+        let total: usize = grouped.values().map(Vec::len).sum();
+        assert_eq!(total, items.len());
     }
 
     #[test]

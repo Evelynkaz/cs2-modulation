@@ -81,8 +81,9 @@ map, so throws are grouped and reported per map (mesh/collider loaded once per m
 `--solid <spec>` overrides the grenade collision mask for A/B experiments, same syntax as
 `export-obj --filter` (`grenade` default, `attrs:Name1,Name2`) plus `grenade-minus:Name1,...` (the
 grenade mask with the named attribute groups made non-solid) - e.g.
-`--solid grenade-minus:EntityPhysicsClip` to test "does `func_clip_vphysics` actually block
-grenades?" without touching any code.
+`--solid grenade-minus:EntityBreakable` to test "was the glass already broken?" without touching
+any code (the default grenade mask already treats `EntityPhysicsClip` as non-solid, settled by the
+corpus + demo evidence).
 
 `--dump-dir <dir>` writes `<demo>_<entity>_<first_tick>.json` for every throw with a rest error
 over 3u or any >1u tick (game samples, the full sim trace tick/pos/vel, every sim contact, and
@@ -100,10 +101,9 @@ synthetic data (no simulator or real demo involved).
 - `okno1.dem`: a non-GOTV local demo, no `CSmokeGrenadeProjectile` at all - a clear message, no
   crash.
 - `big1.dem`: 26 recorded entities, 22 with a detonation event, 21 confident graded throws (1
-  excluded as low-confidence) - 18/21 within 1u, 21/21 within 3u except one real divergence on an
-  `EntityPhysicsClip` surface (22.5u; the game did NOT bounce there either - a genuine collision-set
-  gap, separately addressed on branch S6w by making that group non-solid for grenades; reproduce it
-  here with `--solid grenade-minus:EntityPhysicsClip`, no code changes needed).
+  excluded as low-confidence) - with the DEFAULT mask (`EntityPhysicsClip` non-solid for grenades,
+  `geom::filter::is_grenade_solid`): 18/21 within 1u, 21/21 within 3u - entity 315 (the old
+  `EntityPhysicsClip` divergence) now grades at ~0.12u.
 
 ## Pro demos
 
@@ -114,10 +114,13 @@ practice demo in ways this tool must handle:
    unpack the match archive with 7-Zip - one `.dem` per map.
 2. Recycled entity ids: the same `grenade_entity_id` gets reused by throws several rounds apart
    (real FACEIT example: 102 raw groups for 108 detonations on one map). `extract_launches.py`
-   splits each raw entity id's own samples into separate throws at any tick gap or a >64u position
-   jump before fitting/grading/duplicate-checking anything - this is automatic, nothing to pass.
+   splits each raw entity id's own samples into separate throws at any tick gap greater than the
+   demo's own modal tick delta (1 for a normal 64-tick recording, 2 for `tv_snapshotrate 32`) or a
+   >64u position jump, before fitting/grading/duplicate-checking anything - this is automatic,
+   nothing to pass.
 3. Run extraction on the unpacked folder: `...\python.exe tools\demo\extract_launches.py
-   path\to\unpacked_folder -o out_dir` (recurses for `*.dem`, one `<map>.launches.json` per demo).
+   path\to\unpacked_folder -o out_dir` (recurses for `*.dem`, one `<demo stem>.launches.json` per
+   demo).
 4. Run `cs2mod replay-demo --input out_dir --json report.json` - no map name needed, each file
    carries its own.
 5. Read the report: per-map and total counts (graded, within 1u/3u/8u) plus counts EXCLUDED from
@@ -125,7 +128,9 @@ practice demo in ways this tool must handle:
    (a bad launch fit), "player contact" (the throw came within 6u of an alive player - CS2 grenades
    collide with players, so this is not a physics/collision-set divergence), "early detonation
    (fire)" (the smoke flew into a burning molotov/incendiary and detonated while still moving - see
-   `early_detonation_fire`/`nearest_fire_distance` per throw), and "glass state unknown" (the
+   `early_detonation_fire`/`nearest_fire_distance` per throw; the near-fire distance is the main
+   discriminator here, not the speed gate - measured across both pro demos, all 24 throws flagged
+   by speed+distance have a genuine rest error >=5.6u), and "glass state unknown" (the
    divergence's sim contact is breakable glass, which may already have been broken earlier in the
    round - dynamic state this tool cannot know from the demo alone). The ranked divergence surfaces
    list is the best lead for a real collision-set gap; `--dump-dir` gives the full trace for any one
@@ -133,6 +138,7 @@ practice demo in ways this tool must handle:
 6. The header's `patch_version` is checked against the installed game's own `steam.inf`
    `PatchVersion` - a mismatch (old demo, updated map) is only a warning, since this tool cannot fix
    stale geometry, but it explains a cluster of divergences on one surface.
-7. `--solid grenade-minus:EntityPhysicsClip` A/B switch: re-run the same report with
-   `func_clip_vphysics` made non-solid for grenades to see how many divergences that alone
-   explains, without any code changes (branch S6w is making this change permanently elsewhere).
+7. `--solid grenade-minus:Name1,...` A/B switch: re-run the same report with named collision
+   groups made non-solid for grenades to see how many divergences that alone explains, without any
+   code changes (the default grenade mask already makes `EntityPhysicsClip` non-solid; use this to
+   probe other groups).

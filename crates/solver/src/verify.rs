@@ -733,9 +733,9 @@ pub const ROBUST_MIN: f32 = 0.5;
 // rule flagged 13 (11 with the centre unsupported), and the user's own board case was confirmed IN
 // GAME to stay with the correct technique - the sim's rest logic already matches the game, and
 // sensitivity of a rest to small errors is exactly what `robust_pos`/`robust_aim`/`robust_model`
-// already measure. `rest_support` itself is kept as a pure, unit-tested DIAGNOSTIC (used by
-// `cs2mod replay-demo`'s report to print how well-supported a diverging throw's sim rest is) - it
-// is not folded into `robustness` and has no `Lineup`/JSON/viewer field.
+// already measure. `rest_support` itself is kept as a pure, unit-tested DIAGNOSTIC for future use
+// (`s6v_fix2.md`: nothing calls it today, including `cs2mod replay-demo`'s report) - it is not
+// folded into `robustness` and has no `Lineup`/JSON/viewer field.
 
 /// The floor-support sampling grid: a 5x5 lattice over +-2u (`REST_SUPPORT_STEP` per cell).
 const REST_SUPPORT_GRID_REACH: i32 = 2;

@@ -305,8 +305,9 @@ enum Command {
         #[arg(long)]
         cache: Option<PathBuf>,
         /// Override the grenade collision mask (`export-obj --filter` syntax, plus
-        /// `grenade-minus:Name1,...` to A/B a hypothesis like "EntityPhysicsClip does not block
-        /// grenades" without code edits).
+        /// `grenade-minus:Name1,...` to A/B a hypothesis like "was the glass already broken?"
+        /// (`grenade-minus:EntityBreakable`) without code edits; the default mask already treats
+        /// `EntityPhysicsClip` as non-solid (settled by the corpus + demo evidence)).
         #[arg(long)]
         solid: Option<String>,
         /// Dump full sim/game traces for outlier throws (rest error > 3u, or any >1u tick) here.

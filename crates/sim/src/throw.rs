@@ -71,6 +71,16 @@ pub struct ThrowConstants {
     pub right_click_scale: f32,
     #[serde(default = "default_both_click_scale")]
     pub both_click_scale: f32,
+    /// `specs/s6x_release_height.md`: measured from GOTV demos (stationary,
+    /// grounded, non-jump throws), the game releases a non-jump throw lower
+    /// the softer the click - `release.z += 12*strength - 12` (Source's
+    /// `weapon_basecsgrenade` logic). Left click (1.0): -0.09u; both (0.5):
+    /// -6.09u; right (0.0): -12.09u (mode/median across FACEIT + the user's
+    /// own demos). Jump throws already bake this into their calibrated
+    /// `release_rise_*` and must not apply it again. The reference doesn't
+    /// model this at all, so `reference()` zeroes it.
+    #[serde(default = "default_nonjump_release_drop")]
+    pub nonjump_release_drop: f32,
 }
 
 fn default_throw_speed() -> f32 {
@@ -118,6 +128,9 @@ fn default_right_click_scale() -> f32 {
 fn default_both_click_scale() -> f32 {
     0.65
 }
+fn default_nonjump_release_drop() -> f32 {
+    12.0
+}
 
 impl Default for ThrowConstants {
     fn default() -> Self {
@@ -138,6 +151,7 @@ impl Default for ThrowConstants {
             release_rise_left: default_release_rise_left(),
             right_click_scale: default_right_click_scale(),
             both_click_scale: default_both_click_scale(),
+            nonjump_release_drop: default_nonjump_release_drop(),
         }
     }
 }
@@ -162,6 +176,32 @@ impl ThrowConstants {
             self.release_rise_both
         } else {
             self.release_rise_right
+        }
+    }
+
+    /// `specs/s6x_release_height.md`'s non-jump release drop, banded by
+    /// strength with the same left/both/right thresholds as [`Self::release_rise`]:
+    /// 0 at left click, half at both, full at right click.
+    pub fn nonjump_drop(&self, strength: f32) -> f32 {
+        let band = if strength >= 0.99 {
+            1.0
+        } else if strength >= 0.49 {
+            0.5
+        } else {
+            0.0
+        };
+        self.nonjump_release_drop * (1.0 - band)
+    }
+
+    /// The reference's own constants, with no non-jump release-height drop
+    /// (`specs/s6x_release_height.md`: the reference doesn't model it). Every
+    /// bit-exact reference-parity test/harness must use this instead of
+    /// [`ThrowConstants::default`], whose production `nonjump_release_drop`
+    /// (12.0) would otherwise disagree with the reference on non-jump throws.
+    pub fn reference() -> Self {
+        ThrowConstants {
+            nonjump_release_drop: 0.0,
+            ..ThrowConstants::default()
         }
     }
 
@@ -231,10 +271,13 @@ pub fn derive_initial(spec: &ThrowSpec, k: &ThrowConstants) -> (V3, V3) {
 
     let mut velocity = forward * (k.throw_speed * k.speed_scale(spec.strength));
     let mut release = spec.eye + forward * 16.0;
-    let is_jump = matches!(
-        spec.throw_type,
-        ThrowType::JumpThrow | ThrowType::CrouchJumpThrow | ThrowType::RunJumpThrow
-    );
+    // Every `ThrowType` classified explicitly: jump types keep their calibrated
+    // `release_rise` (which already bakes in the release-height drop below);
+    // non-jump types get `nonjump_drop` instead (`specs/s6x_release_height.md`).
+    let is_jump = match spec.throw_type {
+        ThrowType::JumpThrow | ThrowType::CrouchJumpThrow | ThrowType::RunJumpThrow => true,
+        ThrowType::Stand | ThrowType::Crouch => false,
+    };
     if is_jump {
         velocity.z += if spec.throw_type == ThrowType::CrouchJumpThrow {
             k.crouch_jump_velocity
@@ -242,6 +285,8 @@ pub fn derive_initial(spec: &ThrowSpec, k: &ThrowConstants) -> (V3, V3) {
             k.jump_velocity
         };
         release.z += k.release_rise(spec.strength);
+    } else {
+        release.z -= k.nonjump_drop(spec.strength);
     }
     if spec.throw_type == ThrowType::RunJumpThrow {
         let run_yaw = (spec.yaw_deg + spec.run_yaw_offset_deg) * std::f32::consts::PI / 180.0;
@@ -273,11 +318,25 @@ mod tests {
         assert_eq!(k.release_rise_left, 26.1);
         assert_eq!(k.right_click_scale, 0.30);
         assert_eq!(k.both_click_scale, 0.65);
+        assert_eq!(k.nonjump_release_drop, 12.0);
         assert_eq!(STAND_EYE_HEIGHT, 64.06);
         assert_eq!(CROUCH_EYE_HEIGHT, 46.04);
         assert_eq!(GRENADE_HALF, 2.0);
         assert_eq!(MAX_FLIGHT_SECONDS, 10.0);
         assert_eq!(FLOOR_NORMAL_Z, 0.7);
+    }
+
+    #[test]
+    fn reference_zeroes_the_nonjump_release_drop_only() {
+        let k = ThrowConstants::reference();
+        assert_eq!(k.nonjump_release_drop, 0.0);
+        assert_eq!(
+            k,
+            ThrowConstants {
+                nonjump_release_drop: 0.0,
+                ..ThrowConstants::default()
+            }
+        );
     }
 
     #[test]
@@ -363,5 +422,76 @@ mod tests {
         let (jump_pos, jump_vel) = derive_initial(&spec, &k);
         assert!((jump_vel.z - stand_vel.z - k.jump_velocity).abs() < 1e-3);
         assert!((jump_pos.z - stand_pos.z - k.release_rise_left).abs() < 1e-3);
+    }
+
+    /// `specs/s6x_release_height.md`: non-jump throws release lower the softer the
+    /// click - right -12, both -6, left 0 - for both Stand and Crouch.
+    #[test]
+    fn derive_initial_nonjump_release_drop_bands_by_strength() {
+        let k = ThrowConstants::default();
+        for throw_type in [ThrowType::Stand, ThrowType::Crouch] {
+            let base = ThrowSpec {
+                eye: V3::new(0.0, 0.0, 100.0),
+                yaw_deg: 0.0,
+                pitch_deg: 90.0, // straight down: forward = (0, 0, -1).
+                throw_type,
+                strength: 1.0,
+                run_yaw_offset_deg: 0.0,
+            };
+            let base_z = base.eye.z - 16.0; // eye + 16*forward, forward.z = -1.
+
+            let (left_pos, _) = derive_initial(
+                &ThrowSpec {
+                    strength: 1.0,
+                    ..base
+                },
+                &k,
+            );
+            assert!((left_pos.z - base_z).abs() < 1e-4, "left click: no drop");
+
+            let (both_pos, _) = derive_initial(
+                &ThrowSpec {
+                    strength: 0.5,
+                    ..base
+                },
+                &k,
+            );
+            assert!(
+                (both_pos.z - (base_z - 6.0)).abs() < 1e-4,
+                "both click: -6u drop, got {}",
+                both_pos.z
+            );
+
+            let (right_pos, _) = derive_initial(
+                &ThrowSpec {
+                    strength: 0.0,
+                    ..base
+                },
+                &k,
+            );
+            assert!(
+                (right_pos.z - (base_z - 12.0)).abs() < 1e-4,
+                "right click: -12u drop, got {}",
+                right_pos.z
+            );
+        }
+    }
+
+    /// `specs/s6x_release_height.md`: jump throws must keep their pre-change
+    /// `release_rise` exactly, with no additional non-jump drop stacked on top.
+    #[test]
+    fn derive_initial_jump_release_rise_unchanged_by_the_nonjump_drop() {
+        let k = ThrowConstants::default();
+        let spec = ThrowSpec {
+            eye: V3::new(0.0, 0.0, 100.0),
+            yaw_deg: 0.0,
+            pitch_deg: 90.0,
+            throw_type: ThrowType::JumpThrow,
+            strength: 0.0,
+            run_yaw_offset_deg: 0.0,
+        };
+        let (pos, _) = derive_initial(&spec, &k);
+        let base_z = spec.eye.z - 16.0;
+        assert!((pos.z - (base_z + k.release_rise_right)).abs() < 1e-4);
     }
 }

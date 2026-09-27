@@ -51,7 +51,11 @@ fn replay_one_map(map: &str) {
 
     let solid = grenade_mask(&mesh);
     let collider = UniformGrid::build(&mesh, &solid, None, 128.0).expect("build collider");
-    let k = ThrowConstants::default();
+    // `launch_check` below is bit-exact against the reference's own `DeriveInitial`
+    // (`specs/s6x_release_height.md`); `replay` doesn't call `derive_initial` at all
+    // (it re-simulates the corpus's own recorded launch `Pos`/`Vel` directly), so it's
+    // unaffected by which of the two constants sets this is.
+    let k = ThrowConstants::reference();
     let report = replay(&collider, None, &rows, &k, 20);
 
     println!(
@@ -140,7 +144,8 @@ fn launch_model_by_build(map: &str) {
         eprintln!("skipping {map}: no corpus rows under {corpus:?}");
         return;
     }
-    let k = ThrowConstants::default();
+    // Bit-exact against the reference's own `DeriveInitial` (`specs/s6x_release_height.md`).
+    let k = ThrowConstants::reference();
 
     let mut builds: Vec<String> = rows.iter().map(|r| r.build.clone()).collect();
     builds.sort();

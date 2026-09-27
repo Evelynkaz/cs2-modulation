@@ -92,7 +92,9 @@ fn assert_flight_time_close(actual: f32, expected: f32, i: usize) {
 }
 
 fn replay(grid: &UniformGrid, entries: &[GoldenEntry]) {
-    let k = ThrowConstants::default();
+    // Bit-exact against the reference, which has no non-jump release-height
+    // drop (`specs/s6x_release_height.md`).
+    let k = ThrowConstants::reference();
     for (i, e) in entries.iter().enumerate() {
         let spec = ThrowSpec {
             eye: V3::from_array(e.eye),

@@ -186,7 +186,11 @@ mod tests {
     fn group_indices_point_at_their_own_triangles() {
         let mut mesh = CollisionMesh::new();
         let world_attr = mesh.add_attribute(attr("Default", &[])).unwrap();
-        let phantom_attr = mesh.add_attribute(attr("EntityPhysicsClip", &[])).unwrap();
+        // `specs/s6w_physics_clip.md`: EntityPhysicsClip is no longer grenade-solid at all (so no
+        // longer a phantom-group example) - a grenade-clip attribute is still solid-but-phantom.
+        let phantom_attr = mesh
+            .add_attribute(attr("GrenadeClip", &["csgo_grenadeclip"]))
+            .unwrap();
         let door_attr = mesh.add_attribute(attr("EntityDoor", &[])).unwrap();
         let breakable_attr = mesh.add_attribute(attr("EntityBreakable", &[])).unwrap();
         push_tri(&mut mesh, world_attr, 0.0);

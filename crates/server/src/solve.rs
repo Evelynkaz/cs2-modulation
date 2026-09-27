@@ -100,7 +100,7 @@ const MIN_AREA_AREA: f64 = 1.0;
 /// Our own cache format/solve-behavior version (`LineupApi.cs:475`'s `QueryVersion`, our own
 /// counter): bump whenever the response shape or the solver's behavior changes, so an old cached
 /// answer is never replayed as current.
-const CACHE_VERSION: u32 = 13;
+const CACHE_VERSION: u32 = 14;
 const CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
 const CACHE_BUDGET_BYTES: u64 = 1024 * 1024 * 1024;
 

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use geom::collider::Collider;
-use geom::filter::{grenade_mask, parse_filter};
+use geom::filter::{grenade_mask, is_grenade_solid, parse_filter};
 use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
 use geom::mesh::CollisionMesh;
@@ -64,18 +64,6 @@ fn parse_pair(s: &str, flag: &str) -> anyhow::Result<(f32, f32)> {
 }
 
 use crate::constants::resolve_constants;
-
-/// Mirrors `geom::filter::grenade_mask`'s per-attribute predicate
-/// (`CollisionMesh.cs:GrenadeSolidFilter`), for building a second collider
-/// that also excludes a named group (glass-gone).
-fn grenade_solid_predicate(a: &geom::mesh::CollisionAttribute) -> bool {
-    let any_ci =
-        |layers: &[String], name: &str| layers.iter().any(|l| l.eq_ignore_ascii_case(name));
-    !any_ci(&a.interact_exclude, "csgo_thrown_grenade")
-        && !any_ci(&a.interact_as, "playerclip")
-        && !any_ci(&a.interact_as, "npcclip")
-        && !any_ci(&a.interact_as, "sky")
-}
 
 fn grenade_collider(mesh: &CollisionMesh) -> anyhow::Result<UniformGrid> {
     let mask = grenade_mask(mesh);
@@ -495,7 +483,7 @@ pub fn replay(
         let has_glass = mesh.attributes.iter().any(|a| a.name == "EntityBreakable");
         let glass_gone = if has_glass {
             let mask = geom::filter::from_fn(&mesh, |a| {
-                a.name != "EntityBreakable" && grenade_solid_predicate(a)
+                a.name != "EntityBreakable" && is_grenade_solid(a)
             });
             Some(UniformGrid::build(&mesh, &mask, None, 128.0)?)
         } else {

@@ -10,10 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use geom::bvh::Bvh;
 use geom::collider::Collider;
-use geom::filter::{AttributeMask, all_mask, from_fn, grenade_mask, player_mask};
+use geom::filter::{AttributeMask, all_mask, from_fn, grenade_mask, is_grenade_solid, player_mask};
 use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
-use geom::mesh::{CollisionAttribute, CollisionMesh};
+#[cfg(test)]
+use geom::mesh::CollisionAttribute;
+use geom::mesh::CollisionMesh;
 use geom::voxel::VoxelGrid;
 use rayon::prelude::*;
 use sim::{
@@ -653,19 +655,10 @@ fn nearest_stand_spot_z(spots: Option<&[StandSpotOrigin]>, at: [f32; 2]) -> Opti
     lowest
 }
 
-/// `MeshSetup.cs:52-63`/`CollisionMesh.cs:52-63`'s grenade-solid predicate,
-/// applied to a single attribute (so it can be combined with the excluded-
-/// groups check below without a second, redundant `AttributeMask` pass).
-fn is_grenade_solid(a: &CollisionAttribute) -> bool {
-    let any_ci =
-        |layers: &[String], name: &str| layers.iter().any(|l| l.eq_ignore_ascii_case(name));
-    !any_ci(&a.interact_exclude, "csgo_thrown_grenade")
-        && !any_ci(&a.interact_as, "playerclip")
-        && !any_ci(&a.interact_as, "npcclip")
-        && !any_ci(&a.interact_as, "sky")
-}
-
-/// `MeshSetup.cs:27-33` (`BuildGrenadeCollider`/`BuildGrenadeColliderExcluding`).
+/// `MeshSetup.cs:27-33` (`BuildGrenadeCollider`/`BuildGrenadeColliderExcluding`);
+/// the grenade-solid predicate itself is shared via `geom::filter::is_grenade_solid`
+/// (`specs/s6w_physics_clip.md`) so this and `geom::filter::grenade_mask` can never
+/// diverge.
 fn grenade_mask_excluding(mesh: &CollisionMesh, excluded: &[String]) -> AttributeMask {
     from_fn(mesh, |a| {
         is_grenade_solid(a) && !excluded.iter().any(|n| n.eq_ignore_ascii_case(&a.name))

@@ -13,10 +13,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use geom::collider::Collider;
-use geom::filter::{self, AttributeMask};
+use geom::filter::{self, AttributeMask, is_grenade_solid};
 use geom::grid::UniformGrid;
 use geom::math::{Aabb, V3};
-use geom::mesh::CollisionAttribute;
 use geom::voxel::VoxelGrid;
 use sim::{SmokeParams, ThrowSpec, Trace, eye_height, simulate_exact, smoke_fill};
 use solver::{aim_reference, identity, origins, rank};
@@ -101,17 +100,6 @@ fn parse_broken(s: Option<&str>) -> Result<Vec<String>, String> {
     }
     groups.sort();
     Ok(groups)
-}
-
-/// `MeshSetup.cs:52-63`'s grenade-solid predicate, applied to a single attribute (mirrors
-/// `target.rs::is_grenade_solid`, duplicated here since that one is private to `solver`).
-fn is_grenade_solid(a: &CollisionAttribute) -> bool {
-    let any_ci =
-        |layers: &[String], name: &str| layers.iter().any(|l| l.eq_ignore_ascii_case(name));
-    !any_ci(&a.interact_exclude, "csgo_thrown_grenade")
-        && !any_ci(&a.interact_as, "playerclip")
-        && !any_ci(&a.interact_as, "npcclip")
-        && !any_ci(&a.interact_as, "sky")
 }
 
 /// The grenade-solid collider for `broken`'s world state: the entry's cached one when nothing is

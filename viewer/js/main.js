@@ -130,7 +130,7 @@ function wireThemeToggle() {
   globalThemeBtn.addEventListener("click", () => toggleThemeAnd());
 }
 
-// «ОБТ 0.6.0-beta.1»: shown next to the app title once `/api/config` answers with a `version`
+// «ОБТ <version>» (e.g. «ОБТ 0.6.0-beta.2»): shown next to the app title once `/api/config` answers with a `version`
 // - hidden (not "ОБТ undefined") for an older server that predates the field.
 function syncBetaBadge(badgeEl) {
   const version = state.config?.version;

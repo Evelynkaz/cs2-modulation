@@ -672,7 +672,7 @@ async fn get_mesh(
         Ok(e) => e,
         Err(r) => return *r,
     };
-    let etag = format!("\"{}\"", entry.etag);
+    let etag = physics::etag_of(&entry);
     let matched = headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

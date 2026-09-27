@@ -33,8 +33,12 @@ fn set_physics_cache_headers(headers: &mut HeaderMap, etag: &str) {
     );
 }
 
-fn etag_of(entry: &MapEntry) -> String {
-    format!("\"{}\"", entry.etag)
+/// The ETag for physics/mesh responses: the map's mesh hash plus the collision-rules version
+/// (`solve::CACHE_VERSION`) - these responses depend on collision rules, not only on the mesh, so a
+/// rules-only change (no `world.cgeo` change) still busts a browser's cached trajectory/mesh
+/// instead of getting silently revalidated as a 304.
+pub(crate) fn etag_of(entry: &MapEntry) -> String {
+    format!("\"{}-v{}\"", entry.etag, crate::solve::CACHE_VERSION)
 }
 
 /// Follow-up security review item 2: in public mode, holds a `public_physics_semaphore` permit for

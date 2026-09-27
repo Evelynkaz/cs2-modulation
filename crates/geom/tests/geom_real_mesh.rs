@@ -1146,9 +1146,9 @@ fn pinned_seam_rays_grenade_mask() {
     assert!((g.t - 0.841_817_74).abs() < 1e-4, "A: t={}", g.t);
     assert_eq!(g.triangle, 8713, "A: triangle={}", g.triangle);
 
-    // B: blocked true, triangle 102917 (was 102915 - both `Default`, an exact seam tie between
-    // two coincident triangles; `specs/s6w_physics_clip.md` making EntityPhysicsClip non-solid
-    // changed the solid triangle set enough to flip which of the two wins the tie).
+    // B: blocked true, triangle 102917 (was 102915: that pin was stale against the current
+    // extractor-v2 mirage mesh; the pre-s6w grenade rule already gives this triangle. The ray
+    // hits a vertex of it (a seam), so the grid/BVH visit-order tie rule decides).
     let b_from = V3::new(626.30096, -1462.3456, 7.9390383);
     let b_to = V3::new(569.69904, -1405.6544, 20.060963);
     assert!(grid.blocked(b_from, b_to), "B: grid must be blocked");
@@ -1158,10 +1158,9 @@ fn pinned_seam_rays_grenade_mask() {
     assert_eq!(g.triangle, b2.triangle, "B: grid/bvh triangle must match");
     assert_eq!(g.triangle, 102917, "B: triangle={}", g.triangle);
 
-    // C: t=0.5, triangle 122899 (was 122895 - both `Default`, an exact seam tie between two
-    // coincident triangles at this ray's midpoint; `specs/s6w_physics_clip.md` making
-    // EntityPhysicsClip non-solid changed the solid triangle set enough to flip which of the two
-    // wins the tie, in both `UniformGrid` and `Bvh` alike).
+    // C: t=0.5, triangle 122899 (was 122895: that pin was stale against the current extractor-v2
+    // mirage mesh; the pre-s6w grenade rule already gives this triangle. The ray hits a vertex of
+    // it (a seam), so the grid/BVH visit-order tie rule decides).
     let c_from = V3::new(1144.5874, 510.35806, -65.11733);
     let c_to = V3::new(1155.4126, 541.6419, -78.88267);
     let g = grid.first_hit_ray(c_from, c_to).expect("C: grid must hit");

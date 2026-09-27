@@ -411,6 +411,58 @@ async fn mesh_header_and_conditional_304() {
     assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
 }
 
+/// The mesh ETag must carry the collision-rules version (`-v<N>`), not just the mesh hash, so a
+/// rules-only change (no `world.cgeo` change) still busts an old cached mesh/trajectory instead of
+/// getting silently revalidated as a 304.
+#[tokio::test]
+async fn mesh_etag_carries_rules_version_and_a_stale_etag_without_it_is_200() {
+    let cache_root = temp_dir("mesh_etag_version");
+    let _dir = sample_cache_dir(&cache_root, one_triangle_mesh(), None, Vec::new());
+    let router = router_over(&cache_root);
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/mesh?map=de_test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let etag = resp
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let unquoted = etag.trim_start_matches('"').trim_end_matches('"');
+    let (hash, version) = unquoted
+        .rsplit_once("-v")
+        .expect("etag must carry a -v<CACHE_VERSION> suffix");
+    version
+        .parse::<u32>()
+        .expect("the version suffix must be numeric");
+
+    // A stale, pre-fix ETag (just the mesh hash, quoted, no version suffix) must no longer
+    // satisfy If-None-Match: the client gets a fresh 200, not a 304 with the old payload.
+    let stale_etag = format!("\"{hash}\"");
+    let resp = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/mesh?map=de_test")
+                .header(header::IF_NONE_MATCH, stale_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn static_traversal_outside_viewer_dir_is_404_not_a_file() {
     let base = temp_dir("static");

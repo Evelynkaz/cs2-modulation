@@ -718,12 +718,19 @@ fn parse_job_body(body: &Bytes) -> Result<String, Box<Response>> {
     Ok(trimmed.to_ascii_lowercase())
 }
 
+/// `s6t_public_mode.md`: the exact text every job-endpoint attempt gets back in public mode
+/// (`POST /api/jobs/*`, `DELETE /api/jobs/{id}`) - "готовит карты только автор".
+const PUBLIC_JOBS_ERROR: &str = "В демо-режиме карты готовит только автор.";
+
 async fn start_job(
     state: Arc<AppState>,
     kind: JobKind,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    if state.public {
+        return api_error(StatusCode::FORBIDDEN, PUBLIC_JOBS_ERROR);
+    }
     let content_type_ok = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -784,6 +791,11 @@ pub async fn post_render(
 }
 
 pub async fn get_job(State(state): State<Arc<AppState>>, AxPath(id): AxPath<String>) -> Response {
+    // `s6t_public_mode.md`: "job streams -> 404" - no job can ever exist in public mode (every
+    // `POST /api/jobs/*` 403s in `start_job` above), so this is also just the literal truth.
+    if state.public {
+        return api_error(StatusCode::NOT_FOUND, "unknown job");
+    }
     let Some(job) = state.jobs.get(&id) else {
         return api_error(StatusCode::NOT_FOUND, "unknown job");
     };
@@ -794,6 +806,9 @@ pub async fn delete_job(
     State(state): State<Arc<AppState>>,
     AxPath(id): AxPath<String>,
 ) -> Response {
+    if state.public {
+        return api_error(StatusCode::FORBIDDEN, PUBLIC_JOBS_ERROR);
+    }
     let Some(job) = state.jobs.get(&id) else {
         return api_error(StatusCode::NOT_FOUND, "unknown job");
     };
@@ -805,5 +820,10 @@ pub async fn delete_job(
 }
 
 pub async fn get_jobs(State(state): State<Arc<AppState>>) -> Response {
+    // `s6t_public_mode.md`: "GET /api/jobs -> []" - explicit, not just incidentally empty, so this
+    // stays true even if a future change ever lets a job outlive `start_job`'s own gate.
+    if state.public {
+        return Json(Vec::<JobListEntry>::new()).into_response();
+    }
     Json(state.jobs.list()).into_response()
 }

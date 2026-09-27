@@ -102,7 +102,14 @@ body {
   font-size: var(--fs-3);
   background: var(--bg);
   color: var(--text);
-  min-height: 100vh;
+  height: 100vh;
+  /* A column flex root, not a hardcoded `56px` topbar height subtracted elsewhere: the demo
+     banner (`s6t_public_mode.md`, `.demo-banner` below) sits between the topbar and `#app` and its
+     own height isn't a fixed constant, so `main#app` below just takes whatever's left
+     (`flex: 1; min-height: 0`) instead of a `calc(100vh - <n>px)` that would need a second
+     constant for the banner too. */
+  display: flex;
+  flex-direction: column;
 }
 
 h1, h2, h3 {
@@ -126,12 +133,38 @@ button, input, select {
 
 .topbar {
   height: 56px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 var(--sp-4);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* `s6t_public_mode.md`: the public-demo banner, shown under the top bar whenever it's visible
+   (`main.js::setGlobalTopbarVisible`) and hidden outright in local mode. */
+.demo-banner {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+}
+
+.demo-banner a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.demo-banner a:hover {
+  text-decoration: underline;
 }
 
 .brand {
@@ -163,16 +196,9 @@ button, input, select {
 }
 
 main#app {
-  height: calc(100vh - 56px);
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
-}
-
-/* The map screen hides the global topbar (it builds its own header row instead) - `#app` must
-   then claim the full viewport itself, not still reserve the topbar's 56px as empty space below
-   its content (round-2 review finding 12). Every screen that keeps the global topbar visible also
-   keeps the `.app-scroll` class, so this never fires while the topbar is actually on screen. */
-main#app:not(.app-scroll) {
-  height: 100vh;
 }
 
 /* Non-map screens (setup, map list) scroll normally and keep a comfortable reading width. */

@@ -38,6 +38,50 @@ fn etag_of(entry: &MapEntry) -> String {
     format!("\"{}\"", entry.etag)
 }
 
+/// Follow-up security review item 2: in public mode, holds a `public_physics_semaphore` permit for
+/// the duration of `compute` - `grenade_collider_for` rebuilds a whole-map collider from scratch
+/// whenever `broken` is non-empty (~0.5s CPU, ~195MB on a big map), never cached, and was otherwise
+/// uncapped: a public visitor could fire enough concurrent requests to peg every core or balloon
+/// memory. Local mode is unaffected (no permit to wait for). Used by every handler here that calls
+/// `grenade_collider_for` - `get_trajectory`, `get_lineup_one`, `get_slack`; `get_smoke` doesn't
+/// (its `VoxelGrid::build` is bounded to a small region around the query point, not the whole map),
+/// and `get_levels`/`get_mesh` (in `routes.rs`) only ever build/pay for the map's own cached
+/// collider/mesh payload once per process, not per request.
+///
+/// Follow-up review round 3, item 1: the permit is acquired *owned* (`acquire_owned`, needing
+/// `public_physics_semaphore` to be `Arc`-wrapped) and moved into the `spawn_blocking` closure
+/// itself, not just held by this async fn's local - a client closing the connection mid-request
+/// drops this future (hyper cancels the handler), but dropping a `spawn_blocking` `JoinHandle`
+/// never stops the blocking task it's waiting on. A permit held only by this future's own local
+/// would then be freed while the compute kept running unbounded, which is exactly how "send, close
+/// after 8 ms" x40 reached 526 blocking threads / 1.6 GB live.
+async fn spawn_compute_heavy<F, T>(
+    state: &AppState,
+    compute: F,
+) -> Result<T, tokio::task::JoinError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let permit = if state.public {
+        Some(
+            state
+                .public_physics_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("semaphore never closed"),
+        )
+    } else {
+        None
+    };
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        compute()
+    })
+    .await
+}
+
 /// `ServeCommand.cs:1817-1838` (`ParseBroken`): a comma list from `{glass, doors}`, mapped and
 /// Ordinal-sorted.
 fn parse_broken(s: Option<&str>) -> Result<Vec<String>, String> {
@@ -209,7 +253,7 @@ pub async fn get_trajectory(
             .collect();
         Ok((points, contacts, result))
     };
-    let (points, contacts, result) = match tokio::task::spawn_blocking(compute).await {
+    let (points, contacts, result) = match spawn_compute_heavy(&state, compute).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -427,7 +471,7 @@ pub async fn get_lineup_one(
         });
         Ok(json!({ "points": round_points(&points), "lineup": lineup }))
     };
-    let body = match tokio::task::spawn_blocking(compute).await {
+    let body = match spawn_compute_heavy(&state, compute).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -604,7 +648,7 @@ pub async fn get_slack(
         }
         Ok(dirs)
     };
-    let dirs = match tokio::task::spawn_blocking(compute).await {
+    let dirs = match spawn_compute_heavy(&state, compute).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -746,4 +790,72 @@ pub async fn get_smoke(
     let mut resp = Json(body).into_response();
     set_physics_cache_headers(resp.headers_mut(), &etag);
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state(permits: usize) -> AppState {
+        let dir = std::env::temp_dir().join(format!(
+            "cs2mod_server_physics_permit_test_{}",
+            std::process::id()
+        ));
+        let mut state = AppState::new(
+            dir.join("config.json"),
+            crate::config::AppConfig::default(),
+            dir.join("cache"),
+            dir.join("viewer"),
+        );
+        state.public = true;
+        state.public_physics_semaphore = Arc::new(tokio::sync::Semaphore::new(permits));
+        state
+    }
+
+    /// Follow-up security review round 3, item 1: `spawn_compute_heavy` must move its owned permit
+    /// into the `spawn_blocking` closure, not just hold it in its own async fn's locals - otherwise
+    /// hyper dropping the handler future on a client disconnect (simulated here with
+    /// `JoinHandle::abort`) frees the permit while the blocking compute keeps running unbounded.
+    #[tokio::test]
+    async fn permit_outlives_a_dropped_caller_future() {
+        let state = Arc::new(test_state(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let state_for_task = state.clone();
+        let handle = tokio::spawn(async move {
+            let _ = spawn_compute_heavy(&state_for_task, move || {
+                started_tx.send(()).ok();
+                let _ = release_rx.recv();
+                7
+            })
+            .await;
+        });
+
+        // Waits until the blocking closure is actually running - by then the permit has already
+        // been moved out of `spawn_compute_heavy`'s own locals and into that closure.
+        started_rx.await.unwrap();
+        assert_eq!(state.public_physics_semaphore.available_permits(), 0);
+
+        // Simulates hyper cancelling the handler future on a client disconnect mid-request.
+        handle.abort();
+        let _ = handle.await;
+
+        // The permit must still be held: the blocking closure that now owns it is still running,
+        // even though the caller's own future was just aborted.
+        assert_eq!(
+            state.public_physics_semaphore.available_permits(),
+            0,
+            "the permit must not be released just because the caller future was dropped"
+        );
+
+        release_tx.send(()).unwrap();
+        for _ in 0..200 {
+            if state.public_physics_semaphore.available_permits() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(state.public_physics_semaphore.available_permits(), 1);
+    }
 }

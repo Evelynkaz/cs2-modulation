@@ -7,12 +7,14 @@ pub fn serve(
     open: bool,
     game: Option<&Path>,
     cache: Option<&Path>,
+    public: bool,
 ) -> anyhow::Result<u8> {
     let cfg = server::ServeConfig {
         port,
         open,
         game: game.map(Path::to_path_buf),
         cache: cache.map(Path::to_path_buf),
+        public,
     };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

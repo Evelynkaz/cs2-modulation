@@ -1178,6 +1178,7 @@ dependencies = [
  "futures-core",
  "geom",
  "radar",
+ "rayon",
  "s2fmt",
  "s2render",
  "s2tex",

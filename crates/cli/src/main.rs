@@ -315,6 +315,11 @@ enum Command {
         /// Cache directory; overrides the saved config for this run.
         #[arg(long)]
         cache: Option<PathBuf>,
+        /// Runs a public demo server (e.g. tunnelled by FRP to a real hostname): disables
+        /// settings/map-prep for visitors, strips local paths from responses, and caps solve
+        /// concurrency/time. Never opens a browser, even with `--open`.
+        #[arg(long)]
+        public: bool,
     },
     /// Export a map's visible render geometry (world + entities), materials and textures to
     /// `render.glb`/`render.json` in its extraction cache directory.
@@ -446,7 +451,7 @@ fn run() -> anyhow::Result<u8> {
     let cli = Cli::parse();
 
     let Some(command) = cli.command else {
-        return match cmd_serve::serve(None, true, None, None) {
+        return match cmd_serve::serve(None, true, None, None, false) {
             Ok(code) => Ok(code),
             Err(e) => {
                 eprintln!("Error: {e:?}");
@@ -661,7 +666,8 @@ fn run() -> anyhow::Result<u8> {
             open,
             game,
             cache,
-        } => cmd_serve::serve(port, open, game.as_deref(), cache.as_deref()),
+            public,
+        } => cmd_serve::serve(port, open, game.as_deref(), cache.as_deref(), public),
         Command::ExportGlb {
             map,
             max_texture,

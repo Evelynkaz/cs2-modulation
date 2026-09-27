@@ -41,7 +41,7 @@ fn temp_dir(name: &str) -> TempDir {
     TempDir(dir)
 }
 
-fn router() -> (axum::Router, TempDir) {
+fn router_with_state() -> (axum::Router, Arc<AppState>, TempDir) {
     let game_dir = std::env::var_os("CS2_GAME_DIR").expect("CS2_GAME_DIR must be set");
     let cache_root = temp_dir("cache");
     let config_path = cache_root.join("_config").join("config.json");
@@ -57,7 +57,12 @@ fn router() -> (axum::Router, TempDir) {
         )
         .with_overrides(Some(PathBuf::from(game_dir)), None, None),
     );
-    (server::routes::router(state), cache_root)
+    (server::routes::router(state.clone()), state, cache_root)
+}
+
+fn router() -> (axum::Router, TempDir) {
+    let (router, _state, cache) = router_with_state();
+    (router, cache)
 }
 
 async fn get(router: &axum::Router, uri: &str) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
@@ -148,4 +153,41 @@ async fn mapart_is_cached_on_disk_and_served_again_identically() {
     let (status, _headers, second) = get(&router, "/api/mapart?map=de_mirage&kind=radar").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first, second);
+}
+
+/// Follow-up security review round 3, item 2: an unknown map name that still passes `is_safe_ident`
+/// must 404 on both routes, and repeating the lookup must reuse `art::cached_pak01`'s handle rather
+/// than reopening (and re-indexing) the whole VPK each time.
+#[tokio::test]
+#[ignore = "needs CS2_GAME_DIR"]
+async fn unknown_map_overview_and_mapart_404_without_reopening_pak01_again() {
+    let (router, state, _cache) = router_with_state();
+
+    let (status, _headers, _body) =
+        get(&router, "/api/overview?map=zzz_not_a_real_map_at_all").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let opens = state
+        .pak01_open_count
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        opens, 1,
+        "the first unknown-map lookup must open pak01 once"
+    );
+
+    let (status, _headers, _body) =
+        get(&router, "/api/overview?map=zzz_not_a_real_map_at_all").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _headers, _body) = get(
+        &router,
+        "/api/mapart?map=zzz_not_a_real_map_at_all&kind=radar",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        state
+            .pak01_open_count
+            .load(std::sync::atomic::Ordering::Relaxed),
+        opens,
+        "later lookups for the same unknown map must reuse the cached pak01 handle"
+    );
 }

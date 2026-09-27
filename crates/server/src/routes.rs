@@ -34,6 +34,13 @@ pub(crate) const UNKNOWN_MAP_ERROR: &str = "unknown map (see /api/maps)";
 /// `/api/config`'s `PUT` body: a settings patch, not a solve query, so this is generous but not
 /// unbounded.
 const MAX_CONFIG_BODY: usize = 4 * 1024;
+/// `s6t_public_mode.md` change item 2's last bullet: every `POST /api/jobs/*` body is just
+/// `{"map": "..."}` (`jobs::parse_job_body`), but had no size cap at all before this - applied in
+/// both modes, not just public (a public request never reaches the handler at all, see
+/// `jobs::start_job`'s own `state.public` check).
+const MAX_JOB_BODY: usize = 64 * 1024;
+/// `s6t_public_mode.md`: the exact text every settings-change attempt gets back in public mode.
+const PUBLIC_CONFIG_ERROR: &str = "В демо-режиме настройки менять нельзя.";
 
 /// `LineupSolver.Origins.cs` constants named in `ServeCommand.cs:230-240`, reused by
 /// `/api/levels`.
@@ -76,10 +83,30 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/jobs/{id}",
             get(jobs::get_job).delete(jobs::delete_job),
         )
-        .route("/api/jobs/extract", post(jobs::post_extract))
-        .route("/api/jobs/standspots", post(jobs::post_standspots))
-        .route("/api/jobs/viewerdata", post(jobs::post_viewerdata))
-        .route("/api/jobs/render", post(jobs::post_render))
+        .route(
+            "/api/jobs/extract",
+            post(jobs::post_extract)
+                .layer(DefaultBodyLimit::max(MAX_JOB_BODY))
+                .layer(middleware::from_fn(job_body_limit_error)),
+        )
+        .route(
+            "/api/jobs/standspots",
+            post(jobs::post_standspots)
+                .layer(DefaultBodyLimit::max(MAX_JOB_BODY))
+                .layer(middleware::from_fn(job_body_limit_error)),
+        )
+        .route(
+            "/api/jobs/viewerdata",
+            post(jobs::post_viewerdata)
+                .layer(DefaultBodyLimit::max(MAX_JOB_BODY))
+                .layer(middleware::from_fn(job_body_limit_error)),
+        )
+        .route(
+            "/api/jobs/render",
+            post(jobs::post_render)
+                .layer(DefaultBodyLimit::max(MAX_JOB_BODY))
+                .layer(middleware::from_fn(job_body_limit_error)),
+        )
         .route("/data/maps/{map}/viewer-map.png", get(get_radar_png))
         .route(
             "/data/maps/{map}/render_tex/{file}",
@@ -88,8 +115,51 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/data/maps/{map}/{file}", get(get_render_asset))
         .route("/", get(get_index))
         .route("/viewer/{*rest}", get(get_viewer_asset))
+        .layer(middleware::from_fn_with_state(state.clone(), host_check))
         .layer(middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// `s6t_public_mode.md` change item 3: DNS-rebinding guard for local (non-public) mode. Without
+/// it, a malicious web page could point a hostname it controls at `127.0.0.1` and have the
+/// visitor's own browser send this server requests with that hostname as `Host` - same-origin as
+/// far as the browser's cross-origin checks are concerned, so the page's own script could read
+/// map data or `PUT /api/config` as if it were this app's own front end. Public mode is
+/// deliberately reachable by a real hostname (FRP), so it skips this check entirely. A request
+/// with no `Host` header at all passes through unchecked - real HTTP/1.1 requires one (hyper
+/// itself rejects a request missing it before this middleware ever runs), so the only requests
+/// that reach here without one are this crate's own `tower::ServiceExt::oneshot` router tests.
+async fn host_check(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if state.public {
+        return next.run(req).await;
+    }
+    if let Some(host) = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        && !is_allowed_local_host(host, state.bound_port)
+    {
+        return api_error(StatusCode::FORBIDDEN, "invalid Host header");
+    }
+    next.run(req).await
+}
+
+/// `host_check`'s own allow-list, factored out so it's unit-testable without a router. Normally
+/// `<hostname>:<port>`; follow-up security review item 6: on `port == 80` (HTTP's own default),
+/// browsers omit an explicit `:80` from the `Host` header they send, so the bare hostnames must be
+/// accepted too, or a plain `cs2mod serve --port 80` would 403 every real browser request.
+fn is_allowed_local_host(host: &str, port: u16) -> bool {
+    let with_port = host == format!("127.0.0.1:{port}")
+        || host == format!("localhost:{port}")
+        || host == format!("[::1]:{port}");
+    if with_port {
+        return true;
+    }
+    port == 80 && matches!(host, "127.0.0.1" | "localhost" | "[::1]")
 }
 
 /// `ServeCommand.cs:444-455`: baseline hardening headers on every response.
@@ -126,6 +196,16 @@ async fn lineup_body_limit_error(req: axum::extract::Request, next: Next) -> Res
     resp
 }
 
+/// Same rewrite as `lineup_body_limit_error`, for the `/api/jobs/*` `POST` routes
+/// (`MAX_JOB_BODY`).
+async fn job_body_limit_error(req: axum::extract::Request, next: Next) -> Response {
+    let resp = next.run(req).await;
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return api_error(StatusCode::BAD_REQUEST, "request body too large");
+    }
+    resp
+}
+
 pub(crate) fn api_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
@@ -134,10 +214,20 @@ pub(crate) fn unknown_map_error() -> Response {
     api_error(StatusCode::NOT_FOUND, UNKNOWN_MAP_ERROR)
 }
 
-fn registry_error_response(e: RegistryError) -> Response {
+/// `state`'s own `public` flag decides how much of a non-"unknown map" `RegistryError` reaches the
+/// client: locally, the full message (may embed a cache/game-install path, e.g. `ExtractError::
+/// Io`'s); in public mode, a generic one instead (`s6t_public_mode.md`: "никогда не показывать
+/// локальный путь ни в одном ответе").
+fn registry_error_response(state: &AppState, e: RegistryError) -> Response {
     match e {
         RegistryError::UnknownMap => unknown_map_error(),
-        other => api_error(StatusCode::INTERNAL_SERVER_ERROR, other.to_string()),
+        other => {
+            if state.public {
+                api_error(StatusCode::INTERNAL_SERVER_ERROR, "map data unavailable")
+            } else {
+                api_error(StatusCode::INTERNAL_SERVER_ERROR, other.to_string())
+            }
+        }
     }
 }
 
@@ -155,7 +245,7 @@ pub(crate) fn get_entry(state: &AppState, map: &str) -> Result<Arc<MapEntry>, Bo
     state
         .registry
         .get(map, game_dir.as_deref())
-        .map_err(|e| Box::new(registry_error_response(e)))
+        .map_err(|e| Box::new(registry_error_response(state, e)))
 }
 
 // ---- /api/lineup ---------------------------------------------------------------------------------
@@ -232,6 +322,18 @@ pub(crate) fn parse_finite(s: Option<&str>) -> Option<f32> {
 
 // ---- /api/config -----------------------------------------------------------------------------
 
+/// `s6t_public_mode.md`: where the banner's "скачать" link points, in a public `GET /api/config`
+/// response.
+const PUBLIC_DOWNLOAD_URL: &str = "https://github.com/Evelynkaz/cs2-modulation/releases";
+
+/// A map counts as "fully prepared" for a public demo visitor once it has nav data, stand spots
+/// and a radar - the same three fields `viewer/js/main.js`'s own `allReady` check already uses to
+/// decide whether "Подготовить" would even appear. `hasRender`/`renderVersion` are untouched
+/// either way (`s6t_public_mode.md`: "3D только там, где рендер годный", unrelated to this gate).
+fn is_map_public_ready(m: &crate::registry::MapSummary) -> bool {
+    m.has_lineups && m.has_stand_spots && m.has_radar
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConfigResponse {
@@ -250,6 +352,12 @@ struct ConfigResponse {
     /// True when `cache_dir` (as saved) no longer matches the cache directory the live registry
     /// was started with - it takes a restart of `cs2mod serve` to pick up the new one.
     restart_required: bool,
+    /// `s6t_public_mode.md`: lets the viewer skip the first-run setup screen and hide the
+    /// settings/prepare/re-extract controls without a second endpoint.
+    public: bool,
+    /// The demo banner's own link target; only present in public mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    download_url: Option<&'static str>,
 }
 
 fn config_response(state: &AppState, cfg: &AppConfig) -> Response {
@@ -271,20 +379,45 @@ fn config_response(state: &AppState, cfg: &AppConfig) -> Response {
         .as_deref()
         .is_some_and(|d| d != live_cache_root);
     let port = state.port_override.unwrap_or(cfg.port);
-    Json(ConfigResponse {
-        version: env!("CARGO_PKG_VERSION"),
-        configured,
-        game_dir: effective_game_dir.as_ref().map(|p| p.display().to_string()),
-        game_dir_adjusted,
-        cache_dir: Some(cache_dir_response.display().to_string()),
-        port,
-        last_map: cfg.last_map.clone(),
-        theme: cfg.theme.clone(),
-        game_build,
-        maps: state.registry.maps(effective_game_dir.as_deref()),
-        restart_required,
-    })
-    .into_response()
+    let mut maps = state.registry.maps(effective_game_dir.as_deref());
+    // `s6t_public_mode.md`: never leak a local path (`gameDir`/`cacheDir`) to a public visitor, and
+    // always report `configured: true` so the viewer never opens the setup screen for one either.
+    if state.public {
+        maps.retain(is_map_public_ready);
+        Json(ConfigResponse {
+            version: env!("CARGO_PKG_VERSION"),
+            configured: true,
+            game_dir: None,
+            game_dir_adjusted: false,
+            cache_dir: None,
+            port,
+            last_map: cfg.last_map.clone(),
+            theme: cfg.theme.clone(),
+            game_build,
+            maps,
+            restart_required: false,
+            public: true,
+            download_url: Some(PUBLIC_DOWNLOAD_URL),
+        })
+        .into_response()
+    } else {
+        Json(ConfigResponse {
+            version: env!("CARGO_PKG_VERSION"),
+            configured,
+            game_dir: effective_game_dir.as_ref().map(|p| p.display().to_string()),
+            game_dir_adjusted,
+            cache_dir: Some(cache_dir_response.display().to_string()),
+            port,
+            last_map: cfg.last_map.clone(),
+            theme: cfg.theme.clone(),
+            game_build,
+            maps,
+            restart_required,
+            public: false,
+            download_url: None,
+        })
+        .into_response()
+    }
 }
 
 async fn get_config(State(state): State<Arc<AppState>>) -> Response {
@@ -303,6 +436,9 @@ struct ConfigPatch {
 }
 
 async fn put_config(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    if state.public {
+        return api_error(StatusCode::FORBIDDEN, PUBLIC_CONFIG_ERROR);
+    }
     if body.len() > MAX_CONFIG_BODY {
         return api_error(StatusCode::PAYLOAD_TOO_LARGE, "request body too large");
     }
@@ -352,7 +488,11 @@ async fn put_config(State(state): State<Arc<AppState>>, body: Bytes) -> Response
 
 async fn get_maps(State(state): State<Arc<AppState>>) -> Response {
     let game_dir = effective_game_dir(&state);
-    Json(state.registry.maps(game_dir.as_deref())).into_response()
+    let mut maps = state.registry.maps(game_dir.as_deref());
+    if state.public {
+        maps.retain(is_map_public_ready);
+    }
+    Json(maps).into_response()
 }
 
 // ---- /api/spawns --------------------------------------------------------------------------------
@@ -886,5 +1026,40 @@ async fn get_viewer_asset(
     match resolve_static(&state.viewer_dir, &rest) {
         Some(path) => serve_file(&path),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_the_three_local_hosts_with_an_explicit_port() {
+        for host in ["127.0.0.1:18190", "localhost:18190", "[::1]:18190"] {
+            assert!(is_allowed_local_host(host, 18190), "{host}");
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_host_or_wrong_port() {
+        assert!(!is_allowed_local_host("evil.example", 18190));
+        assert!(!is_allowed_local_host("127.0.0.1:9999", 18190));
+        assert!(!is_allowed_local_host("127.0.0.1", 18190));
+    }
+
+    /// Follow-up security review item 6: browsers omit an explicit `:80` for plain HTTP, so a
+    /// server bound to port 80 must also accept the three bare hostnames.
+    #[test]
+    fn accepts_bare_hosts_only_when_bound_to_port_80() {
+        for host in ["127.0.0.1", "localhost", "[::1]"] {
+            assert!(is_allowed_local_host(host, 80), "{host}");
+        }
+        for host in ["127.0.0.1", "localhost", "[::1]"] {
+            assert!(!is_allowed_local_host(host, 18190), "{host}");
+        }
+        // Port 80 still isn't a free-for-all - a real explicit port or an unrelated host is still
+        // rejected.
+        assert!(!is_allowed_local_host("127.0.0.1:81", 80));
+        assert!(!is_allowed_local_host("evil.example", 80));
     }
 }

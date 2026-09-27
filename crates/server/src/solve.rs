@@ -39,6 +39,32 @@ const SINGLE_TARGET_DEFAULT_ATTRS_STR: &str = "Default,default,EntitySolid";
 pub(crate) const MAX_LINEUP_BODY: usize = 4 * 1024;
 const MAX_QUEUED_SOLVES: usize = 16;
 
+/// `s6t_public_mode.md`: the public demo's own queue cap ("очередь до 4"), used with
+/// `AppState::public_solve_queue` instead of `MAX_QUEUED_SOLVES`; `AppState::public_queue_cap`
+/// defaults to this but is overridable by tests.
+pub(crate) const MAX_PUBLIC_QUEUED_SOLVES: usize = 4;
+/// `s6t_public_mode.md`: a public demo solve is force-cancelled past this wall-clock duration, so
+/// one visitor's pathological query can't hold the single public solve permit forever.
+/// `AppState::public_solve_time_limit` defaults to this but is overridable by tests.
+pub(crate) const PUBLIC_SOLVE_TIME_LIMIT: Duration = Duration::from_secs(120);
+/// Follow-up security review (item 3): the reverse proxy in front of a public deployment runs with
+/// `proxy_buffering off` on `/api/lineup` (needed for live progress), so a stalled client's TCP
+/// window backpressures all the way to `LineSender::send` - without a bound, that wait (and the
+/// solve permit/`PUBLIC_SOLVE_TIME_LIMIT` deadline it blocks) could last forever instead of just
+/// until the next deadline check. `AppState::send_timeout` defaults to this but is overridable by
+/// tests.
+pub(crate) const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+/// `s6t_public_mode.md`: "выделенный поток из max(1, ядер/2)" - a public solve runs on a rayon
+/// pool this size, dedicated to that one solve, rather than the host's default (all-cores) rayon
+/// pool, so the host PC stays usable while a visitor's search runs. Also sizes
+/// `AppState::public_physics_semaphore` (follow-up review item 2).
+pub(crate) fn public_solve_threads() -> usize {
+    let cpus = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    (cpus / 2).max(1)
+}
+
 /// `s6e_progress_jobs.md`'s per-line and per-solve caps on `checked`/`verified` progress points:
 /// past `MAX_STREAM_POINTS` for one solve, further points are simply dropped (the solve itself is
 /// untouched) and a single `{"phase":"progress-truncated"}` line tells the client why the stream
@@ -1206,9 +1232,21 @@ impl futures_core::Stream for RxStream {
 
 pub(crate) type LineSender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
 
-pub(crate) async fn send_line(tx: &LineSender, mut line: String) -> Result<(), ()> {
+/// Follow-up security review item 3: `tx.send` blocks once the channel (capacity 64) fills up and
+/// nobody's reading - a stalled-but-still-connected client (real with `proxy_buffering off`) rather
+/// than a dropped one. `timeout` bounds that wait so a caller never hangs past
+/// `AppState::send_timeout`; a timeout is treated exactly like the channel closing (`Err(())`), so
+/// every existing `is_err()` -> `cancel.store(true, ...)` caller already does the right thing.
+pub(crate) async fn send_line(
+    tx: &LineSender,
+    timeout: Duration,
+    mut line: String,
+) -> Result<(), ()> {
     line.push('\n');
-    tx.send(Ok(Bytes::from(line))).await.map_err(|_| ())
+    match tokio::time::timeout(timeout, tx.send(Ok(Bytes::from(line)))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) | Err(_) => Err(()),
+    }
 }
 
 /// One `SolveHooks` callback firing, tagged so the drain loop below can batch consecutive
@@ -1239,16 +1277,28 @@ fn points_line(kind: &str, points: &[[i64; 4]]) -> String {
     s
 }
 
+/// `cancel` is checked before every send (not just after a failure): once it's set, further sends
+/// are skipped outright rather than each racking up their own `send_timeout` wait
+/// (`s6t_public_mode.md` follow-up review item 3 - "the deadline must be checked even while
+/// waiting to send", i.e. one stalled write must not compound into several).
+#[allow(clippy::too_many_arguments)]
 async fn flush_batch(
     tx: &LineSender,
     cancel: &AtomicBool,
     kind: &str,
     batch: &mut Vec<[i64; 4]>,
     max_points_per_line: usize,
+    send_timeout: Duration,
 ) {
-    for chunk in batch.chunks(max_points_per_line) {
-        if send_line(tx, points_line(kind, chunk)).await.is_err() {
-            cancel.store(true, Ordering::Relaxed);
+    if !cancel.load(Ordering::Relaxed) {
+        for chunk in batch.chunks(max_points_per_line) {
+            if send_line(tx, send_timeout, points_line(kind, chunk))
+                .await
+                .is_err()
+            {
+                cancel.store(true, Ordering::Relaxed);
+                break;
+            }
         }
     }
     batch.clear();
@@ -1257,6 +1307,7 @@ async fn flush_batch(
 /// Drains every `SolveEvent` currently queued, sending a `phase` line per phase event and
 /// batching consecutive `Origin`/`Candidate` runs into `checked`/`verified` lines
 /// (`ServeCommand.cs:1780-1811`). Called on a ~100ms tick and once more after the solve finishes.
+#[allow(clippy::too_many_arguments)]
 async fn drain_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<SolveEvent>,
     tx: &LineSender,
@@ -1264,24 +1315,32 @@ async fn drain_events(
     truncated: &AtomicBool,
     truncated_sent: &mut bool,
     max_points_per_line: usize,
+    send_timeout: Duration,
 ) {
     let mut batch_kind: Option<&'static str> = None;
     let mut batch: Vec<[i64; 4]> = Vec::new();
     while let Ok(ev) = event_rx.try_recv() {
+        // Once cancelled, keep draining the channel (so it can't grow unbounded) but stop trying
+        // to send - nobody's reading, so every further attempt would just cost another
+        // `send_timeout` wait for nothing.
+        if cancel.load(Ordering::Relaxed) {
+            continue;
+        }
         match ev {
             SolveEvent::Phase(phase, count) => {
                 if let Some(k) = batch_kind.take() {
-                    flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
+                    flush_batch(tx, cancel, k, &mut batch, max_points_per_line, send_timeout).await;
                 }
                 let line = format!("{{\"phase\":\"{}\",\"count\":{count}}}", phase_name(phase));
-                if send_line(tx, line).await.is_err() {
+                if send_line(tx, send_timeout, line).await.is_err() {
                     cancel.store(true, Ordering::Relaxed);
                 }
             }
             SolveEvent::Origin(x, y, z, hits) => {
                 if batch_kind != Some("checked") {
                     if let Some(k) = batch_kind.take() {
-                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
+                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line, send_timeout)
+                            .await;
                     }
                     batch_kind = Some("checked");
                 }
@@ -1290,7 +1349,8 @@ async fn drain_events(
             SolveEvent::Candidate(x, y, z, ok) => {
                 if batch_kind != Some("verified") {
                     if let Some(k) = batch_kind.take() {
-                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
+                        flush_batch(tx, cancel, k, &mut batch, max_points_per_line, send_timeout)
+                            .await;
                     }
                     batch_kind = Some("verified");
                 }
@@ -1298,14 +1358,21 @@ async fn drain_events(
             }
         }
     }
+    if cancel.load(Ordering::Relaxed) {
+        return;
+    }
     if let Some(k) = batch_kind.take() {
-        flush_batch(tx, cancel, k, &mut batch, max_points_per_line).await;
+        flush_batch(tx, cancel, k, &mut batch, max_points_per_line, send_timeout).await;
     }
     if truncated.load(Ordering::Relaxed) && !*truncated_sent {
         *truncated_sent = true;
-        if send_line(tx, "{\"phase\":\"progress-truncated\"}".to_string())
-            .await
-            .is_err()
+        if send_line(
+            tx,
+            send_timeout,
+            "{\"phase\":\"progress-truncated\"}".to_string(),
+        )
+        .await
+        .is_err()
         {
             cancel.store(true, Ordering::Relaxed);
         }
@@ -1379,7 +1446,11 @@ pub fn prune_cache(cache_dir: &Path) {
 
 /// Runs the solve, forwarding phase progress and the final `result`/`error` line to `tx`. Caches
 /// the answer only when it finished uncancelled. `cancel` is shared with the caller, which sets
-/// it when a write to `tx` fails (the client left).
+/// it when a write to `tx` fails (the client left). `permit` is this solve's concurrency slot
+/// (`AppState::solve_semaphore`/`public_solve_semaphore`) - held only for the compute itself and
+/// dropped right after the `while !handle_done` loop, before the final drain/result send, so a
+/// stalled client's slow last read doesn't also hold up the next queued solve (`s6t_public_mode.md`
+/// follow-up review item 3).
 #[allow(clippy::too_many_arguments)]
 async fn run_solve_and_stream(
     map_data: MapData,
@@ -1392,6 +1463,10 @@ async fn run_solve_and_stream(
     cancel: Arc<AtomicBool>,
     max_stream_points: usize,
     max_points_per_line: usize,
+    public: bool,
+    time_limit: Duration,
+    send_timeout: Duration,
+    permit: tokio::sync::SemaphorePermit<'_>,
 ) {
     // `query` moves into `spawn_blocking`'s closure below, so this is captured up front for
     // `json_payload`'s own use once the solve is done (`s6g2_target_area.md`'s `insideTargetArea`).
@@ -1405,52 +1480,77 @@ async fn run_solve_and_stream(
     let truncated_for_drain = truncated.clone();
     let cancel_for_blocking = cancel.clone();
     let handle = tokio::task::spawn_blocking(move || {
-        let progress_tx = event_tx.clone();
-        let progress = move |phase: Phase, count: usize| {
-            let _ = progress_tx.send(SolveEvent::Phase(phase, count));
+        // Built (and, on the pool path, entirely consumed) inside this one closure rather than
+        // shared by reference into it from outside: `SolveHooks`'s `dyn Fn` fields aren't `Sync`,
+        // so a `&hooks` captured from outside wouldn't itself be `Send` - `rayon::ThreadPool::
+        // install` requires its whole closure to be, since it may run on a pool worker thread.
+        // `run` needing to be called from exactly one of the two match arms below is fine: each
+        // arm is a separate, mutually exclusive branch, so moving it into either does not conflict.
+        let run = move || {
+            let progress_tx = event_tx.clone();
+            let progress = move |phase: Phase, count: usize| {
+                let _ = progress_tx.send(SolveEvent::Phase(phase, count));
+            };
+            let origin_tx = event_tx.clone();
+            let total_points_o = total_points.clone();
+            let truncated_o = truncated.clone();
+            let on_origin = move |feet: V3, hits: usize| {
+                if truncated_o.load(Ordering::Relaxed) {
+                    return;
+                }
+                if total_points_o.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
+                    truncated_o.store(true, Ordering::Relaxed);
+                    return;
+                }
+                let _ = origin_tx.send(SolveEvent::Origin(
+                    round_i64(feet.x),
+                    round_i64(feet.y),
+                    round_i64(feet.z),
+                    hits as i64,
+                ));
+            };
+            let candidate_tx = event_tx.clone();
+            let total_points_c = total_points.clone();
+            let truncated_c = truncated.clone();
+            let on_candidate = move |feet: V3, ok: bool| {
+                if truncated_c.load(Ordering::Relaxed) {
+                    return;
+                }
+                if total_points_c.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
+                    truncated_c.store(true, Ordering::Relaxed);
+                    return;
+                }
+                let _ = candidate_tx.send(SolveEvent::Candidate(
+                    round_i64(feet.x),
+                    round_i64(feet.y),
+                    round_i64(feet.z),
+                    i64::from(ok),
+                ));
+            };
+            let hooks = SolveHooks {
+                progress: &progress,
+                on_origin: Some(&on_origin),
+                on_candidate: Some(&on_candidate),
+            };
+            target::solve_for_target(&map_data, &query, &constants, &hooks, &cancel_for_blocking)
         };
-        let origin_tx = event_tx.clone();
-        let total_points_o = total_points.clone();
-        let truncated_o = truncated.clone();
-        let on_origin = move |feet: V3, hits: usize| {
-            if truncated_o.load(Ordering::Relaxed) {
-                return;
+        // `s6t_public_mode.md`: a public solve runs on its own dedicated, capped rayon pool
+        // instead of the host's default (all-cores) one - built fresh per solve since at most one
+        // runs at a time in public mode (`AppState::public_solve_semaphore`), so the extra thread
+        // spin-up is not a real cost. `ThreadPoolBuilder::build` only fails if the OS can't spawn
+        // threads at all, in which case falling back to a direct call is strictly better than
+        // erroring the whole solve out.
+        if public {
+            match rayon::ThreadPoolBuilder::new()
+                .num_threads(public_solve_threads())
+                .build()
+            {
+                Ok(pool) => pool.install(run),
+                Err(_) => run(),
             }
-            if total_points_o.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
-                truncated_o.store(true, Ordering::Relaxed);
-                return;
-            }
-            let _ = origin_tx.send(SolveEvent::Origin(
-                round_i64(feet.x),
-                round_i64(feet.y),
-                round_i64(feet.z),
-                hits as i64,
-            ));
-        };
-        let candidate_tx = event_tx.clone();
-        let total_points_c = total_points.clone();
-        let truncated_c = truncated.clone();
-        let on_candidate = move |feet: V3, ok: bool| {
-            if truncated_c.load(Ordering::Relaxed) {
-                return;
-            }
-            if total_points_c.fetch_add(1, Ordering::Relaxed) >= max_stream_points {
-                truncated_c.store(true, Ordering::Relaxed);
-                return;
-            }
-            let _ = candidate_tx.send(SolveEvent::Candidate(
-                round_i64(feet.x),
-                round_i64(feet.y),
-                round_i64(feet.z),
-                i64::from(ok),
-            ));
-        };
-        let hooks = SolveHooks {
-            progress: &progress,
-            on_origin: Some(&on_origin),
-            on_candidate: Some(&on_candidate),
-        };
-        target::solve_for_target(&map_data, &query, &constants, &hooks, &cancel_for_blocking)
+        } else {
+            run()
+        }
     });
 
     let mut handle = handle;
@@ -1459,6 +1559,11 @@ async fn run_solve_and_stream(
     let mut ticker = tokio::time::interval(PROGRESS_DRAIN_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut truncated_sent = false;
+    // `s6t_public_mode.md`: a public solve is force-cancelled past `time_limit`; `timed_out`
+    // distinguishes that from a client-initiated cancel (which ends the stream silently below) so
+    // the demo visitor gets a clear Russian line instead of a stream that just stops.
+    let solve_started = tokio::time::Instant::now();
+    let timed_out = Arc::new(AtomicBool::new(false));
     while !handle_done {
         tokio::select! {
             res = &mut handle, if !handle_done => {
@@ -1474,10 +1579,23 @@ async fn run_solve_and_stream(
                 if tx.is_closed() {
                     cancel.store(true, Ordering::Relaxed);
                 }
-                drain_events(&mut event_rx, &tx, &cancel, &truncated_for_drain, &mut truncated_sent, max_points_per_line).await;
+                // Checked on every tick, not just once after a send blocks: `drain_events` now
+                // bails out of further sends the moment `cancel` is set (`s6t_public_mode.md`
+                // follow-up review item 3), so this deadline is re-checked at latest one
+                // `PROGRESS_DRAIN_INTERVAL` plus at most one `send_timeout` after the client
+                // actually stalls, never blocked on indefinitely by a stuck write.
+                if public && !timed_out.load(Ordering::Relaxed) && solve_started.elapsed() >= time_limit {
+                    timed_out.store(true, Ordering::Relaxed);
+                    cancel.store(true, Ordering::Relaxed);
+                }
+                drain_events(&mut event_rx, &tx, &cancel, &truncated_for_drain, &mut truncated_sent, max_points_per_line, send_timeout).await;
             }
         }
     }
+    // The compute itself (and the rayon pool/collider it used) is done - release the concurrency
+    // slot before spending any more time on network I/O, so a slow/stalled final read doesn't also
+    // block the next queued solve (`s6t_public_mode.md` follow-up review item 3).
+    drop(permit);
     drain_events(
         &mut event_rx,
         &tx,
@@ -1485,9 +1603,21 @@ async fn run_solve_and_stream(
         &truncated_for_drain,
         &mut truncated_sent,
         max_points_per_line,
+        send_timeout,
     )
     .await;
     let solve_result = solve_result.expect("handle awaited exactly once above");
+
+    if timed_out.load(Ordering::Relaxed) {
+        let _ = send_line(
+            &tx,
+            send_timeout,
+            "{\"error\":\"Поиск занял больше 120 секунд и был остановлен - попробуйте сузить область или условия поиска.\"}"
+                .to_string(),
+        )
+        .await;
+        return;
+    }
 
     match solve_result {
         Ok(solve) => {
@@ -1499,6 +1629,7 @@ async fn run_solve_and_stream(
             let Ok(json_text) = serde_json::to_string(&payload) else {
                 let _ = send_line(
                     &tx,
+                    send_timeout,
                     "{\"error\":\"solver failure - check server log\"}".to_string(),
                 )
                 .await;
@@ -1507,12 +1638,13 @@ async fn run_solve_and_stream(
             if let Err(e) = write_cache_atomic(&cache_dir, &cache_key, &json_text) {
                 eprintln!("lineup cache write failed: {e}");
             }
-            let _ = send_line(&tx, format!("{{\"result\":{json_text}}}")).await;
+            let _ = send_line(&tx, send_timeout, format!("{{\"result\":{json_text}}}")).await;
         }
         Err(e) => {
             eprintln!("lineup solve failed: {e}");
             let _ = send_line(
                 &tx,
+                send_timeout,
                 "{\"error\":\"solver failure - check server log\"}".to_string(),
             )
             .await;
@@ -1568,12 +1700,24 @@ pub(crate) async fn post_lineup(
         return ndjson_response(Body::from(format!("{{\"result\":{cached}}}\n")));
     }
 
-    let ahead = state.solve_queue.fetch_add(1, Ordering::Relaxed);
-    if ahead >= MAX_QUEUED_SOLVES {
-        state.solve_queue.fetch_sub(1, Ordering::Relaxed);
+    // `s6t_public_mode.md`: a public visitor's solve waits on its own single-permit semaphore/
+    // queue (capped by `public_queue_cap`, default 4) instead of the regular two-permit one, so a
+    // demo can't starve the operator's own local use of the same server.
+    let (queue, queue_cap) = if state.public {
+        (&state.public_solve_queue, state.public_queue_cap)
+    } else {
+        (&state.solve_queue, MAX_QUEUED_SOLVES)
+    };
+    let ahead = queue.fetch_add(1, Ordering::Relaxed);
+    if ahead >= queue_cap {
+        queue.fetch_sub(1, Ordering::Relaxed);
         return api_error(
             StatusCode::TOO_MANY_REQUESTS,
-            "too many solves queued - try again in a moment",
+            if state.public {
+                "Сервер занят другими поисками, попробуйте через минуту."
+            } else {
+                "too many solves queued - try again in a moment"
+            },
         );
     }
 
@@ -1589,20 +1733,34 @@ pub(crate) async fn post_lineup(
     let response = ndjson_response(body);
 
     tokio::spawn(async move {
-        if send_line(&tx, format!("{{\"phase\":\"queued\",\"count\":{ahead}}}"))
-            .await
-            .is_err()
+        let queue = if state.public {
+            &state.public_solve_queue
+        } else {
+            &state.solve_queue
+        };
+        if send_line(
+            &tx,
+            state.send_timeout,
+            format!("{{\"phase\":\"queued\",\"count\":{ahead}}}"),
+        )
+        .await
+        .is_err()
         {
             // The client left before we even started waiting for a permit - don't hold a queue
             // slot for a solve nobody will read.
-            state.solve_queue.fetch_sub(1, Ordering::Relaxed);
+            queue.fetch_sub(1, Ordering::Relaxed);
             return;
         }
-        let Ok(_permit) = state.solve_semaphore.acquire().await else {
-            state.solve_queue.fetch_sub(1, Ordering::Relaxed);
+        let semaphore = if state.public {
+            &state.public_solve_semaphore
+        } else {
+            &state.solve_semaphore
+        };
+        let Ok(permit) = semaphore.acquire().await else {
+            queue.fetch_sub(1, Ordering::Relaxed);
             return;
         };
-        state.solve_queue.fetch_sub(1, Ordering::Relaxed);
+        queue.fetch_sub(1, Ordering::Relaxed);
 
         if tx.is_closed() {
             // The client left while queued; the permit is ours now, but starting a solve that
@@ -1613,7 +1771,7 @@ pub(crate) async fn post_lineup(
         // A double-submit (two tabs, a re-click) may have solved and cached while this request
         // waited for a permit (`ServeCommand.cs:1680-1684`).
         if let Some(cached) = read_cache(&cache_dir, &cache_key).await {
-            let _ = send_line(&tx, format!("{{\"result\":{cached}}}")).await;
+            let _ = send_line(&tx, state.send_timeout, format!("{{\"result\":{cached}}}")).await;
             return;
         }
 
@@ -1643,6 +1801,10 @@ pub(crate) async fn post_lineup(
             cancel,
             state.max_stream_points,
             state.max_points_per_line,
+            state.public,
+            state.public_solve_time_limit,
+            state.send_timeout,
+            permit,
         )
         .await;
     });

@@ -3,7 +3,7 @@
 // live here.
 
 import { state, applyTheme, resolveInitialTheme, storeTheme } from "./state.js?v=1";
-import { strings } from "./strings.js?v=5";
+import { strings } from "./strings.js?v=6";
 import {
   fetchConfig,
   putConfig,
@@ -50,6 +50,7 @@ const globalTopbar = document.getElementById("topbar");
 const globalThemeBtn = document.getElementById("theme-toggle");
 const globalBetaBadge = document.getElementById("beta-badge");
 const globalReportBtn = document.getElementById("report-issue-btn");
+const demoBanner = document.getElementById("demo-banner");
 let radarView = null; // { recolor(): void } for the current map screen's 2D canvas, if any.
 // AMBER-7: the map view owns a ResizeObserver, a devicePixelRatio listener and a recolored
 // canvas - each `showMapScreen` must destroy the previous one instead of leaking it. F3b-1b: a
@@ -77,9 +78,31 @@ function setAppScroll(scroll) {
 }
 
 // The map screen builds its own combined header row (back + map name + 2D/3D + theme) - the
-// generic topbar is hidden while it's open and restored by every other screen.
+// generic topbar is hidden while it's open and restored by every other screen. The demo banner
+// (`s6t_public_mode.md`) rides along with it - there's no combined-header room for it on the map
+// screen, and a banner with no topbar above it would look stray.
 function setGlobalTopbarVisible(visible) {
   globalTopbar.hidden = !visible;
+  demoBanner.hidden = !visible || !isPublic();
+}
+
+function isPublic() {
+  return !!state.config?.public;
+}
+
+// `/api/config`'s own `public`/`downloadUrl` - shown once, under the top bar, whenever it's
+// visible (`setGlobalTopbarVisible`); rebuilt from scratch here since `downloadUrl` only exists
+// once `state.config` has actually loaded.
+function syncDemoBanner() {
+  demoBanner.replaceChildren(
+    el("span", { textContent: strings.demo.bannerPrefix }),
+    el("a", {
+      href: state.config?.downloadUrl ?? "#",
+      target: "_blank",
+      rel: "noopener",
+      textContent: strings.demo.bannerLink,
+    }),
+  );
 }
 
 // ---- bootstrap ------------------------------------------------------------------------------
@@ -393,6 +416,7 @@ async function routeFromConfig() {
   }
   state.config = data;
   syncBetaBadge(globalBetaBadge);
+  syncDemoBanner();
   if (!data.configured) {
     openSetup(data);
     return;
@@ -471,24 +495,31 @@ function renderMapsScreen() {
   setGlobalTopbarVisible(true);
   app.replaceChildren();
   announce(strings.maps.heading);
-  const settingsBtn = el("button", { type: "button", className: "btn-ghost" });
-  settingsBtn.innerHTML = `${icon("gear", 16)} ${strings.maps.backToSetup}`;
-  settingsBtn.addEventListener("click", () => openSetup(state.config));
+  // `s6t_public_mode.md`: a public visitor never sees "Настройки" (it only leads to `PUT /api/
+  // config`, 403 there anyway) or "Добавить карту по имени" (map prep is the operator's alone).
+  const headerChildren = [el("h1", { textContent: strings.maps.heading })];
+  if (!isPublic()) {
+    const settingsBtn = el("button", { type: "button", className: "btn-ghost" });
+    settingsBtn.innerHTML = `${icon("gear", 16)} ${strings.maps.backToSetup}`;
+    settingsBtn.addEventListener("click", () => openSetup(state.config));
+    headerChildren.push(settingsBtn);
+  }
 
-  const page = el(
-    "div",
-    { className: "page" },
-    el("div", { className: "page-header" }, el("h1", { textContent: strings.maps.heading }), settingsBtn),
-  );
+  const page = el("div", { className: "page" }, el("div", { className: "page-header" }, ...headerChildren));
 
   if (state.maps.length === 0) {
-    page.append(renderExtractNewForm());
+    if (!isPublic()) {
+      page.append(renderExtractNewForm());
+    }
   } else {
     const grid = el("div", { className: "map-grid" });
     for (const m of sortedMaps(state.maps)) {
       grid.append(renderMapCard(m));
     }
-    page.append(grid, renderExtractNewForm(true));
+    page.append(grid);
+    if (!isPublic()) {
+      page.append(renderExtractNewForm(true));
+    }
   }
   app.append(page);
 }
@@ -874,14 +905,17 @@ function renderMapCard(m) {
     const openBtn = el("button", { type: "button", className: "primary", textContent: strings.maps.openButton });
     openBtn.addEventListener("click", () => selectMap(m.map));
     actions.append(openBtn);
-  } else {
+  } else if (!isPublic()) {
+    // `s6t_public_mode.md`: "Подготовить" never appears for a public visitor - the server itself
+    // never lists a not-yet-ready map in public mode, so this only ever runs locally anyway.
     const prepareBtn = el("button", { type: "button", className: "primary", textContent: strings.maps.prepareButton });
     prepareBtn.addEventListener("click", () => {
       startJobFlow(missingKinds(m), m.map, { progressBox, label, barSpan, disableButtons: [prepareBtn], cancelBtn }, () => showMapsScreen());
     });
     actions.append(prepareBtn);
   }
-  if (m.stale && !record) {
+  // `s6t_public_mode.md`: "Переизвлечь" is map prep too - hidden for a public visitor.
+  if (m.stale && !record && !isPublic()) {
     const reextractBtn = el("button", { type: "button", textContent: strings.maps.reextractButton });
     reextractBtn.addEventListener("click", () => {
       startJobFlow(["extract"], m.map, { progressBox, label, barSpan, disableButtons: [reextractBtn], cancelBtn }, () => showMapsScreen());
@@ -2604,9 +2638,11 @@ async function showMapScreen(map, opts = {}) {
 
   // Shows "Подготовить 3D" exactly while it would do something useful - blocked on this map's own
   // missing/outdated render, and no `render` job (started from here or from the map list) already
-  // in flight for it.
+  // in flight for it. Never shown in public mode (`s6t_public_mode.md`): map prep is the
+  // operator's alone there.
   function syncPrepare3dButton() {
-    prepare3dBtn.hidden = !render3dBlocked || hasUsableRender(mapSummary) || state.activeJobs.has(map);
+    prepare3dBtn.hidden =
+      isPublic() || !render3dBlocked || hasUsableRender(mapSummary) || state.activeJobs.has(map);
   }
 
   prepare3dBtn.addEventListener("click", () => {

@@ -724,6 +724,75 @@ pub const ROBUST_FEET_JITTER: f32 = 1.0;
 /// constant, not a magic number at the call site).
 pub const ROBUST_MIN: f32 = 0.5;
 
+// ---- Rest support (diagnostic only, `s6v_fix1.md`) ---------------------------------------------
+//
+// The sim can park a grenade balanced on a narrow rim/board where the real grenade rolls off (user
+// test 2026-09-27, de_mirage: sim rests on a 2.2u-wide board with the hull centre exactly on its
+// west edge). An earlier version of this code flagged such a rest as "rim" and capped `robustness`
+// for it - DECISION (`s6v_fix1.md`, reviewed): dropped. On big1's 22 real in-game rests the rim
+// rule flagged 13 (11 with the centre unsupported), and the user's own board case was confirmed IN
+// GAME to stay with the correct technique - the sim's rest logic already matches the game, and
+// sensitivity of a rest to small errors is exactly what `robust_pos`/`robust_aim`/`robust_model`
+// already measure. `rest_support` itself is kept as a pure, unit-tested DIAGNOSTIC (used by
+// `cs2mod replay-demo`'s report to print how well-supported a diverging throw's sim rest is) - it
+// is not folded into `robustness` and has no `Lineup`/JSON/viewer field.
+
+/// The floor-support sampling grid: a 5x5 lattice over +-2u (`REST_SUPPORT_STEP` per cell).
+const REST_SUPPORT_GRID_REACH: i32 = 2;
+const REST_SUPPORT_STEP: f32 = 1.0;
+/// Rays run from `rest.z + REST_SUPPORT_RAY_UP` down to `rest.z - REST_SUPPORT_RAY_DOWN`.
+const REST_SUPPORT_RAY_UP: f32 = 1.0;
+const REST_SUPPORT_RAY_DOWN: f32 = 4.0;
+/// Reported `width` when every sampled point is supported - no unsupported sample exists to
+/// measure a real distance to, so this reads as fully supported rather than as narrow.
+pub const REST_SUPPORT_FULL_WIDTH: f32 = 4.0;
+
+/// The grenade hull footprint's floor support at `rest`: `fraction` of the 5x5 grid whose
+/// downward ray hit the grenade-solid mesh, whether the centre sample itself did
+/// (`center_supported`), and the distance from the centre to the nearest unsupported sample
+/// (`width`, [`REST_SUPPORT_FULL_WIDTH`] when nothing sampled came back unsupported).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RestSupport {
+    pub fraction: f32,
+    pub center_supported: bool,
+    pub width: f32,
+}
+
+/// Samples the floor support under the grenade hull footprint at `rest` (`s6v_fix1.md`) against
+/// `collider` - the same grenade-solid mesh a throw already rests against, not a separate
+/// "grenade solid mesh". Diagnostic only (see the module note above) - pure and unit-tested on
+/// synthetic geometry.
+pub fn rest_support<C: Collider>(collider: &C, rest: V3) -> RestSupport {
+    let mut supported = 0u32;
+    let mut total = 0u32;
+    let mut center_supported = false;
+    let mut nearest_unsupported: Option<f32> = None;
+    for gy in -REST_SUPPORT_GRID_REACH..=REST_SUPPORT_GRID_REACH {
+        for gx in -REST_SUPPORT_GRID_REACH..=REST_SUPPORT_GRID_REACH {
+            let dx = gx as f32 * REST_SUPPORT_STEP;
+            let dy = gy as f32 * REST_SUPPORT_STEP;
+            let from = V3::new(rest.x + dx, rest.y + dy, rest.z + REST_SUPPORT_RAY_UP);
+            let to = V3::new(rest.x + dx, rest.y + dy, rest.z - REST_SUPPORT_RAY_DOWN);
+            let hit = collider.first_hit_ray(from, to).is_some();
+            total += 1;
+            if hit {
+                supported += 1;
+            } else {
+                let d = (dx * dx + dy * dy).sqrt();
+                nearest_unsupported = Some(nearest_unsupported.map_or(d, |n: f32| n.min(d)));
+            }
+            if gx == 0 && gy == 0 {
+                center_supported = hit;
+            }
+        }
+    }
+    RestSupport {
+        fraction: supported as f32 / total.max(1) as f32,
+        center_supported,
+        width: nearest_unsupported.unwrap_or(REST_SUPPORT_FULL_WIDTH),
+    }
+}
+
 /// `s6q_robust_aim.md`'s real-game addendum: launch speed scale factors sampled for `robustModel`
 /// (nominal launch position at each).
 const ROBUST_MODEL_SPEED_SCALES: [f32; 4] = [0.995, 0.9975, 1.0025, 1.005];
@@ -1309,6 +1378,67 @@ mod tests {
         .unwrap();
         let mask = all_mask(&mesh);
         (mesh, mask)
+    }
+
+    /// A 1u-wide strip along y (full support along y, narrow along x) - for `rest_support`'s own
+    /// tests, which need a floor that is NOT fully supported under the whole 5x5 grid.
+    fn strip_plane(half_x: f32, half_y: f32) -> (CollisionMesh, geom::filter::AttributeMask) {
+        let mut mesh = CollisionMesh::new();
+        let attr = mesh
+            .add_attribute(CollisionAttribute {
+                name: "Default".to_string(),
+                interact_as: vec![],
+                interact_with: vec![],
+                interact_exclude: vec![],
+                synthetic: false,
+            })
+            .unwrap();
+        let obj = mesh.add_object(MeshObject {
+            kind: ObjectKind::WorldMesh,
+            classname: None,
+            targetname: None,
+            model: None,
+            hammer_id: None,
+            source_index: 0,
+            hull_flags: None,
+        });
+        mesh.push_triangles(
+            &[
+                [-half_x, -half_y, 0.0],
+                [half_x, -half_y, 0.0],
+                [half_x, half_y, 0.0],
+                [-half_x, half_y, 0.0],
+            ],
+            &[[0, 1, 2], [0, 2, 3]],
+            attr,
+            |_| SurfaceProperty::NONE,
+            obj,
+        )
+        .unwrap();
+        let mask = all_mask(&mesh);
+        (mesh, mask)
+    }
+
+    #[test]
+    fn rest_support_full_floor_is_fully_supported() {
+        let (mesh, mask) = flat_plane(100.0);
+        let collider = UniformGrid::build(&mesh, &mask, None, 128.0).unwrap();
+        let s = rest_support(&collider, V3::new(0.0, 0.0, 0.0));
+        assert_eq!(s.fraction, 1.0);
+        assert!(s.center_supported);
+        assert_eq!(s.width, REST_SUPPORT_FULL_WIDTH);
+    }
+
+    #[test]
+    fn rest_support_narrow_strip_is_partially_supported() {
+        // A 1u-wide (+-0.4u) strip: only the dx=0 column of the 5x5 grid (step 1u) is supported -
+        // 5 of 25 samples, nearest unsupported sample exactly 1u from the centre.
+        let (mesh, mask) = strip_plane(0.4, 100.0);
+        let collider = UniformGrid::build(&mesh, &mask, None, 128.0).unwrap();
+        let s = rest_support(&collider, V3::new(0.0, 0.0, 0.0));
+        assert_eq!(s.fraction, 5.0 / 25.0);
+        assert!(s.center_supported);
+        assert_eq!(s.width, 1.0);
     }
 
     #[test]

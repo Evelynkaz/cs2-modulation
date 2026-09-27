@@ -1,5 +1,6 @@
 mod cmd_extract;
 mod cmd_render;
+mod cmd_replay_demo;
 mod cmd_res;
 mod cmd_serve;
 mod cmd_sim;
@@ -279,6 +280,38 @@ enum Command {
         game: Option<PathBuf>,
         #[arg(long)]
         cache: Option<PathBuf>,
+    },
+    /// Replay one or more GOTV demos' own smoke throws (`tools/demo/extract_launches.py`'s
+    /// `launches.json`, Part C `s6v_c_pro_demos.md`) against the exact sim and grade them
+    /// tick-by-tick, grouped by map.
+    ReplayDemo {
+        /// Map name; only needed to override/backfill a single `--input` file's own recorded
+        /// `map` (several files each carry their own map and are grouped by it).
+        map: Option<String>,
+        /// One or more `.launches.json` files and/or directories of them.
+        #[arg(long, num_args = 1..)]
+        input: Vec<PathBuf>,
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// How many ranked divergence surfaces to print.
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        /// `throw-constants.json` path; defaults to `data/throw-constants.json` if present,
+        /// else sim's own defaults.
+        #[arg(long)]
+        constants: Option<PathBuf>,
+        #[arg(long)]
+        game: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        /// Override the grenade collision mask (`export-obj --filter` syntax, plus
+        /// `grenade-minus:Name1,...` to A/B a hypothesis like "EntityPhysicsClip does not block
+        /// grenades" without code edits).
+        #[arg(long)]
+        solid: Option<String>,
+        /// Dump full sim/game traces for outlier throws (rest error > 3u, or any >1u tick) here.
+        #[arg(long)]
+        dump_dir: Option<PathBuf>,
     },
     /// Render a 2D radar PNG and `viewer-map.json` header for a map.
     Viewerdata {
@@ -623,6 +656,27 @@ fn run() -> anyhow::Result<u8> {
             &unfreeze,
             game.as_deref(),
             cache.as_deref(),
+        ),
+        Command::ReplayDemo {
+            map,
+            input,
+            json,
+            top,
+            constants,
+            game,
+            cache,
+            solid,
+            dump_dir,
+        } => cmd_replay_demo::replay_demo(
+            map.as_deref(),
+            &input,
+            json.as_deref(),
+            top,
+            constants.as_deref(),
+            game.as_deref(),
+            cache.as_deref(),
+            solid.as_deref(),
+            dump_dir.as_deref(),
         ),
         Command::Replay {
             maps,

@@ -1337,6 +1337,7 @@ pub fn solve_for_target(
                 V3::new(reach_max_xy[0], reach_max_xy[1], max.z),
                 24.0,
                 Some(cider),
+                q.precise_aim,
             )
             .into_iter()
             .filter(|o| in_reach(xy(*o)) && in_area_z(o.z))
@@ -1389,6 +1390,7 @@ pub fn solve_for_target(
             &player_collider,
             &mut origins_list,
             Some(&mut crouch_only_extras),
+            q.precise_aim,
         );
     }
 
@@ -1418,6 +1420,7 @@ pub fn solve_for_target(
             &player_collider,
             &mut origins_list,
             Some(&mut crouch_only_extras),
+            q.precise_aim,
         );
         // Unlike the reach circle (unfiltered here too, matching the reference), an `origin_area`
         // polygon is a hard promise to the caller - every resulting throw point must lie inside
@@ -1449,6 +1452,7 @@ pub fn solve_for_target(
             Some(&player_collider),
             V3::new(origin_click[0], origin_click[1], click_z),
             Some(&mut crouch_only_extras),
+            q.precise_aim,
         ));
     }
 

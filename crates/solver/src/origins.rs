@@ -45,6 +45,7 @@ pub fn origins_from_nav_areas(
     max: V3,
     sample_step: f32,
     collider: Option<&dyn Collider>,
+    precise: bool,
 ) -> Vec<V3> {
     let mut origins: Vec<V3> = Vec::new();
     for corners in area_corners {
@@ -95,7 +96,7 @@ pub fn origins_from_nav_areas(
         &mut origins,
     );
     if let Some(collider) = collider {
-        add_pinned_origins(grid, collider, &mut origins, None);
+        add_pinned_origins(grid, collider, &mut origins, None, precise);
     }
     origins
 }
@@ -313,19 +314,64 @@ pub fn add_pinned_origins_to(
     collider: &dyn Collider,
     origins: &mut Vec<V3>,
     crouch_only_out: Option<&mut Vec<V3>>,
+    precise: bool,
 ) {
-    add_pinned_origins(grid, collider, origins, crouch_only_out);
+    add_pinned_origins(grid, collider, origins, crouch_only_out, precise);
+}
+
+/// How far `add_pinned_origins`'s precise-mode retry (below) may back a failed corner/wall
+/// proposal off toward its base origin before giving up.
+const PRECISE_PIN_NUDGES: [f32; 6] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0];
+
+/// Snaps `xy` (at `base_feet`'s own height) onto the real floor and holds it to the same
+/// standable bar as every other origin - the single re-seat step `add_pinned_origins` runs for
+/// every proposal, factored out so precise mode (below) can retry it at a nudged `xy`.
+fn seat_pin(
+    grid: &VoxelGrid,
+    collider: &dyn Collider,
+    base_feet: V3,
+    xy: (f32, f32),
+) -> Option<(V3, Stance)> {
+    let snapped = snap_to_ground(grid, Some(collider), V3::new(xy.0, xy.1, base_feet.z));
+    let on_floor = hull_rest_height(
+        collider,
+        snapped,
+        grid.voxel_size() * 2.0,
+        grid.voxel_size(),
+    )?;
+    let stance = stance_at(collider, on_floor);
+    if stance == Stance::None {
+        return None;
+    }
+    // Sanity-check torso height, not ankle height.
+    let (cx, cy, cz) = grid.cell_of(on_floor + V3::new(0.0, 0.0, grid.voxel_size() * 1.5));
+    if grid.in_bounds(cx, cy, cz) && !grid.is_solid(grid.index(cx, cy, cz)) {
+        Some((on_floor, stance))
+    } else {
+        None
+    }
 }
 
 /// `LineupSolver.Origins.cs:340-461`. Three passes matching the reference:
 /// parallel wall-plane proposals, a serial first-come 4u dedupe (so origin
 /// order decides which pin wins a cell), then a parallel re-seat onto the
 /// real floor.
+///
+/// `precise`: the two-plane corner/wall solve below assumes perfectly flat planes; a real wall's
+/// measured normal (one discrete probe ray, not an infinite flat plane) can be off by enough that
+/// the exact solve overshoots a genuinely standable but narrow real corner - like the one atop
+/// de_mirage's T-spawn trash container, wedged between a playerclip cap and two walls - and lands
+/// back in solid geometry, where the seat below drops it outright (`s6u_elevated_corners.md`).
+/// Precise mode retries a failed seat by backing the candidate off toward its base origin in small
+/// steps (`PRECISE_PIN_NUDGES`); `position_pin` re-derives the pin class from wherever this lands,
+/// so a spot that needed backing off past `TOUCH_SLACK` simply stops reading as a corner on its
+/// own. Kept out of normal mode entirely so its origin set stays reference-identical.
 fn add_pinned_origins(
     grid: &VoxelGrid,
     collider: &dyn Collider,
     origins: &mut Vec<V3>,
     mut crouch_only_out: Option<&mut Vec<V3>>,
+    precise: bool,
 ) {
     let proposals: Vec<Vec<(f32, f32)>> = origins
         .par_iter()
@@ -387,24 +433,26 @@ fn add_pinned_origins(
     let seated: Vec<Option<(V3, Stance)>> = accepted
         .par_iter()
         .map(|&(base_feet, xy)| {
-            let snapped = snap_to_ground(grid, Some(collider), V3::new(xy.0, xy.1, base_feet.z));
-            let on_floor = hull_rest_height(
-                collider,
-                snapped,
-                grid.voxel_size() * 2.0,
-                grid.voxel_size(),
-            )?;
-            let stance = stance_at(collider, on_floor);
-            if stance == Stance::None {
+            if let Some(hit) = seat_pin(grid, collider, base_feet, xy) {
+                return Some(hit);
+            }
+            if !precise {
                 return None;
             }
-            // Sanity-check torso height, not ankle height.
-            let (cx, cy, cz) = grid.cell_of(on_floor + V3::new(0.0, 0.0, grid.voxel_size() * 1.5));
-            if grid.in_bounds(cx, cy, cz) && !grid.is_solid(grid.index(cx, cy, cz)) {
-                Some((on_floor, stance))
-            } else {
-                None
+            let (dx, dy) = (base_feet.x - xy.0, base_feet.y - xy.1);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-3 {
+                return None;
             }
+            let (ux, uy) = (dx / len, dy / len);
+            PRECISE_PIN_NUDGES.iter().find_map(|&nudge| {
+                seat_pin(
+                    grid,
+                    collider,
+                    base_feet,
+                    (xy.0 + ux * nudge, xy.1 + uy * nudge),
+                )
+            })
         })
         .collect();
     for pin in seated.into_iter().flatten() {
@@ -512,6 +560,7 @@ pub fn exact_origin_with_pins(
     collider: Option<&dyn Collider>,
     seed: V3,
     mut crouch_only_out: Option<&mut Vec<V3>>,
+    precise: bool,
 ) -> Vec<V3> {
     let mut snapped = snap_to_ground(grid, collider, seed);
     let Some(collider) = collider else {
@@ -537,7 +586,7 @@ pub fn exact_origin_with_pins(
     // `add_pinned_origins` needs `Vec::push` on the far end.
     #[allow(clippy::option_as_ref_deref)]
     let reborrowed = crouch_only_out.as_mut().map(|v| &mut **v);
-    add_pinned_origins(grid, collider, &mut pinned, reborrowed);
+    add_pinned_origins(grid, collider, &mut pinned, reborrowed, precise);
     list.extend(pinned.into_iter().skip(1));
     list
 }
@@ -779,5 +828,145 @@ mod tests {
         let grid = UniformGrid::build(&mesh, &mask, None, 128.0).unwrap();
         let origins = find_standable_origins(&voxel, region.min, region.max, Some(&grid));
         assert!(!origins.is_empty());
+    }
+
+    /// `s6u_elevated_corners.md`: geometry mirroring de_mirage's T-spawn trash container - a solid
+    /// top (`Default`), a playerclip cap 11u above it (its own attribute group, absent from the
+    /// literal-name filter `target.rs` builds its coarse `VoxelGrid` from, present only in
+    /// `player_mask`'s interact-as one) - the surface the player actually stands on - and two
+    /// walls meeting in a corner. The east wall is recessed 1.5u for the last 10u before the
+    /// corner, as real map brushes often are: the wall reading `nearby_wall_planes` takes from the
+    /// base origin (well away from the corner) sees only the outer, unrecessed face, so the naive
+    /// two-plane corner solve overshoots into the recess and is rejected outright in normal mode.
+    #[test]
+    fn precise_mode_finds_a_recessed_corner_normal_mode_misses() {
+        let mut mesh = CollisionMesh::new();
+        let default_attr = mesh
+            .add_attribute(CollisionAttribute {
+                name: "Default".to_string(),
+                interact_as: vec![],
+                interact_with: vec![],
+                interact_exclude: vec![],
+                synthetic: false,
+            })
+            .unwrap();
+        let clip_attr = mesh
+            .add_attribute(CollisionAttribute {
+                name: "ConditionallySolid".to_string(),
+                interact_as: vec!["playerclip".to_string()],
+                interact_with: vec![],
+                interact_exclude: vec![],
+                synthetic: false,
+            })
+            .unwrap();
+        let obj = mesh.add_object(MeshObject {
+            kind: ObjectKind::WorldMesh,
+            classname: None,
+            targetname: None,
+            model: None,
+            hammer_id: None,
+            source_index: 0,
+            hull_flags: None,
+        });
+        let mut push = |quad: [[f32; 3]; 4], attr: u16| {
+            mesh.push_triangles(
+                &quad,
+                &[[0, 1, 2], [0, 2, 3]],
+                attr,
+                |_| SurfaceProperty::NONE,
+                obj,
+            )
+            .unwrap();
+        };
+        // Container top.
+        push(
+            [
+                [0.0, 0.0, 50.0],
+                [150.0, 0.0, 50.0],
+                [150.0, 150.0, 50.0],
+                [0.0, 150.0, 50.0],
+            ],
+            default_attr,
+        );
+        // Playerclip cap, 11u above the container top - the surface a player stands on.
+        push(
+            [
+                [0.0, 0.0, 61.0],
+                [150.0, 0.0, 61.0],
+                [150.0, 150.0, 61.0],
+                [0.0, 150.0, 61.0],
+            ],
+            clip_attr,
+        );
+        // East wall: the outer face (hit by the base origin's probe), then a 1.5u recess for the
+        // last 10u before the corner (hit only by a probe from near the corner itself).
+        push(
+            [
+                [150.0, -50.0, 50.0],
+                [150.0, 140.0, 50.0],
+                [150.0, 140.0, 250.0],
+                [150.0, -50.0, 250.0],
+            ],
+            default_attr,
+        );
+        push(
+            [
+                [148.5, 140.0, 50.0],
+                [148.5, 150.0, 50.0],
+                [148.5, 150.0, 250.0],
+                [148.5, 140.0, 250.0],
+            ],
+            default_attr,
+        );
+        // North wall, flat.
+        push(
+            [
+                [-50.0, 150.0, 50.0],
+                [150.0, 150.0, 50.0],
+                [150.0, 150.0, 250.0],
+                [-50.0, 150.0, 250.0],
+            ],
+            default_attr,
+        );
+
+        let player_attr = geom::filter::player_mask(&mesh);
+        let player_collider = UniformGrid::build(&mesh, &player_attr, None, 128.0).unwrap();
+        // The same literal-name filter `cmd_solver.rs::SINGLE_TARGET_DEFAULT_ATTRS` builds
+        // `target.rs`'s coarse `VoxelGrid` from - it does not know about the clip cap at all.
+        let name_attr = geom::filter::names_mask(&mesh, &["Default", "default", "EntitySolid"]);
+        let region = Aabb {
+            min: V3::new(-100.0, -100.0, -50.0),
+            max: V3::new(250.0, 250.0, 300.0),
+        };
+        let grid = VoxelGrid::build(&mesh, &name_attr, 16.0, region).unwrap();
+
+        let base = V3::new(90.0, 90.0, 61.0);
+        assert_eq!(
+            stance_at(&player_collider, base),
+            Stance::Standing,
+            "base origin should be standable on the clip cap"
+        );
+
+        let mut normal_origins = vec![base];
+        add_pinned_origins_to(&grid, &player_collider, &mut normal_origins, None, false);
+        assert!(
+            normal_origins
+                .iter()
+                .all(|&o| position_pin(&player_collider, o) < 2),
+            "normal mode must stay reference-identical: no corner past the recess, got {normal_origins:?}"
+        );
+
+        let mut precise_origins = vec![base];
+        add_pinned_origins_to(&grid, &player_collider, &mut precise_origins, None, true);
+        assert!(
+            normal_origins.iter().all(|o| precise_origins.contains(o)),
+            "precise mode must only ADD to normal mode's own origins, not change them"
+        );
+        assert!(
+            precise_origins
+                .iter()
+                .any(|&o| position_pin(&player_collider, o) == 2),
+            "precise mode should find the corner past the recess, got {precise_origins:?}"
+        );
     }
 }
